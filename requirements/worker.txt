@@ -1,0 +1,5 @@
+-r base.txt
+
+# The worker needs nothing the API does not: it publishes a render request to
+# document-generation and records the result. All rendering — and therefore
+# every rendering library — lives in that service, not here.

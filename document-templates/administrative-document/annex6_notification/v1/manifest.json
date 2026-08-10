@@ -1,0 +1,60 @@
+{
+  "id": "administrative_document.annex6_notification",
+  "version": "2026.02.25",
+  "engine": "xlsx",
+  "supported_formats": ["xlsx"],
+  "entrypoint": "template.xlsx",
+  "output_basename": "annexe6-notification",
+  "_source": "CWaPE document 5617 — Formulaire de notification CE, Annexe 6, format of 2026-02-25. Unmodified: only cell values are written.",
+  "blocks": [
+    {
+      "source": "members",
+      "anchor": "Membres et actionnaires!A4",
+      "columns": [
+        "categorie",
+        "sous_categorie",
+        "nom",
+        "numero_entreprise",
+        "rue",
+        "numero",
+        "code_postal",
+        "localite",
+        "droits_de_vote"
+      ]
+    },
+    {
+      "source": "installations",
+      "anchor": "Installations de production!A4",
+      "columns": [
+        "ean",
+        "meter_number",
+        "statut_producteur",
+        "rue",
+        "numero",
+        "code_postal",
+        "localite",
+        "statut_installation",
+        "date_mise_en_service",
+        "puissance_kva",
+        "filiere",
+        "part_injectee"
+      ]
+    }
+  ],
+  "required_fields": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "members": {
+        "type": "array",
+        "maxItems": 100,
+        "items": {"type": "object"}
+      },
+      "installations": {
+        "type": "array",
+        "maxItems": 50,
+        "items": {"type": "object"}
+      }
+    }
+  }
+}

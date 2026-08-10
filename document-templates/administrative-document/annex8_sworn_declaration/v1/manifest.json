@@ -1,0 +1,72 @@
+{
+  "id": "administrative_document.annex8_sworn_declaration",
+  "version": "2025.07",
+  "engine": "pdf-form",
+  "supported_formats": ["pdf"],
+  "entrypoint": "template.pdf",
+  "output_basename": "annexe8-declaration-sur-lhonneur",
+  "_source": "CWaPE document 5612 — ANNEXE 8, déclaration sur l'honneur du participant au partage. The regulator's own fillable PDF; only field values are set.",
+  "_scope": "This annex is signed by ONE participant, not by the community, so the declarant fields are filled in the review step. Anything left unmapped stays editable in the produced PDF, which is still a fillable AcroForm.",
+  "_comb": "The two EAN rows are 16 one-character boxes each, preceded by a pre-printed '5 4'. Supply the 16 digits that follow it.",
+  "fields": {
+    "declarant_name": "Champ de texte 1",
+    "declarant_representative": "Champ de texte 45",
+    "declarant_company_name": "Champ de texte 46",
+    "declarant_address": "Champ de texte 47",
+    "declarant_phone": "Champ de texte 48",
+    "declarant_email": "Champ de texte 49",
+    "community_name": "Champ de texte 100",
+    "signed_at": "Champ de texte 21",
+    "signed_on": "Champ de texte 22",
+    "ean_delivery_digits": [
+      "Champ de texte 84",
+      "Champ de texte 85",
+      "Champ de texte 86",
+      "Champ de texte 87",
+      "Champ de texte 88",
+      "Champ de texte 89",
+      "Champ de texte 90",
+      "Champ de texte 91",
+      "Champ de texte 92",
+      "Champ de texte 93",
+      "Champ de texte 94",
+      "Champ de texte 95",
+      "Champ de texte 96",
+      "Champ de texte 97",
+      "Champ de texte 98",
+      "Champ de texte 99"
+    ],
+    "ean_injection_digits": [
+      "Champ de texte 68",
+      "Champ de texte 69",
+      "Champ de texte 70",
+      "Champ de texte 71",
+      "Champ de texte 72",
+      "Champ de texte 73",
+      "Champ de texte 74",
+      "Champ de texte 75",
+      "Champ de texte 76",
+      "Champ de texte 77",
+      "Champ de texte 78",
+      "Champ de texte 79",
+      "Champ de texte 80",
+      "Champ de texte 81",
+      "Champ de texte 82",
+      "Champ de texte 83"
+    ],
+    "sharing_within_building": "Case à cocher 13",
+    "sharing_within_community": "Case à cocher 15",
+    "waives_residential_right": "Case à cocher 10",
+    "will_request_metering_regime": "Case à cocher 11",
+    "will_switch_to_injection_service": "Case à cocher 12"
+  },
+  "required_fields": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "declarant_name": {"type": ["string", "null"]},
+      "ean_delivery_digits": {"type": ["string", "null"], "maxLength": 16},
+      "ean_injection_digits": {"type": ["string", "null"], "maxLength": 16}
+    }
+  }
+}

@@ -1,0 +1,63 @@
+# ---------- stage 1: build ----------
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+COPY requirements/base.txt   requirements/base.txt
+COPY requirements/worker.txt requirements/worker.txt
+
+RUN pip install --no-cache-dir --prefix=/install -r requirements/worker.txt
+
+# ---------- stage 2: runtime ----------
+FROM python:3.12-slim
+
+# tini gives us a real PID 1: forwards SIGTERM to the Python process so the
+# drain in worker.main actually runs, and reaps zombies on shutdown.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# Security: non-root user
+RUN groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY --from=builder /install /usr/local
+
+# No main.py: the worker has its own entrypoint. It does need domain/ (the
+# snapshot lives there) and locales/ (error keys resolve through the same
+# registry). document-templates/ is deliberately absent — the bundles are served
+# from object storage to document-generation, never read here.
+#
+# api/ is here as a PACKAGE, not as the HTTP layer: the deadline sweep runs the
+# real AdministrativeDocumentService so the route and the daily tick share one
+# implementation, and that class lives under api/. This image installs
+# requirements/worker.txt, which has no fastapi/uvicorn, so any worker module
+# that reaches something importing fastapi kills the container at startup with
+# ModuleNotFoundError — which is exactly what shipped and crash-looped. That is
+# why the port provider lives in ports/providers.py rather than
+# api/administrative_document/deps.py, why service.py imports UploadFile under
+# TYPE_CHECKING, and why the upload cap moved to shared/const.py. It is pinned by
+# tests/test_worker_import_graph.py. routes.py/deps.py/schemas.py come along
+# unused; nothing imports them here.
+COPY core/    core/
+COPY api/     api/
+COPY domain/  domain/
+COPY ports/   ports/
+COPY shared/  shared/
+COPY worker/  worker/
+COPY locales/ locales/
+
+RUN chown -R app:app /app
+USER app
+
+# Liveness: worker.main touches /tmp/worker.alive every ~15 s while the event
+# loop is responsive. ~3 missed touches = unhealthy. start-period covers the
+# bounded NATS connect retry window plus subscription setup.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=3 \
+    CMD python -c "import os, time, sys; sys.exit(0 if time.time() - os.path.getmtime('/tmp/worker.alive') < 60 else 1)"
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["python", "-m", "worker.main"]

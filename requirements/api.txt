@@ -1,0 +1,14 @@
+-r base.txt
+
+# HTTP framework
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# Required by FastAPI's UploadFile/Form for multipart/form-data on
+# POST /documents/{id}/versions (document version upload)
+python-multipart==0.0.20
+
+# Auth0 JWT (RS256)
+python-jose[cryptography]==3.3.0
+
+auth0-python==5.1.0

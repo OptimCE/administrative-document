@@ -1,0 +1,54 @@
+{
+  "ERRORS": {
+    "AUTH": {
+      "UNAUTHORIZED": "Authenticatie vereist (code: 1)",
+      "FORBIDDEN": "Toegang geweigerd (code: 2)",
+      "RATE_LIMITED": "Te veel verzoeken, probeer het later opnieuw (code: 3)",
+      "AUTHORIZATION_MISSING": "Autorisatie-header ontbreekt (code: 4)"
+    },
+    "SUBSCRIPTION": {
+      "NOT_SUBSCRIBED": "U bent niet geabonneerd op deze dienst (code: 1003)"
+    },
+    "ADMIN": {
+      "GET_DOSSIERS": "Ophalen van de dossiers mislukt (code: 2300)",
+      "GET_DOSSIER": "Ophalen van het dossier mislukt (code: 2301)",
+      "DOSSIER_NOT_FOUND": "Dossier niet gevonden (code: 2302)",
+      "CREATE_DOSSIER": "Aanmaken van het dossier mislukt (code: 2303)",
+      "UPDATE_DOSSIER": "Bijwerken van het dossier mislukt (code: 2304)",
+      "DUPLICATE_EXTERNAL_REF": "Een ander dossier van dit type gebruikt deze referentie al (code: 2305)",
+      "REGION_NOT_RESOLVED": "Er is geen ondersteunde regelgevende regio geconfigureerd voor deze gemeenschap (code: 2306)",
+      "SHARING_OPERATION_NOT_FOUND": "Deze deelverrichting bestaat niet binnen uw gemeenschap (code: 2307)",
+      "GET_DOCUMENTS": "Ophalen van de documenten mislukt (code: 2310)",
+      "GET_DOCUMENT": "Ophalen van het document mislukt (code: 2311)",
+      "DOCUMENT_NOT_FOUND": "Document niet gevonden (code: 2312)",
+      "CREATE_DOCUMENT": "Aanmaken van het document mislukt (code: 2313)",
+      "ILLEGAL_TRANSITION": "Deze statuswijziging is niet toegestaan vanuit de huidige status (code: 2320)",
+      "MISSING_TRANSITION_CONTEXT": "Vereiste gegevens ontbreken voor deze statuswijziging (code: 2321)",
+      "TRANSITION_FAILED": "Vastleggen van de statuswijziging mislukt (code: 2322)",
+      "GET_VERSIONS": "Ophalen van de documentversies mislukt (code: 2330)",
+      "VERSION_NOT_FOUND": "Documentversie niet gevonden (code: 2331)",
+      "UPLOAD_VERSION_FAILED": "Uploaden van de documentversie mislukt (code: 2332)",
+      "VERSION_NOT_ALLOWED": "Een nieuwe versie kan alleen worden toegevoegd zolang het document een concept of gereed is (code: 2333)",
+      "INVALID_FILE": "Ongeldig of leeg bestand (code: 2334)",
+      "FILE_TOO_LARGE": "Het bestand overschrijdt de maximaal toegestane grootte (code: 2335)",
+      "STORAGE_UPLOAD_FAILED": "Uploaden van het bestand naar de opslag mislukt (code: 2336)",
+      "STORAGE_DOWNLOAD_FAILED": "Downloaden van het bestand uit de opslag mislukt (code: 2337)",
+      "GET_DEADLINES": "Ophalen van de termijnen mislukt (code: 2340)",
+      "DEADLINE_NOT_FOUND": "Termijn niet gevonden (code: 2341)",
+      "UPDATE_DEADLINE": "Bijwerken van de termijn mislukt (code: 2342)",
+      "DEADLINE_SWEEP_FAILED": "Uitvoeren van de termijncontrole mislukt (code: 2343)",
+      "GET_TEMPLATES": "Ophalen van de sjablonen mislukt (code: 2350)",
+      "TEMPLATE_NOT_FOUND": "Sjabloon niet gevonden (code: 2351)",
+      "SAVE_TEMPLATE": "Opslaan van het sjabloon mislukt (code: 2352)",
+      "GET_DEADLINE_RULES": "Ophalen van de termijnregels mislukt (code: 2353)",
+      "DEADLINE_RULE_NOT_FOUND": "Termijnregel niet gevonden (code: 2354)",
+      "SAVE_DEADLINE_RULE": "Opslaan van de termijnregel mislukt (code: 2355)",
+      "GENERATION_NOT_ALLOWED": "Een document kan alleen worden gegenereerd zolang het een concept of gereed is (code: 2360)",
+      "TEMPLATE_NOT_REGISTERED": "Er is geen sjabloon geregistreerd voor dit documenttype (code: 2361)",
+      "GENERATION_FAILED": "Starten van de documentgeneratie mislukt (code: 2362)",
+      "PREFILL_FAILED": "Vooraf invullen van het document vanuit de CRM mislukt (code: 2363)",
+      "RENDER_ALREADY_IN_FLIGHT": "Er loopt al een generatie voor dit document (code: 2364)",
+      "TOO_MANY_ROWS": "Het officiële formulier biedt geen ruimte voor zoveel rijen (code: 2365)"
+    }
+  }
+}

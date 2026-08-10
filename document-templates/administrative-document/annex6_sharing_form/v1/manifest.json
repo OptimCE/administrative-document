@@ -1,0 +1,94 @@
+{
+  "id": "administrative_document.annex6_sharing_form",
+  "version": "2025.07",
+  "engine": "xlsx",
+  "supported_formats": ["xlsx"],
+  "entrypoint": "template.xlsx",
+  "output_basename": "annexe6-partage",
+  "_source": "CWaPE document 5611 — ANNEXE 6 Formulaire de partage, format of 2025-07. Unmodified: only cell values are written.",
+  "_capacities": "Row counts come from the workbook's own data-validation ranges (C4:C103 / C4:C23), not from a guess.",
+  "blocks": [
+    {
+      "source": "participants",
+      "anchor": "points de prélèvement!A4",
+      "columns": [
+        "ean",
+        "meter_number",
+        "grd",
+        "nom",
+        "prenom",
+        "denomination",
+        "rue",
+        "numero",
+        "code_postal",
+        "localite",
+        "client_residentiel",
+        "part_allouee"
+      ]
+    },
+    {
+      "source": "installations",
+      "anchor": "installations de production!A4",
+      "columns": [
+        "ean",
+        "meter_number",
+        "grd",
+        "nom",
+        "prenom",
+        "denomination",
+        "statut_producteur",
+        "rue",
+        "numero",
+        "code_postal",
+        "localite",
+        "statut_installation",
+        "date_mise_en_service",
+        "puissance_kva",
+        "filiere",
+        "part_injectee"
+      ]
+    },
+    {
+      "source": "storage",
+      "anchor": "installations de stockage!A4",
+      "columns": [
+        "ean",
+        "meter_number",
+        "grd",
+        "nom",
+        "prenom",
+        "denomination",
+        "rue",
+        "numero",
+        "code_postal",
+        "localite",
+        "statut_installation",
+        "date_mise_en_service",
+        "puissance_kva",
+        "configuration",
+        "part_injectee"
+      ]
+    }
+  ],
+  "required_fields": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "participants": {
+        "type": "array",
+        "maxItems": 100,
+        "items": {"type": "object"}
+      },
+      "installations": {
+        "type": "array",
+        "maxItems": 20,
+        "items": {"type": "object"}
+      },
+      "storage": {
+        "type": "array",
+        "maxItems": 20,
+        "items": {"type": "object"}
+      }
+    }
+  }
+}

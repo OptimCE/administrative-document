@@ -1,0 +1,54 @@
+{
+  "ERRORS": {
+    "AUTH": {
+      "UNAUTHORIZED": "Authentifizierung erforderlich (Code: 1)",
+      "FORBIDDEN": "Zugriff verweigert (Code: 2)",
+      "RATE_LIMITED": "Zu viele Anfragen, bitte später erneut versuchen (Code: 3)",
+      "AUTHORIZATION_MISSING": "Autorisierungs-Header fehlt (Code: 4)"
+    },
+    "SUBSCRIPTION": {
+      "NOT_SUBSCRIBED": "Sie sind nicht für diesen Dienst angemeldet (Code: 1003)"
+    },
+    "ADMIN": {
+      "GET_DOSSIERS": "Die Dossiers konnten nicht abgerufen werden (Code: 2300)",
+      "GET_DOSSIER": "Das Dossier konnte nicht abgerufen werden (Code: 2301)",
+      "DOSSIER_NOT_FOUND": "Dossier nicht gefunden (Code: 2302)",
+      "CREATE_DOSSIER": "Das Dossier konnte nicht erstellt werden (Code: 2303)",
+      "UPDATE_DOSSIER": "Das Dossier konnte nicht aktualisiert werden (Code: 2304)",
+      "DUPLICATE_EXTERNAL_REF": "Ein anderes Dossier dieses Typs verwendet diese Referenz bereits (Code: 2305)",
+      "REGION_NOT_RESOLVED": "Für diese Gemeinschaft ist keine unterstützte Regulierungsregion konfiguriert (Code: 2306)",
+      "SHARING_OPERATION_NOT_FOUND": "Diese Teilungsoperation existiert in Ihrer Gemeinschaft nicht (Code: 2307)",
+      "GET_DOCUMENTS": "Die Dokumente konnten nicht abgerufen werden (Code: 2310)",
+      "GET_DOCUMENT": "Das Dokument konnte nicht abgerufen werden (Code: 2311)",
+      "DOCUMENT_NOT_FOUND": "Dokument nicht gefunden (Code: 2312)",
+      "CREATE_DOCUMENT": "Das Dokument konnte nicht erstellt werden (Code: 2313)",
+      "ILLEGAL_TRANSITION": "Diese Statusänderung ist aus dem aktuellen Status nicht zulässig (Code: 2320)",
+      "MISSING_TRANSITION_CONTEXT": "Für diese Statusänderung fehlen erforderliche Angaben (Code: 2321)",
+      "TRANSITION_FAILED": "Die Statusänderung konnte nicht erfasst werden (Code: 2322)",
+      "GET_VERSIONS": "Die Dokumentversionen konnten nicht abgerufen werden (Code: 2330)",
+      "VERSION_NOT_FOUND": "Dokumentversion nicht gefunden (Code: 2331)",
+      "UPLOAD_VERSION_FAILED": "Die Dokumentversion konnte nicht hochgeladen werden (Code: 2332)",
+      "VERSION_NOT_ALLOWED": "Eine neue Version kann nur hinzugefügt werden, solange das Dokument ein Entwurf oder bereit ist (Code: 2333)",
+      "INVALID_FILE": "Ungültige oder leere Datei (Code: 2334)",
+      "FILE_TOO_LARGE": "Die Datei überschreitet die maximal zulässige Größe (Code: 2335)",
+      "STORAGE_UPLOAD_FAILED": "Datei konnte nicht in den Speicher hochgeladen werden (Code: 2336)",
+      "STORAGE_DOWNLOAD_FAILED": "Datei konnte nicht aus dem Speicher heruntergeladen werden (Code: 2337)",
+      "GET_DEADLINES": "Die Fristen konnten nicht abgerufen werden (Code: 2340)",
+      "DEADLINE_NOT_FOUND": "Frist nicht gefunden (Code: 2341)",
+      "UPDATE_DEADLINE": "Die Frist konnte nicht aktualisiert werden (Code: 2342)",
+      "DEADLINE_SWEEP_FAILED": "Die Fristenprüfung konnte nicht ausgeführt werden (Code: 2343)",
+      "GET_TEMPLATES": "Die Vorlagen konnten nicht abgerufen werden (Code: 2350)",
+      "TEMPLATE_NOT_FOUND": "Vorlage nicht gefunden (Code: 2351)",
+      "SAVE_TEMPLATE": "Die Vorlage konnte nicht gespeichert werden (Code: 2352)",
+      "GET_DEADLINE_RULES": "Die Fristenregeln konnten nicht abgerufen werden (Code: 2353)",
+      "DEADLINE_RULE_NOT_FOUND": "Fristenregel nicht gefunden (Code: 2354)",
+      "SAVE_DEADLINE_RULE": "Die Fristenregel konnte nicht gespeichert werden (Code: 2355)",
+      "GENERATION_NOT_ALLOWED": "Ein Dokument kann nur erzeugt werden, solange es ein Entwurf oder bereit ist (Code: 2360)",
+      "TEMPLATE_NOT_REGISTERED": "Für diesen Dokumenttyp ist keine Vorlage registriert (Code: 2361)",
+      "GENERATION_FAILED": "Die Dokumenterzeugung konnte nicht gestartet werden (Code: 2362)",
+      "PREFILL_FAILED": "Das Dokument konnte nicht aus dem CRM vorausgefüllt werden (Code: 2363)",
+      "RENDER_ALREADY_IN_FLIGHT": "Für dieses Dokument läuft bereits eine Erzeugung (Code: 2364)",
+      "TOO_MANY_ROWS": "Das offizielle Formular bietet keinen Platz für so viele Zeilen (Code: 2365)"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+# `scripts/sql/` is bind-mounted into the `postgres-init` container of the
+# OptimCE dev stack and executed there by `psql`. This repo is developed on
+# Windows with core.autocrlf=true, which would hand the container CRLF files —
+# and a stray \r turns into a syntax error whose message points nowhere near the
+# cause. The monorepo pins its own provisioning SQL the same way, but git
+# attributes are per-repository and do not follow into a submodule, so the rule
+# has to be repeated here.
+scripts/sql/**/*.sql  text eol=lf
+scripts/**/*.sh       text eol=lf

@@ -1,0 +1,21 @@
+-r development.txt
+
+# Test runner
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-docker==3.2.5
+pytest-cov==7.0.0
+# HTTP test client
+httpx==0.28.1
+
+# Model factories
+factory-boy==3.3.1
+pandas==2.2.3
+
+# Template-bundle inspection ONLY (tests/test_template_bundles.py). This service
+# never renders anything — document-generation does — but the bundles it ships
+# must be proven to match the official CWaPE files they wrap, and that means
+# opening those files in CI.
+openpyxl==3.1.5
+pypdf==5.1.0
+python-docx==1.2.0

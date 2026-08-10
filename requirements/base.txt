@@ -1,0 +1,40 @@
+# Core framework
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+
+# Pydantic
+pydantic==2.10.3
+pydantic-settings==2.6.1
+email-validator>=2.0.0
+
+# Nats
+nats-py==2.14.0
+
+# AWS — aiobotocore is the async S3/MinIO client. It pulls a compatible
+# botocore range itself; do not separately pin boto3 unless you need its
+# sync client. When upgrading, verify against:
+# https://github.com/aio-libs/aiobotocore/releases
+aiobotocore==2.15.2
+
+# Logging
+python-json-logger==3.2.0
+
+opentelemetry-api==1.39.1
+opentelemetry-exporter-otlp-proto-common==1.39.1
+opentelemetry-exporter-otlp-proto-grpc==1.39.1
+opentelemetry-exporter-otlp-proto-http==1.39.1
+opentelemetry-instrumentation==0.60b1
+opentelemetry-instrumentation-asgi==0.60b1
+opentelemetry-instrumentation-fastapi==0.60b1
+opentelemetry-instrumentation-sqlalchemy==0.60b1
+opentelemetry-proto==1.39.1
+opentelemetry-sdk==1.39.1
+opentelemetry-semantic-conventions==0.60b1
+opentelemetry-util-http==0.60b1
+
+# Regulatory deadline arithmetic. workalendar computes Belgian public holidays
+# (including the movable feasts — Easter Monday, Ascension, Whit Monday) so
+# "+10 business days" never drifts; dateutil.relativedelta does calendar-month
+# offsets ("+6 months", "+1 year"). See domain/calendar.py.
+workalendar==17.0.0
+python-dateutil==2.9.0.post0

@@ -1,0 +1,84 @@
+{
+  "id": "administrative_document.dso_agreement_community",
+  "version": "2023.10.12",
+  "engine": "docx",
+  "supported_formats": [
+    "docx"
+  ],
+  "entrypoint": "template.docx",
+  "output_basename": "convention-grd-representant-communaute",
+  "_source": "CWaPE document 5614 - convention type entre le gestionnaire de reseau et le representant d'une communaute d'energie, version 2023-10-12. The regulator's own Word convention; only the [a completer] markers became expressions.",
+  "_scope": "Every field is REQUIRED: docxtpl runs with StrictUndefined, so a key the caller forgot is a hard error rather than a silent blank in a signed contract. A key supplied as null renders empty - the visible blank a reviewer is meant to fill in.",
+  "_note": "Both preamble variants (the 'OU' alternatives) and the annex references are kept exactly as the regulator wrote them. Choosing between them is a legal decision, and the artifact is a .docx the parties still edit and sign.",
+  "required_fields": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+      "community_address",
+      "distribution_key",
+      "grid_operator_name",
+      "representative_name",
+      "sharing_description",
+      "signed_at",
+      "signed_on",
+      "start_date",
+      "suspensive_condition"
+    ],
+    "properties": {
+      "community_address": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "distribution_key": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "grid_operator_name": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "representative_name": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "sharing_description": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "signed_at": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "signed_on": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "start_date": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "suspensive_condition": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    }
+  }
+}

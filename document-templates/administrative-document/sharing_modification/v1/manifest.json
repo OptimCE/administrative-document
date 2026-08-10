@@ -1,0 +1,48 @@
+{
+  "id": "administrative_document.sharing_modification",
+  "version": "2025.07",
+  "engine": "pdf-form",
+  "supported_formats": [
+    "pdf"
+  ],
+  "entrypoint": "template.pdf",
+  "output_basename": "formulaire-modification-partage",
+  "_source": "CWaPE Formulaire de modification d'une activite de partage, format of 2025-07. The regulator's own fillable PDF; only field values are set.",
+  "_scope": "Only the fields OptimCE can derive, or that a reviewer routinely fills, are mapped. Everything else is left untouched and the artifact stays a fillable AcroForm, so an unmapped field remains editable by hand rather than being lost.",
+  "_note": "Here 'Champ de texte 153...' is the REPRESENTATIVE block, not the community one: the field numbering is not stable across the CWaPE form family, so each map has to be read off its own PDF.",
+  "fields": {
+    "representative_name": "Champ de texte 153",
+    "representative_vat_number": "Champ de texte 159",
+    "representative_street": "Champ de texte 154",
+    "representative_number": "Champ de texte 155",
+    "representative_box": "Champ de texte 156",
+    "representative_postcode": "Champ de texte 157",
+    "representative_city": "Champ de texte 158",
+    "representative_country": "Champ de texte 161",
+    "contact_last_name": "Champ de texte 47",
+    "contact_first_name": "Champ de texte 48",
+    "contact_street": "Champ de texte 42",
+    "contact_number": "Champ de texte 43",
+    "contact_box": "Champ de texte 44",
+    "contact_postcode": "Champ de texte 45",
+    "contact_city": "Champ de texte 46",
+    "contact_phone": "Champ de texte 49",
+    "contact_mobile": "Champ de texte 50",
+    "contact_email": "Champ de texte 51",
+    "building_reference": "Champ de texte 40",
+    "community_reference": "Champ de texte 41",
+    "sharing_within_building": "Case à cocher 83"
+  },
+  "required_fields": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "community_legal_name": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    }
+  }
+}

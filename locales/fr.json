@@ -1,0 +1,54 @@
+{
+  "ERRORS": {
+    "AUTH": {
+      "UNAUTHORIZED": "Authentification requise (code: 1)",
+      "FORBIDDEN": "Accès refusé (code: 2)",
+      "RATE_LIMITED": "Trop de requêtes, veuillez réessayer plus tard (code: 3)",
+      "AUTHORIZATION_MISSING": "En-tête d'autorisation manquant (code: 4)"
+    },
+    "SUBSCRIPTION": {
+      "NOT_SUBSCRIBED": "Vous n'êtes pas abonné à ce service (code: 1003)"
+    },
+    "ADMIN": {
+      "GET_DOSSIERS": "Échec de la récupération des dossiers (code: 2300)",
+      "GET_DOSSIER": "Échec de la récupération du dossier (code: 2301)",
+      "DOSSIER_NOT_FOUND": "Dossier introuvable (code: 2302)",
+      "CREATE_DOSSIER": "Échec de la création du dossier (code: 2303)",
+      "UPDATE_DOSSIER": "Échec de la mise à jour du dossier (code: 2304)",
+      "DUPLICATE_EXTERNAL_REF": "Un autre dossier de ce type utilise déjà cette référence (code: 2305)",
+      "REGION_NOT_RESOLVED": "Aucune région réglementaire prise en charge n'est configurée pour cette communauté (code: 2306)",
+      "SHARING_OPERATION_NOT_FOUND": "Cette opération de partage n'existe pas dans votre communauté (code: 2307)",
+      "GET_DOCUMENTS": "Échec de la récupération des documents (code: 2310)",
+      "GET_DOCUMENT": "Échec de la récupération du document (code: 2311)",
+      "DOCUMENT_NOT_FOUND": "Document introuvable (code: 2312)",
+      "CREATE_DOCUMENT": "Échec de la création du document (code: 2313)",
+      "ILLEGAL_TRANSITION": "Ce changement de statut n'est pas autorisé depuis le statut actuel (code: 2320)",
+      "MISSING_TRANSITION_CONTEXT": "Des informations requises sont manquantes pour ce changement de statut (code: 2321)",
+      "TRANSITION_FAILED": "Échec de l'enregistrement du changement de statut (code: 2322)",
+      "GET_VERSIONS": "Échec de la récupération des versions du document (code: 2330)",
+      "VERSION_NOT_FOUND": "Version du document introuvable (code: 2331)",
+      "UPLOAD_VERSION_FAILED": "Échec de l'envoi de la version du document (code: 2332)",
+      "VERSION_NOT_ALLOWED": "Une nouvelle version ne peut être ajoutée que tant que le document est en brouillon ou prêt (code: 2333)",
+      "INVALID_FILE": "Fichier invalide ou vide (code: 2334)",
+      "FILE_TOO_LARGE": "Le fichier dépasse la taille maximale autorisée (code: 2335)",
+      "STORAGE_UPLOAD_FAILED": "Échec de l'envoi du fichier vers le stockage (code: 2336)",
+      "STORAGE_DOWNLOAD_FAILED": "Échec du téléchargement du fichier depuis le stockage (code: 2337)",
+      "GET_DEADLINES": "Échec de la récupération des échéances (code: 2340)",
+      "DEADLINE_NOT_FOUND": "Échéance introuvable (code: 2341)",
+      "UPDATE_DEADLINE": "Échec de la mise à jour de l'échéance (code: 2342)",
+      "DEADLINE_SWEEP_FAILED": "Échec du contrôle automatique des échéances (code: 2343)",
+      "GET_TEMPLATES": "Échec de la récupération des modèles (code: 2350)",
+      "TEMPLATE_NOT_FOUND": "Modèle introuvable (code: 2351)",
+      "SAVE_TEMPLATE": "Échec de l'enregistrement du modèle (code: 2352)",
+      "GET_DEADLINE_RULES": "Échec de la récupération des règles d'échéance (code: 2353)",
+      "DEADLINE_RULE_NOT_FOUND": "Règle d'échéance introuvable (code: 2354)",
+      "SAVE_DEADLINE_RULE": "Échec de l'enregistrement de la règle d'échéance (code: 2355)",
+      "GENERATION_NOT_ALLOWED": "Un document ne peut être généré que tant qu'il est en brouillon ou prêt (code: 2360)",
+      "TEMPLATE_NOT_REGISTERED": "Aucun modèle n'est enregistré pour ce type de document (code: 2361)",
+      "GENERATION_FAILED": "Échec du lancement de la génération du document (code: 2362)",
+      "PREFILL_FAILED": "Échec du pré-remplissage du document depuis le CRM (code: 2363)",
+      "RENDER_ALREADY_IN_FLIGHT": "Une génération est déjà en cours pour ce document (code: 2364)",
+      "TOO_MANY_ROWS": "Le formulaire officiel ne prévoit pas autant de lignes (code: 2365)"
+    }
+  }
+}

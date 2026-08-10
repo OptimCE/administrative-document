@@ -1,0 +1,55 @@
+{
+  "id": "administrative_document.sharing_notification",
+  "version": "2025.07",
+  "engine": "pdf-form",
+  "supported_formats": [
+    "pdf"
+  ],
+  "entrypoint": "template.pdf",
+  "output_basename": "formulaire-notification-partage",
+  "_source": "CWaPE Formulaire de notification d'une activite de partage, format of 2025-07. The regulator's own fillable PDF; only field values are set.",
+  "_scope": "Only the fields OptimCE can derive, or that a reviewer routinely fills, are mapped. Everything else is left untouched and the artifact stays a fillable AcroForm, so an unmapped field remains editable by hand rather than being lost.",
+  "fields": {
+    "community_legal_name": "Champ de texte 153",
+    "community_vat_number": "Champ de texte 159",
+    "community_street": "Champ de texte 154",
+    "community_number": "Champ de texte 155",
+    "community_box": "Champ de texte 156",
+    "community_postcode": "Champ de texte 157",
+    "community_city": "Champ de texte 158",
+    "representative_name": "Champ de texte 8",
+    "representative_vat_number": "Champ de texte 14",
+    "representative_street": "Champ de texte 9",
+    "representative_number": "Champ de texte 10",
+    "representative_box": "Champ de texte 11",
+    "representative_postcode": "Champ de texte 12",
+    "representative_city": "Champ de texte 13",
+    "representative_country": "Champ de texte 160",
+    "contact_last_name": "Champ de texte 67",
+    "contact_first_name": "Champ de texte 68",
+    "contact_street": "Champ de texte 19",
+    "contact_number": "Champ de texte 20",
+    "contact_box": "Champ de texte 21",
+    "contact_postcode": "Champ de texte 22",
+    "contact_city": "Champ de texte 23",
+    "contact_phone": "Champ de texte 24",
+    "contact_mobile": "Champ de texte 25",
+    "contact_email": "Champ de texte 26",
+    "project_description": "Champ de texte 165",
+    "sharing_within_building": "Case à cocher 83",
+    "sharing_within_community": "Case à cocher 81",
+    "single_grid_operator": "Case à cocher 92"
+  },
+  "required_fields": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "community_legal_name": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    }
+  }
+}

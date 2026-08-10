@@ -1,0 +1,53 @@
+{
+  "id": "administrative_document.community_modification",
+  "version": "2024.06.27",
+  "engine": "pdf-form",
+  "supported_formats": [
+    "pdf"
+  ],
+  "entrypoint": "template.pdf",
+  "output_basename": "formulaire-modification-communaute",
+  "_source": "CWaPE Formulaire de modification d'une communaute d'energie, format of 2024-06-27. The regulator's own fillable PDF; only field values are set.",
+  "_scope": "Only the fields OptimCE can derive, or that a reviewer routinely fills, are mapped. Everything else is left untouched and the artifact stays a fillable AcroForm, so an unmapped field remains editable by hand rather than being lost.",
+  "_comb": "cwape_reference_digits fills 4 one-character boxes that follow a pre-printed 'CE'.",
+  "fields": {
+    "community_legal_name": "Champ de texte 8",
+    "community_vat_number": "Champ de texte 14",
+    "community_legal_form": "Champ de texte 71",
+    "community_street": "Champ de texte 9",
+    "community_number": "Champ de texte 10",
+    "community_box": "Champ de texte 11",
+    "community_postcode": "Champ de texte 12",
+    "community_city": "Champ de texte 13",
+    "representative_name": "Champ de texte 45",
+    "representative_vat_number": "Champ de texte 52",
+    "representative_street": "Champ de texte 46",
+    "representative_number": "Champ de texte 47",
+    "representative_box": "Champ de texte 48",
+    "representative_postcode": "Champ de texte 49",
+    "representative_city": "Champ de texte 51",
+    "contact_last_name": "Champ de texte 77",
+    "contact_first_name": "Champ de texte 78",
+    "contact_street": "Champ de texte 72",
+    "contact_number": "Champ de texte 73",
+    "contact_box": "Champ de texte 74",
+    "cwape_reference_digits": [
+      "Champ de texte 33",
+      "Champ de texte 34",
+      "Champ de texte 35",
+      "Champ de texte 36"
+    ]
+  },
+  "required_fields": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "community_legal_name": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    }
+  }
+}

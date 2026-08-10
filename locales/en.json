@@ -1,0 +1,54 @@
+{
+  "ERRORS": {
+    "AUTH": {
+      "UNAUTHORIZED": "Authentication required (code: 1)",
+      "FORBIDDEN": "Access denied (code: 2)",
+      "RATE_LIMITED": "Too many requests, please try again later (code: 3)",
+      "AUTHORIZATION_MISSING": "Missing authorization header (code: 4)"
+    },
+    "SUBSCRIPTION": {
+      "NOT_SUBSCRIBED": "You are not subscribed to this service (code: 1003)"
+    },
+    "ADMIN": {
+      "GET_DOSSIERS": "Failed to retrieve the dossiers (code: 2300)",
+      "GET_DOSSIER": "Failed to retrieve the dossier (code: 2301)",
+      "DOSSIER_NOT_FOUND": "Dossier not found (code: 2302)",
+      "CREATE_DOSSIER": "Failed to create the dossier (code: 2303)",
+      "UPDATE_DOSSIER": "Failed to update the dossier (code: 2304)",
+      "DUPLICATE_EXTERNAL_REF": "Another dossier of this type already uses this reference (code: 2305)",
+      "REGION_NOT_RESOLVED": "No supported regulatory region is configured for this community (code: 2306)",
+      "SHARING_OPERATION_NOT_FOUND": "This sharing operation does not exist in your community (code: 2307)",
+      "GET_DOCUMENTS": "Failed to retrieve the documents (code: 2310)",
+      "GET_DOCUMENT": "Failed to retrieve the document (code: 2311)",
+      "DOCUMENT_NOT_FOUND": "Document not found (code: 2312)",
+      "CREATE_DOCUMENT": "Failed to create the document (code: 2313)",
+      "ILLEGAL_TRANSITION": "This status change is not allowed from the current status (code: 2320)",
+      "MISSING_TRANSITION_CONTEXT": "Required information is missing for this status change (code: 2321)",
+      "TRANSITION_FAILED": "Failed to record the status change (code: 2322)",
+      "GET_VERSIONS": "Failed to retrieve the document versions (code: 2330)",
+      "VERSION_NOT_FOUND": "Document version not found (code: 2331)",
+      "UPLOAD_VERSION_FAILED": "Failed to upload the document version (code: 2332)",
+      "VERSION_NOT_ALLOWED": "A new version can only be added while the document is a draft or ready (code: 2333)",
+      "INVALID_FILE": "Invalid or empty file (code: 2334)",
+      "FILE_TOO_LARGE": "The file exceeds the maximum allowed size (code: 2335)",
+      "STORAGE_UPLOAD_FAILED": "Failed to upload the file to storage (code: 2336)",
+      "STORAGE_DOWNLOAD_FAILED": "Failed to download the file from storage (code: 2337)",
+      "GET_DEADLINES": "Failed to retrieve the deadlines (code: 2340)",
+      "DEADLINE_NOT_FOUND": "Deadline not found (code: 2341)",
+      "UPDATE_DEADLINE": "Failed to update the deadline (code: 2342)",
+      "DEADLINE_SWEEP_FAILED": "Failed to run the deadline sweep (code: 2343)",
+      "GET_TEMPLATES": "Failed to retrieve the templates (code: 2350)",
+      "TEMPLATE_NOT_FOUND": "Template not found (code: 2351)",
+      "SAVE_TEMPLATE": "Failed to save the template (code: 2352)",
+      "GET_DEADLINE_RULES": "Failed to retrieve the deadline rules (code: 2353)",
+      "DEADLINE_RULE_NOT_FOUND": "Deadline rule not found (code: 2354)",
+      "SAVE_DEADLINE_RULE": "Failed to save the deadline rule (code: 2355)",
+      "GENERATION_NOT_ALLOWED": "A document can only be generated while it is a draft or ready (code: 2360)",
+      "TEMPLATE_NOT_REGISTERED": "No template is registered for this document type (code: 2361)",
+      "GENERATION_FAILED": "Failed to start the document generation (code: 2362)",
+      "PREFILL_FAILED": "Failed to pre-fill the document from the CRM (code: 2363)",
+      "RENDER_ALREADY_IN_FLIGHT": "A generation is already running for this document (code: 2364)",
+      "TOO_MANY_ROWS": "The official form does not have room for this many rows (code: 2365)"
+    }
+  }
+}

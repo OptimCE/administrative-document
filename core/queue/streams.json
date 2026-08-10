@@ -1,0 +1,26 @@
+[
+  {
+    "name": "ADMIN_DOCUMENT_EVENTS",
+    "subjects": [
+      "optimce.administrative_document.document.status_changed",
+      "optimce.administrative_document.document.rendered",
+      "optimce.administrative_document.dossier.status_changed",
+      "optimce.administrative_document.deadline.created",
+      "optimce.administrative_document.deadline.missed"
+    ],
+    "retention": "limits",
+    "storage": "file"
+  },
+  {
+    "name": "ADMIN_DOCUMENT",
+    "subjects": ["optimce.administrative_document.document.generate.requested"],
+    "retention": "work_queue",
+    "storage": "file"
+  },
+  {
+    "name": "ADMIN_DOCUMENT_DLQ",
+    "subjects": ["optimce.administrative_document.dlq.>"],
+    "retention": "limits",
+    "storage": "file"
+  }
+]

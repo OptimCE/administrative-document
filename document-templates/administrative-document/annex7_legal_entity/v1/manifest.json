@@ -1,0 +1,41 @@
+{
+  "id": "administrative_document.annex7_legal_entity",
+  "version": "2026.02.06",
+  "engine": "pdf-form",
+  "supported_formats": [
+    "pdf"
+  ],
+  "entrypoint": "template.pdf",
+  "output_basename": "annexe7-personne-morale",
+  "_source": "CWaPE ANNEXE 7 - societes et associations, format of 2026-02-06. The regulator's own fillable PDF; only field values are set.",
+  "_scope": "Only the fields OptimCE can derive, or that a reviewer routinely fills, are mapped. Everything else is left untouched and the artifact stays a fillable AcroForm, so an unmapped field remains editable by hand rather than being lost.",
+  "_scope_extra": "Per-entity: the reviewer chooses which member this annex is for, so the identity fields are supplied in the review step rather than derived.",
+  "fields": {
+    "entity_name": "Champ de texte 271",
+    "entity_vat_digits": [
+      "Champ de texte 205",
+      "Champ de texte 206",
+      "Champ de texte 207",
+      "Champ de texte 208",
+      "Champ de texte 209",
+      "Champ de texte 267",
+      "Champ de texte 269",
+      "Champ de texte 2040",
+      "Champ de texte 268",
+      "Champ de texte 270"
+    ],
+    "controlling_entity_name": "Champ de texte 220"
+  },
+  "required_fields": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "community_legal_name": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    }
+  }
+}

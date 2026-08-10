@@ -1,0 +1,41 @@
+OptimCE — Administrative Document
+Copyright 2026 OptimCE
+
+This product includes software developed by OptimCE, licensed under the Apache
+License, Version 2.0 (see LICENSE).
+
+
+THIRD-PARTY MATERIAL — CWaPE REGULATORY FORMS
+=============================================
+
+The files matching the following pattern are NOT OptimCE-authored content and
+are NOT covered by the Apache-2.0 grant in LICENSE:
+
+    document-templates/administrative-document/<doc_type>/v<n>/template.pdf
+    document-templates/administrative-document/<doc_type>/v<n>/template.xlsx
+    document-templates/administrative-document/<doc_type>/v<n>/template.docx
+
+They are the official, blank administrative forms published by the Commission
+wallonne pour l'Énergie (CWaPE), the Walloon energy regulator, and are
+redistributed here unmodified. They are included because the service's purpose
+is to file the regulator's own document rather than a reproduction of it: the
+rendering step sets AcroForm field values, spreadsheet cell values, or replaces
+the "[à compléter]" markers of a Word convention, and changes nothing else.
+
+Each bundle's manifest.json records the exact publication it wraps in its
+"_source" key, for example:
+
+    "CWaPE document 5617 — Formulaire de notification CE, Annexe 6,
+     format of 2026-02-25. Unmodified: only cell values are written."
+
+Rights in these documents remain with CWaPE. Their inclusion here is not a
+sublicence, and OptimCE makes no representation about your right to use,
+reproduce, or redistribute them. If you fork or redistribute this repository,
+satisfy yourself as to the terms that apply to them — or obtain them directly
+from the regulator.
+
+What IS OptimCE's own work in that directory, and IS covered by the Apache-2.0
+grant: every manifest.json (the field and cell bindings, the JSON Schema over
+the input data, the declared capacities) and document-templates/README.md.
+
+CWaPE publications: https://www.cwape.be
