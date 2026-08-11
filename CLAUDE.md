@@ -71,6 +71,13 @@ bundles through `document-generation`. Read `README.md` for the domain.
 - **Bundle edits need a version bump.** `document-generation` caches bundles on
   disk keyed by URI with no invalidation; re-uploading to the same versioned
   prefix has no effect until `up --force-recreate document-generation`.
+- **Nothing under `tests/` may read outside the repo.** `domain/regions.py` falls
+  back to the monorepo's shared `reference/regulators.json` (`parents[2]`), which
+  does not exist in the standalone checkout CI builds — so the suite vendors a
+  copy at `tests/fixtures/regulators.json` and `conftest.py` exports
+  `REGULATORS_CONFIG_PATH` to it. Skipping that made 128 tests pass on a dev
+  machine and fail in CI, all as one swallowed 2303. `tests/domain/test_regions.py`
+  keeps the copy honest against the shared file when it IS checked out.
 - CWaPE workbooks enforce data-validation dropdowns, so a label that is not
   character-for-character right shows as a validation error. `cwape_labels.py`
   holds them and `tests/test_template_bundles.py` re-reads the shipped workbooks

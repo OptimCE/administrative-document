@@ -34,6 +34,18 @@ from pathlib import Path
 # so this assignment must happen before `from main import app` below.
 os.environ.setdefault("ENV", "test")
 
+# The shared reference/regulators.json lives at the monorepo root, which is NOT
+# checked out when administrative-document runs standalone in CI. Point the
+# region loader at the vendored fixture copy so the suite is self-contained
+# (mirrors billing/tests/conftest.py and crm-backend/config/test.cjs). Without
+# this the dev fallback in domain/regions.py resolves outside the repository and
+# every dossier creation raises, which is invisible in a monorepo checkout.
+# setdefault, so an explicitly exported REGULATORS_CONFIG_PATH still wins.
+os.environ.setdefault(
+    "REGULATORS_CONFIG_PATH",
+    str(Path(__file__).resolve().parent / "fixtures" / "regulators.json"),
+)
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
