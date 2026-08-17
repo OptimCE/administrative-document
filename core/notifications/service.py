@@ -27,6 +27,7 @@ from core.notifications.contract import (
 )
 from core.notifications.dedupe import build_dedupe_key, type_prefix_of
 from core.notifications.repository import NotificationRepository
+from core.realtime import UsersAudience, emit
 from shared.models.crm_models import NotificationModel
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,10 @@ class NotificationService:
     def __init__(self, crm_session: AsyncSession):
         self.crm_session = crm_session
         self.repository = NotificationRepository(crm_session)
+        # Realtime hints staged by publish() and released by flush_realtime()
+        # AFTER the caller commits. See flush_realtime's docstring for why this
+        # cannot simply be emitted inline.
+        self._pending_realtime: list[tuple[list[int], int | None]] = []
 
     async def publish(
         self,
@@ -151,6 +156,16 @@ class NotificationService:
                             for user_id in email_ids
                         ],
                     )
+            # Stage the realtime hint. A list append cannot abort a Postgres
+            # transaction, and this sits outside the savepoint above, so a
+            # savepoint rollback re-raises into the `except` below and nothing is
+            # staged — no event for rows that never landed.
+            #
+            # The audience is the SAME inapp_ids resolution performed above, never
+            # a second one: a divergence there means a notification row with no
+            # event, or an event with no row.
+            if inapp_ids:
+                self._pending_realtime.append((list(inapp_ids), community_id))
             return len(rows)
         except Exception:
             logger.exception(
@@ -158,6 +173,38 @@ class NotificationService:
                 extra={"operation": "notification:publish", "type": type},
             )
             return 0
+
+    async def flush_realtime(self) -> None:
+        """Release the realtime hints staged by publish(). NEVER raises.
+
+        *** CALL THIS AFTER YOUR COMMIT. ***
+
+        publish() deliberately runs INSIDE the caller's transaction because it
+        writes rows. A realtime hint has the exact opposite requirement: emitted
+        before the commit, it tells the browser to refetch and read PRE-COMMIT
+        state, and because the transport is fire-and-forget there is no second
+        event — a permanently stale UI behind a 200. So publish() is split in two
+        and the caller, which owns the commit, owns the boundary between them.
+
+        Not wired to SQLAlchemy's ``after_commit`` event on purpose: that fires
+        synchronously inside the greenlet, so an async publish there needs
+        ``create_task``, and in a worker that exits immediately the task can be
+        garbage-collected before it ever runs.
+
+        Safe to call when nothing is staged, and safe to call twice.
+        """
+        staged, self._pending_realtime = self._pending_realtime, []
+        for user_ids, community_id in staged:
+            await emit(
+                topic="notification.created",
+                audience=UsersAudience(user_ids=user_ids),
+                # The client refetches /unread-count and the recent slice, so it
+                # needs neither a row id nor a count — and the envelope must
+                # carry no business data regardless.
+                resource=("notification", "0"),
+                scope_community_id=community_id,
+                hint={},
+            )
 
     async def _resolve_audience(self, target: NotificationTarget) -> tuple[list[int], int | None]:
         """Turn a target into (de-duplicated recipient ids, source community)."""

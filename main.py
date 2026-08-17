@@ -16,6 +16,7 @@ from core.middleware.locale_middleware import LocaleMiddleware
 from core.middleware.request_limits import RequestLimitsMiddleware
 from core.middleware.set_auth_context import GatewayScopeMiddleware
 from core.queue.init import close_nats, init_nats
+from core.realtime import log_realtime_state
 from core.tracing import enrich_span, setup_tracer_provider
 
 configure_logging()
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Absence of this line means the image predates the realtime feature —
+    # see core/realtime/bus.py. Must come after configure_logging().
+    log_realtime_state("administrative-document api")
     setup_tracer_provider()
     await init_nats()
     yield

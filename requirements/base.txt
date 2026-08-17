@@ -38,3 +38,8 @@ opentelemetry-util-http==0.60b1
 # offsets ("+6 months", "+1 year"). See domain/calendar.py.
 workalendar==17.0.0
 python-dateutil==2.9.0.post0
+
+# Realtime SSE hints (fire-and-forget pub/sub consumed by crm-backend's hub).
+# redis.asyncio, not the unmaintained aioredis — it is aioredis's successor and
+# ships in the same package.
+redis==5.2.1
