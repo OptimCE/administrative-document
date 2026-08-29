@@ -24,6 +24,7 @@ import sys
 from core.database.database import crm_engine, local_engine
 from core.logging import configure_logging
 from core.queue.init import close_nats, get_jetstream, init_nats
+from core.realtime import log_realtime_state
 from core.tracing import setup_tracer_provider
 from worker import dispatcher
 from worker.scheduler import run_deadline_scheduler
@@ -92,6 +93,9 @@ async def _heartbeat(shutdown_event: asyncio.Event) -> None:
 
 async def main() -> None:
     configure_logging()
+    # Absence of this line means the image predates the realtime feature —
+    # see core/realtime/bus.py. Must come after configure_logging().
+    log_realtime_state("administrative-document-worker")
     setup_tracer_provider()
 
     await _connect_nats_with_retry()

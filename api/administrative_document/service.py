@@ -786,6 +786,11 @@ class AdministrativeDocumentService:
                 "context": clean_context,
             },
         )
+        # _notify_acknowledged() only STAGES; _audit_and_commit() above owns the
+        # CRM commit, so this is the first post-commit point. It swallows commit
+        # failures, so we may flush after a rollback: harmless, because the
+        # client refetches, finds no row, and the unread count does not move.
+        await self._notify.flush_realtime()
 
     # ------------------------------------------------------------------
     # Deadline derivation
@@ -1041,6 +1046,11 @@ class AdministrativeDocumentService:
 
         for deadline in overdue:
             await self._publish_deadline(SUBJECT_DEADLINE_MISSED, EVENT_DEADLINE_MISSED, deadline)
+        # ONE flush, here, after self._local.commit() — not two, and not after
+        # the CRM commits above. `reminded_at` and the MISSED statuses are the
+        # business write and they commit LAST, so flushing earlier would tell the
+        # browser to refetch pre-commit state with no second event coming.
+        await self._notify.flush_realtime()
         return len(overdue), rolled
 
     # ------------------------------------------------------------------
