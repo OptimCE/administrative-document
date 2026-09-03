@@ -30,7 +30,7 @@ async def register_bundle(db_session, *, doc_type="annex6_notification", uri=_BU
 
 
 async def seed_participants(db_session, community, sharing_operation) -> None:
-    home = await f.create_address(db_session, street="Rue Basse", number=3)
+    home = await f.create_address(db_session, street="Rue Basse", number="3")
     alice = await f.create_member(
         db_session,
         id_community=community.id,

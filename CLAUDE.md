@@ -53,7 +53,9 @@ bundles through `document-generation`. Read `README.md` for the domain.
 - Cross-DB refs (`id_sharing_operation`, `id_member`, `ean`) are plain columns, never FKs.
 - Errors: `ErrorException(errors.admin.X, status_code=...)`; every key needs all
   four locales (`tests/test_locales.py` enforces it). Generation block is 2360-2365.
-- CRM `address.number` is an **INTEGER**. Coerce at the port boundary.
+- CRM `address.number` is a **VARCHAR(32)** since 2026-08-30 (`12A` is a real
+  Belgian house number). The port still coerces via `_as_optional_str`, which is
+  now a no-op — keep it, so the port survives either column type.
 
 ## Gotchas
 - **`api/administrative_document/routes.py` must NOT `from __future__ import

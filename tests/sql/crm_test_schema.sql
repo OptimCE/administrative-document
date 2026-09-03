@@ -7,9 +7,10 @@
 -- against a single Postgres instance, so we mirror the minimum CRM DDL the
 -- suite needs here.
 --
--- Keep column types identical to production. In particular `address.number` is
--- an INTEGER in the real CRM — mirroring it as VARCHAR here would hide the
--- str/int bug class at the port boundary.
+-- Keep column types identical to production. `address.number` is a VARCHAR(32)
+-- in the real CRM as of 2026-08-30 (a Belgian house number is `12A`, not 12);
+-- the port still coerces with `_as_optional_str`, which is now a no-op rather
+-- than a conversion, and is kept so the port survives either column type.
 
 -- ---- community -------------------------------------------------------------
 -- Mirrors core/database/models.py::Community plus the legal/regulatory columns
@@ -51,10 +52,11 @@ CREATE INDEX IF NOT EXISTS idx_community_subscription_id_community
 CREATE TABLE IF NOT EXISTS address (
     id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     street       VARCHAR(255),
-    number       INTEGER,  -- matches the real CRM: house number is an integer column
+    number       VARCHAR(32),  -- matches the real CRM: text, because 12A is a real house number
     postcode     VARCHAR(16),
     supplement   VARCHAR(255),
     city         VARCHAR(255),
+    country      CHAR(2) NOT NULL DEFAULT 'BE',
     id_community INTEGER,
     created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP

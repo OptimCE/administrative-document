@@ -121,8 +121,10 @@ _OPERATION_METERS_SQL = text(
 def _as_optional_str(value: object) -> str | None:
     """Normalise a CRM column to a string.
 
-    ``address.number`` is an INTEGER in the CRM, so a naive join into an address
-    line raises TypeError. Convert once, here.
+    ``address.number`` was an INTEGER in the CRM until 2026-08-30, when it became
+    a VARCHAR(32); a naive join into an address line raised TypeError. The
+    conversion is now usually a no-op, and is kept deliberately: it is what lets
+    this adapter run against a CRM on either side of that migration.
     """
     if value is None:
         return None
@@ -141,9 +143,9 @@ def _address(row: dict[str, Any], prefix: str) -> PostalAddress | None:
     values = {field: row.get(column) for field, column in columns.items()}
     if not any(value is not None for value in values.values()):
         return None
-    # address.number is an INTEGER column in the CRM — coerce at the boundary so
-    # no downstream formatter has to care. Getting this wrong silently broke
-    # billing's whole issue pipeline once.
+    # Coerce at the boundary so no downstream formatter has to care. Getting this
+    # wrong silently broke billing's whole issue pipeline once — which is why the
+    # coercion stays even though address.number is text since 2026-08-30.
     return PostalAddress(**{field: _as_optional_str(value) for field, value in values.items()})
 
 
