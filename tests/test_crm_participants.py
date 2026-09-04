@@ -18,7 +18,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _alice_with_two_meters(db_session, community, sharing_operation) -> int:
-    home = await f.create_address(db_session, street="Rue Basse", number=3)
+    home = await f.create_address(db_session, street="Rue Basse", number="3")
     id_member = await f.create_member(
         db_session,
         id_community=community.id,
@@ -28,7 +28,7 @@ async def _alice_with_two_meters(db_session, community, sharing_operation) -> in
         email="alice@example.be",
         id_home_address=home,
     )
-    site = await f.create_address(db_session, street="Rue du Site", number=7, city="Jambes")
+    site = await f.create_address(db_session, street="Rue du Site", number="7", city="Jambes")
     for ean, address in (("541448000000000001", site), ("541448000000000002", None)):
         await f.create_meter(
             db_session,
@@ -71,8 +71,10 @@ class TestParticipants:
     async def test_the_house_number_arrives_as_a_string(
         self, db_session, community, sharing_operation
     ):
-        """address.number is INTEGER in the CRM. This exact coercion bug once
-        broke billing's whole issue pipeline."""
+        """The port owes a string whatever the column is. `address.number` was an
+        INTEGER until 2026-08-30 and is a VARCHAR(32) now; this exact coercion bug
+        once broke billing's whole issue pipeline, so the guarantee is asserted
+        rather than assumed."""
         await _alice_with_two_meters(db_session, community, sharing_operation)
 
         result = await SqlAlchemyCrmCoreRead(db_session).get_operation_participants(

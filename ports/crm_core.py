@@ -30,8 +30,9 @@ from shared.const import Region
 class PostalAddress:
     """A CRM address, normalised to strings.
 
-    ``number`` is an INTEGER column in the CRM; it is converted at the adapter
-    boundary so downstream string formatting never has to care.
+    ``number`` is a VARCHAR(32) in the CRM as of 2026-08-30 — a Belgian house
+    number is ``12A``, not 12. It is still normalised at the adapter boundary, so
+    this type is correct against either column type.
     """
 
     street: str | None = None

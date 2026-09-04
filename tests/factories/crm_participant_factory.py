@@ -17,7 +17,7 @@ async def create_address(
     session: AsyncSession,
     *,
     street: str = "Rue Haute",
-    number: int = 12,
+    number: str = "12",
     postcode: str = "5000",
     city: str = "Namur",
     supplement: str | None = None,
