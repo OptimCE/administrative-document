@@ -23,12 +23,14 @@ from __future__ import annotations
 
 import copy
 import datetime
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from domain import cwape_labels as labels
 from ports.crm_core import (
     WARNING_COMMUNITY_FIELD_MISSING,
+    WARNING_EAN_NOT_FORM_REPRESENTABLE,
     WARNING_MEMBER_FIELD_MISSING,
     CommunityContext,
     Installation,
@@ -50,6 +52,23 @@ DOC_TYPE_SHARING_NOTIFICATION = "sharing_notification"
 DOC_TYPE_SHARING_MODIFICATION = "sharing_modification"
 DOC_TYPE_DSO_AGREEMENT_COMMUNITY = "dso_agreement_community"
 DOC_TYPE_DSO_AGREEMENT_BUILDING = "dso_agreement_building"
+
+#: An EAN is exactly 18 digits. Mirrors crm-backend's
+#: `modules/meters/shared/ean.ts` and crm-frontend's
+#: `shared/validators/ean.validator.ts`; kept local because this is the only
+#: Python service that derives anything from the EAN's shape, and `core/*` is
+#: copy-pasted byte-identical across the annexes.
+EAN_PATTERN = re.compile(r"^[0-9]{18}$")
+
+#: The digits the CWaPE annex 8 pre-prints before its 16 one-character boxes.
+#: A fact about the paper form, not a rule about EANs.
+_EAN_FORM_PREFIX = "54"
+
+#: (snapshot key the reviewer edits, comb key the bundle manifest binds).
+_ANNEX8_COMB_FIELDS = (
+    ("ean_delivery", "ean_delivery_digits"),
+    ("ean_injection", "ean_injection_digits"),
+)
 
 #: The CWaPE DSO conventions are Word contracts rendered with StrictUndefined, so
 #: every key must be present or the render fails hard. Most are negotiated terms
@@ -272,6 +291,17 @@ def build_snapshot(
         snapshot["participant_count"] = sum(len(p.meters) for p in participants)
         snapshot["installation_count"] = len(production)
 
+        if doc_type == DOC_TYPE_ANNEX8_SWORN_DECLARATION:
+            # Annex 8 is signed by ONE participant and the CRM cannot know
+            # which, so the EANs are seeded only when the operation leaves no
+            # choice and blank otherwise. A guessed EAN on a sworn declaration
+            # is worse than a blank the reviewer fills. Seeding the keys at all
+            # is what makes the fields appear in the review form.
+            delivery = [meter.ean for p in participants for meter in p.meters]
+            injection = [installation.ean for installation in production]
+            snapshot["ean_delivery"] = delivery[0] if len(delivery) == 1 else None
+            snapshot["ean_injection"] = injection[0] if len(injection) == 1 else None
+
     return snapshot
 
 
@@ -363,6 +393,79 @@ _COMMUNITY_REQUIRED: tuple[tuple[str, Callable[[CommunityContext], str | None]],
 
 def _is_blank(value: str | None) -> bool:
     return value is None or not value.strip()
+
+
+def ean_comb_digits(ean: object) -> str | None:
+    """The 16 digits annex 8's comb boxes can hold, or None if they cannot.
+
+    The CWaPE sworn declaration pre-prints "5 4" and then gives 16 boxes, so
+    18 == 2 + 16 exactly and the value the form wants is the tail after the
+    prefix. The regulator's own body text on that PDF says so: *"Le code EAN
+    ... est compose de 18 chiffres"*.
+
+    None rather than a truncation, always, for two reasons. The bundle manifest
+    declares ``maxLength: 16``, so an 18-character value is a permanent docgen
+    VALIDATION_ERROR and never renders anyway; and ``pdf_form`` spreads a value
+    LEFT-aligned across the boxes, so a raw 18-digit string would drop the last
+    two digits and print a WRONG EAN on a signed sworn declaration.
+    """
+    if not isinstance(ean, str):
+        return None
+    candidate = ean.strip()
+    if not EAN_PATTERN.match(candidate) or not candidate.startswith(_EAN_FORM_PREFIX):
+        return None
+    return candidate[len(_EAN_FORM_PREFIX) :]
+
+
+def project_comb_fields(doc_type: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Derive the comb-box keys from the semantic EAN keys, in place.
+
+    Applied when the payload is FROZEN, not when it is prefilled: the review
+    form derives its controls from the payload keys, so emitting the ``*_digits``
+    keys at prefill time would show the reviewer four EAN fields, two of them a
+    projection of the other two. Re-running it after ``merge_overrides`` (which
+    is deliberately shallow) is also what stops an edited EAN leaving stale
+    digits in the snapshot that gets filed.
+
+    An unrepresentable value REMOVES the key rather than writing partial digits,
+    so ``pdf_form._resolve_values`` skips it and the boxes stay exactly as the
+    regulator printed them — still fillable by hand.
+    """
+    if doc_type != DOC_TYPE_ANNEX8_SWORN_DECLARATION:
+        return snapshot
+    for source, target in _ANNEX8_COMB_FIELDS:
+        digits = ean_comb_digits(snapshot.get(source))
+        if digits is None:
+            snapshot.pop(target, None)
+        else:
+            snapshot[target] = digits
+    return snapshot
+
+
+def form_representation_warnings(
+    doc_type: str, snapshot: Mapping[str, Any]
+) -> tuple[PrefillWarning, ...]:
+    """EANs this doc_type's form physically cannot print.
+
+    Narrow like ``participant_warnings`` and for the same reason: only annex 8
+    has the pre-printed prefix, so only annex 8 warns about it. A BLANK EAN
+    produces no warning — the reviewer can see an empty field, and nagging
+    about it would bury the warnings that matter.
+    """
+    if doc_type != DOC_TYPE_ANNEX8_SWORN_DECLARATION:
+        return ()
+    return tuple(
+        PrefillWarning(
+            code=WARNING_EAN_NOT_FORM_REPRESENTABLE,
+            subject_type="meter",
+            subject_id=str(snapshot[source]).strip(),
+            params={"field": source},
+        )
+        for source, _target in _ANNEX8_COMB_FIELDS
+        if isinstance(snapshot.get(source), str)
+        and snapshot[source].strip()
+        and ean_comb_digits(snapshot[source]) is None
+    )
 
 
 def community_warnings(community: CommunityContext) -> tuple[PrefillWarning, ...]:

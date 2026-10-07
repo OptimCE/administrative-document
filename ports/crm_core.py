@@ -140,6 +140,16 @@ WARNING_METER_NO_MEMBER = "meter.no_member_attribution"
 WARNING_COMMUNITY_FIELD_MISSING = "community.field_missing"
 #: A member field the form needs and the CRM does not have.
 WARNING_MEMBER_FIELD_MISSING = "member.field_missing"
+#: An EAN the CWaPE sworn declaration physically cannot print. Its two EAN rows
+#: are 16 one-character boxes preceded by a pre-printed "5 4", so the form can
+#: hold only an 18-digit EAN that begins 54. Anything else leaves the boxes
+#: blank and is surfaced here: a wrong EAN on a signed sworn declaration is far
+#: worse than a blank the reviewer completes by hand.
+#:
+#: Named for the consequence, not the cause, on purpose — a legacy 13-digit EAN
+#: such as 5414482000000 does start with 54 and is still unprintable, so a code
+#: called "ean_prefix_not_54" would be a lie for half the cases it fires on.
+WARNING_EAN_NOT_FORM_REPRESENTABLE = "meter.ean_not_form_representable"
 
 
 @dataclass(frozen=True)
