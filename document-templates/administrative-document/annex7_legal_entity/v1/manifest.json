@@ -35,6 +35,13 @@
           "string",
           "null"
         ]
+      },
+      "entity_vat_digits": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "maxLength": 10
       }
     }
   }

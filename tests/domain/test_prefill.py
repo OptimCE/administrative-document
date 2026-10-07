@@ -544,3 +544,111 @@ class TestOverridesPreserveIdentity:
         )
 
         assert merged["participants"][0][prefill.ROW_MEMBER_ID] == 10
+
+
+class TestAnnex8CombBoxes:
+    """The CWaPE sworn declaration's two EAN rows.
+
+    16 one-character boxes each, preceded by a pre-printed "5 4" — so the form
+    holds an 18-digit EAN only as the 16 digits that follow the prefix. The
+    regulator's own body text on that PDF says the EAN is 18 digits.
+    """
+
+    def test_derives_the_sixteen_digits_after_the_printed_prefix(self):
+        assert prefill.ean_comb_digits("541448200000000001") == "1448200000000001"
+
+    def test_the_result_is_exactly_sixteen_characters(self):
+        # The bundle manifest declares maxLength 16 and document-generation
+        # validates `data` against it BEFORE rendering, so anything longer is a
+        # permanent VALIDATION_ERROR rather than a filled form.
+        assert len(prefill.ean_comb_digits("541448200000000001")) == 16
+
+    @pytest.mark.parametrize(
+        "ean",
+        [
+            "441448200000000001",  # 18 digits, wrong prefix: unprintable
+            "5414482000000",  # legacy 13 digits: starts 54 and is STILL unprintable
+            "54144820000000001",  # 17 digits
+            "5414482000000000011",  # 19 digits
+            "54144820000000000A",  # not all digits
+            "",
+            None,
+            541448200000000001,  # an int must never be accepted
+        ],
+    )
+    def test_returns_none_rather_than_truncating(self, ean):
+        assert prefill.ean_comb_digits(ean) is None
+
+    def test_tolerates_surrounding_whitespace(self):
+        assert prefill.ean_comb_digits("  541448200000000001  ") == "1448200000000001"
+
+    def test_projection_sets_the_comb_keys(self):
+        snapshot = {"ean_delivery": "541448200000000001", "ean_injection": None}
+        prefill.project_comb_fields(prefill.DOC_TYPE_ANNEX8_SWORN_DECLARATION, snapshot)
+        assert snapshot["ean_delivery_digits"] == "1448200000000001"
+        # Absent, not blank: pdf_form skips an unmapped key and leaves the
+        # regulator's own boxes untouched and hand-fillable.
+        assert "ean_injection_digits" not in snapshot
+
+    def test_projection_removes_stale_digits_when_the_ean_becomes_invalid(self):
+        # merge_overrides is shallow, so a reviewer editing the EAN would
+        # otherwise leave the previous EAN's digits in the frozen snapshot.
+        snapshot = {"ean_delivery": "441448200000000001", "ean_delivery_digits": "1448200000000001"}
+        prefill.project_comb_fields(prefill.DOC_TYPE_ANNEX8_SWORN_DECLARATION, snapshot)
+        assert "ean_delivery_digits" not in snapshot
+
+    def test_projection_is_a_no_op_for_other_doc_types(self):
+        snapshot = {"ean_delivery": "541448200000000001"}
+        prefill.project_comb_fields(prefill.DOC_TYPE_ANNEX6_SHARING_FORM, snapshot)
+        assert "ean_delivery_digits" not in snapshot
+
+    def test_warns_once_per_unprintable_ean(self):
+        warnings = prefill.form_representation_warnings(
+            prefill.DOC_TYPE_ANNEX8_SWORN_DECLARATION,
+            {"ean_delivery": "441448200000000001", "ean_injection": "541448200000000002"},
+        )
+        assert len(warnings) == 1
+        assert warnings[0].code == "meter.ean_not_form_representable"
+        assert warnings[0].subject_type == "meter"
+        assert warnings[0].subject_id == "441448200000000001"
+        assert warnings[0].params["field"] == "ean_delivery"
+
+    def test_a_blank_ean_is_not_a_warning(self):
+        # The reviewer can see an empty field; nagging would bury the warnings
+        # that matter.
+        assert (
+            prefill.form_representation_warnings(
+                prefill.DOC_TYPE_ANNEX8_SWORN_DECLARATION,
+                {"ean_delivery": None, "ean_injection": "   "},
+            )
+            == ()
+        )
+
+    def test_silent_for_other_doc_types(self):
+        assert (
+            prefill.form_representation_warnings(
+                prefill.DOC_TYPE_ANNEX6_SHARING_FORM, {"ean_delivery": "441448200000000001"}
+            )
+            == ()
+        )
+
+    def test_snapshot_seeds_the_ean_only_when_unambiguous(self):
+        one_meter = dataclasses.replace(_ALICE, meters=(_ALICE.meters[0],))
+        snapshot = prefill.build_snapshot(
+            prefill.DOC_TYPE_ANNEX8_SWORN_DECLARATION,
+            community=_COMMUNITY,
+            participants=[one_meter],
+            production=[_PV],
+        )
+        assert snapshot["ean_delivery"] == one_meter.meters[0].ean
+        assert snapshot["ean_injection"] == _PV.ean
+
+    def test_snapshot_leaves_the_ean_blank_when_there_is_a_choice(self):
+        # A guessed EAN on a sworn declaration is worse than a blank.
+        snapshot = prefill.build_snapshot(
+            prefill.DOC_TYPE_ANNEX8_SWORN_DECLARATION,
+            community=_COMMUNITY,
+            participants=[_ALICE, _ACME],
+            production=[_PV],
+        )
+        assert snapshot["ean_delivery"] is None

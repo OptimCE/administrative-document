@@ -566,15 +566,16 @@ class AdministrativeDocumentService:
             storage=crm_data.storage,
         )
         # Warnings ride alongside the payload rather than inside it: they are for
-        # the reviewer, not for the form. Three sources — the CRM read (a delivery
-        # point nobody owns), the community identity header, and the member sheet
-        # when this doc_type has one — merged and sorted so the panel is stable
-        # across repeated prefills.
+        # the reviewer, not for the form. Four sources — the CRM read (a delivery
+        # point nobody owns), the community identity header, the member sheet when
+        # this doc_type has one, and an EAN the form physically cannot print —
+        # merged and sorted so the panel is stable across repeated prefills.
         warnings = prefill.sort_warnings(
             (
                 *crm_data.warnings,
                 *prefill.community_warnings(context),
                 *prefill.participant_warnings(document.doc_type, crm_data.participants),
+                *prefill.form_representation_warnings(document.doc_type, snapshot),
             )
         )
         return {"data": snapshot, "warnings": warnings}
@@ -610,6 +611,12 @@ class AdministrativeDocumentService:
 
         prefilled = await self.build_prefill(document_id=document_id)
         snapshot = prefill.merge_overrides(prefilled["data"], data)
+        # The comb boxes are a projection of the EAN, recomputed AFTER the
+        # reviewer's corrections: merge_overrides is shallow, so an edited EAN
+        # would otherwise leave stale digits in the snapshot that gets frozen,
+        # filed and printed. An unrepresentable EAN removes the keys entirely
+        # and the boxes stay blank and hand-fillable.
+        snapshot = prefill.project_comb_fields(document.doc_type, snapshot)
 
         request_id = uuid.uuid4().hex
         claimed = await self._repo.claim_render(

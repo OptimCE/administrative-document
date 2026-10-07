@@ -47,6 +47,13 @@
           "string",
           "null"
         ]
+      },
+      "cwape_reference_digits": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "maxLength": 4
       }
     }
   }
