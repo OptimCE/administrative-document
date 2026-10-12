@@ -22,7 +22,7 @@ from nats.aio.msg import Msg
 from nats.js import JetStreamContext
 from nats.js.api import ConsumerConfig
 
-from core.queue.helper import Event
+from core.queue.helper import Event, subscribe_durable
 from ports.document_generation_nats import NatsDocumentGeneration
 from shared.const import (
     SUBJECT_DLQ_DOCGEN_RESULT,
@@ -50,11 +50,10 @@ _DOCGEN_RETRY_MAX_ATTEMPTS = 40
 async def subscribe_all(js: JetStreamContext, *, inflight: set[asyncio.Task] | None = None) -> list:
     """Register the durable consumers. Returns their subscriptions."""
     subs = [
-        await js.subscribe(
+        await subscribe_durable(
+            js,
             subject=SUBJECT_GENERATE_REQUESTED,
             durable=_GENERATE_DURABLE,
-            queue=_GENERATE_DURABLE,
-            manual_ack=True,
             cb=_make_handler(js, _process_generate_message, inflight=inflight),
             config=ConsumerConfig(ack_wait=_ACK_WAIT_SECONDS, max_deliver=_MAX_DELIVER),
         )
