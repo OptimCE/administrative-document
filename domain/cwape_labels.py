@@ -63,9 +63,13 @@ class ProductionChain(IntEnum):
 # The form vocabularies, verbatim.
 # ---------------------------------------------------------------------------
 
-#: "Gestionnaire de Réseau" — the only DSOs the forms accept. The CRM stores
-#: ``meter_data.grd`` as free text, so it is matched case-insensitively and an
-#: unrecognised operator becomes None (the reviewer picks one).
+#: "Gestionnaire de Réseau" — the network operators the forms accept, verbatim:
+#: the five Walloon DSOs plus ELIA, which is not a DSO but the local transmission
+#: operator (GRTL, 30-70 kV) in Wallonia. The CRM no longer offers ELIA as a GRD;
+#: it stays here because it is the form's vocabulary, and old meters may hold it.
+#: The CRM stores ``meter_data.grd`` as free text, so it is matched
+#: case-insensitively and an unrecognised operator (Sibelga, Fluvius ...)
+#: becomes None (the reviewer picks one).
 GRD_LABELS: tuple[str, ...] = ("ELIA", "AIEG", "AIESH", "ORES", "RESA", "REW")
 
 #: "Client résidentiel"
