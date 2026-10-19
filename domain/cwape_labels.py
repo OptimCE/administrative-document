@@ -63,10 +63,35 @@ class ProductionChain(IntEnum):
 # The form vocabularies, verbatim.
 # ---------------------------------------------------------------------------
 
-#: "Gestionnaire de Réseau" — the only DSOs the forms accept. The CRM stores
-#: ``meter_data.grd`` as free text, so it is matched case-insensitively and an
-#: unrecognised operator becomes None (the reviewer picks one).
+#: "Gestionnaire de Réseau" — the network operators the forms accept, verbatim:
+#: the five Walloon DSOs plus ELIA. Elia is NOT a DSO: it is the local
+#: transmission system operator (GRTL, 30-70 kV) in Wallonia. It stays here
+#: because it is the form's vocabulary.
+#:
+#: The CRM now stores ``meter_data.grd`` as a stable lower-case id (``ores``,
+#: ``elia``, ``fluvius-imewo`` ...) and offers Elia as a separate option after
+#: the DSOs, never prefilled; meters written before that hold the upper-case
+#: name. Both are accepted (see ``grd_label``). Anything else (Sibelga,
+#: Fluvius ...) becomes None and the reviewer picks one.
+#:
+#: The CRM prefills the OPERATOR of the address (decision Q1 of the GRD
+#: prefill): where the operator differs from the designated DSO, the designated
+#: one is only shown as a note. Forms 5611 and 5617 therefore receive the
+#: operator in this column.
 GRD_LABELS: tuple[str, ...] = ("ELIA", "AIEG", "AIESH", "ORES", "RESA", "REW")
+
+#: The CRM's stable operator id for each of those labels (belgian-dso-map's
+#: ``operators.csv``, mirrored by crm-frontend's ``shared/constants/grd.ts``).
+#: Spelled out rather than derived with ``.upper()``: an id is a key, not a
+#: spelling, and nothing promises the next one upper-cases to its label.
+_GRD_ID_TO_LABEL: dict[str, str] = {
+    "elia": "ELIA",
+    "aieg": "AIEG",
+    "aiesh": "AIESH",
+    "ores": "ORES",
+    "resa": "RESA",
+    "rew": "REW",
+}
 
 #: "Client résidentiel"
 YES, NO = "OUI", "NON"
@@ -161,10 +186,15 @@ MEMBER_SUBCATEGORY_CHOICES: dict[str, tuple[str, ...]] = {
 
 
 def grd_label(grd: str | None) -> str | None:
-    """Normalise ``meter_data.grd`` (free text) to an accepted DSO name."""
+    """Map ``meter_data.grd`` (a stable id, or a legacy name) to a form label."""
     if not grd:
         return None
-    candidate = grd.strip().upper()
+    value = grd.strip()
+    label = _GRD_ID_TO_LABEL.get(value)
+    if label is not None:
+        return label
+    # A row written before the ids: the name itself, matched case-insensitively.
+    candidate = value.upper()
     return candidate if candidate in GRD_LABELS else None
 
 

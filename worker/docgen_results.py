@@ -31,7 +31,7 @@ from core import metrics
 from core.audit_log import AuditActions, AuditLogInput, AuditLogService
 from core.config import settings
 from core.database.database import AsyncSessionCRMFactory, AsyncSessionLocalFactory
-from core.queue.helper import Event, send_event
+from core.queue.helper import Event, send_event, subscribe_durable
 from shared.const import (
     CONTENT_TYPE_BY_FORMAT,
     EVENT_DOCUMENT_RENDERED,
@@ -364,11 +364,10 @@ async def subscribe(js: JetStreamContext, *, on_dlq=None):
         else:
             await msg.nak(delay=_NAK_RETRY_DELAY_SECONDS)
 
-    return await js.subscribe(
+    return await subscribe_durable(
+        js,
         subject=settings.DOCGEN_RESULT_SUBJECT,
         durable=_DOCGEN_DURABLE,
-        queue=_DOCGEN_DURABLE,
-        manual_ack=True,
         cb=_handle,
         config=ConsumerConfig(ack_wait=_ACK_WAIT_SECONDS, max_deliver=_MAX_DELIVER + 1),
     )

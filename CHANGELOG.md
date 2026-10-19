@@ -55,6 +55,14 @@ and this project adheres to
 - API error messages in English, French, Dutch and German, selected from the
   request's `Accept-Language`.
 
+### Fixed
+
+- A change to the worker's consumer settings (`ack_wait`, `max_deliver`) now
+  reaches the existing JetStream consumers when the worker restarts. nats-py
+  applies them only when it creates a durable, so until now a new value was
+  silently ignored by every deployment that already had the consumer. The
+  worker logs the old and new values.
+
 ### Notes
 
 - Two PostgreSQL databases are used: the CRM database, read-only, as the source
