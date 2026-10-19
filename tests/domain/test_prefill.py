@@ -82,6 +82,16 @@ _PV = Installation(
 # Label mapping
 # ---------------------------------------------------------------------------
 
+#: The CRM's stable operator ids for the six labels the forms accept.
+_STABLE_GRD_IDS = (
+    ("elia", "ELIA"),
+    ("aieg", "AIEG"),
+    ("aiesh", "AIESH"),
+    ("ores", "ORES"),
+    ("resa", "RESA"),
+    ("rew", "REW"),
+)
+
 
 class TestLabels:
     @pytest.mark.parametrize("raw", ["ORES", "ores", " Ores "])
@@ -92,6 +102,38 @@ class TestLabels:
         """A DSO the form does not list would show as a validation error."""
         assert labels.grd_label("Sibelga") is None
         assert labels.grd_label(None) is None
+
+    @pytest.mark.parametrize(("grd_id", "label"), _STABLE_GRD_IDS)
+    def test_a_stable_crm_id_maps_to_its_form_label(self, grd_id, label):
+        """The CRM stores ids since the GRD prefill; the forms want the label."""
+        assert labels.grd_label(grd_id) == label
+
+    def test_every_form_label_is_reachable_from_an_id(self):
+        """A label with no id could only ever be filled from a legacy row."""
+        assert {labels.grd_label(grd_id) for grd_id, _ in _STABLE_GRD_IDS} == set(labels.GRD_LABELS)
+
+    @pytest.mark.parametrize("legacy", [*labels.GRD_LABELS, "Resa", " AIESH "])
+    def test_a_legacy_name_still_maps(self, legacy):
+        """Meters written before the ids hold the upper-case name."""
+        assert labels.grd_label(legacy) == legacy.strip().upper()
+
+    @pytest.mark.parametrize(
+        "grd",
+        [
+            "sibelga",
+            "fluvius-imewo",
+            "fluvius-antwerpen",
+            "fluvius-midden-vlaanderen",
+            "Fluvius Imewo",
+            "enexis",
+            "",
+            "   ",
+            None,
+        ],
+    )
+    def test_an_operator_the_walloon_forms_do_not_list_becomes_none(self, grd):
+        """Brussels and Flemish operators have no entry in the CWaPE dropdown."""
+        assert labels.grd_label(grd) is None
 
     def test_only_the_residential_segment_is_oui(self):
         assert labels.residential_label(labels.ClientType.RESIDENTIAL) == "OUI"
