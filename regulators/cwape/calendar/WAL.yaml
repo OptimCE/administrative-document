@@ -1,0 +1,113 @@
+# Wallonia's working calendar for the CWaPE deadlines: the ten Belgian legal
+# public holidays (loi du 4 janvier 1974), 2026-2035. Data on purpose, not a
+# formula: a reviewer can read and diff it, and engine/calendar.py refuses a
+# day past 2035 instead of guessing. Extend the range before it runs out
+# (tests/regulators/cwape/test_calendar.py fails a year ahead).
+#
+# Open questions (spec, "Risques"): whether a CWaPE "jour ouvrable" counts
+# Saturdays (saturday_is_working), and whether the Walloon regional days
+# (27 September) count. Both are a change here, not in code.
+region: WAL
+saturday_is_working: false
+years: {from: 2026, to: 2035}
+holidays:
+  - {day: 2026-01-01, label: Nouvel An}
+  - {day: 2026-04-06, label: Lundi de Pâques}
+  - {day: 2026-05-01, label: Fête du Travail}
+  - {day: 2026-05-14, label: Ascension}
+  - {day: 2026-05-25, label: Lundi de Pentecôte}
+  - {day: 2026-07-21, label: Fête nationale}
+  - {day: 2026-08-15, label: Assomption}
+  - {day: 2026-11-01, label: Toussaint}
+  - {day: 2026-11-11, label: Armistice}
+  - {day: 2026-12-25, label: Noël}
+  - {day: 2027-01-01, label: Nouvel An}
+  - {day: 2027-03-29, label: Lundi de Pâques}
+  - {day: 2027-05-01, label: Fête du Travail}
+  - {day: 2027-05-06, label: Ascension}
+  - {day: 2027-05-17, label: Lundi de Pentecôte}
+  - {day: 2027-07-21, label: Fête nationale}
+  - {day: 2027-08-15, label: Assomption}
+  - {day: 2027-11-01, label: Toussaint}
+  - {day: 2027-11-11, label: Armistice}
+  - {day: 2027-12-25, label: Noël}
+  - {day: 2028-01-01, label: Nouvel An}
+  - {day: 2028-04-17, label: Lundi de Pâques}
+  - {day: 2028-05-01, label: Fête du Travail}
+  - {day: 2028-05-25, label: Ascension}
+  - {day: 2028-06-05, label: Lundi de Pentecôte}
+  - {day: 2028-07-21, label: Fête nationale}
+  - {day: 2028-08-15, label: Assomption}
+  - {day: 2028-11-01, label: Toussaint}
+  - {day: 2028-11-11, label: Armistice}
+  - {day: 2028-12-25, label: Noël}
+  - {day: 2029-01-01, label: Nouvel An}
+  - {day: 2029-04-02, label: Lundi de Pâques}
+  - {day: 2029-05-01, label: Fête du Travail}
+  - {day: 2029-05-10, label: Ascension}
+  - {day: 2029-05-21, label: Lundi de Pentecôte}
+  - {day: 2029-07-21, label: Fête nationale}
+  - {day: 2029-08-15, label: Assomption}
+  - {day: 2029-11-01, label: Toussaint}
+  - {day: 2029-11-11, label: Armistice}
+  - {day: 2029-12-25, label: Noël}
+  - {day: 2030-01-01, label: Nouvel An}
+  - {day: 2030-04-22, label: Lundi de Pâques}
+  - {day: 2030-05-01, label: Fête du Travail}
+  - {day: 2030-05-30, label: Ascension}
+  - {day: 2030-06-10, label: Lundi de Pentecôte}
+  - {day: 2030-07-21, label: Fête nationale}
+  - {day: 2030-08-15, label: Assomption}
+  - {day: 2030-11-01, label: Toussaint}
+  - {day: 2030-11-11, label: Armistice}
+  - {day: 2030-12-25, label: Noël}
+  - {day: 2031-01-01, label: Nouvel An}
+  - {day: 2031-04-14, label: Lundi de Pâques}
+  - {day: 2031-05-01, label: Fête du Travail}
+  - {day: 2031-05-22, label: Ascension}
+  - {day: 2031-06-02, label: Lundi de Pentecôte}
+  - {day: 2031-07-21, label: Fête nationale}
+  - {day: 2031-08-15, label: Assomption}
+  - {day: 2031-11-01, label: Toussaint}
+  - {day: 2031-11-11, label: Armistice}
+  - {day: 2031-12-25, label: Noël}
+  - {day: 2032-01-01, label: Nouvel An}
+  - {day: 2032-03-29, label: Lundi de Pâques}
+  - {day: 2032-05-01, label: Fête du Travail}
+  - {day: 2032-05-06, label: Ascension}
+  - {day: 2032-05-17, label: Lundi de Pentecôte}
+  - {day: 2032-07-21, label: Fête nationale}
+  - {day: 2032-08-15, label: Assomption}
+  - {day: 2032-11-01, label: Toussaint}
+  - {day: 2032-11-11, label: Armistice}
+  - {day: 2032-12-25, label: Noël}
+  - {day: 2033-01-01, label: Nouvel An}
+  - {day: 2033-04-18, label: Lundi de Pâques}
+  - {day: 2033-05-01, label: Fête du Travail}
+  - {day: 2033-05-26, label: Ascension}
+  - {day: 2033-06-06, label: Lundi de Pentecôte}
+  - {day: 2033-07-21, label: Fête nationale}
+  - {day: 2033-08-15, label: Assomption}
+  - {day: 2033-11-01, label: Toussaint}
+  - {day: 2033-11-11, label: Armistice}
+  - {day: 2033-12-25, label: Noël}
+  - {day: 2034-01-01, label: Nouvel An}
+  - {day: 2034-04-10, label: Lundi de Pâques}
+  - {day: 2034-05-01, label: Fête du Travail}
+  - {day: 2034-05-18, label: Ascension}
+  - {day: 2034-05-29, label: Lundi de Pentecôte}
+  - {day: 2034-07-21, label: Fête nationale}
+  - {day: 2034-08-15, label: Assomption}
+  - {day: 2034-11-01, label: Toussaint}
+  - {day: 2034-11-11, label: Armistice}
+  - {day: 2034-12-25, label: Noël}
+  - {day: 2035-01-01, label: Nouvel An}
+  - {day: 2035-03-26, label: Lundi de Pâques}
+  - {day: 2035-05-01, label: Fête du Travail}
+  - {day: 2035-05-03, label: Ascension}
+  - {day: 2035-05-14, label: Lundi de Pentecôte}
+  - {day: 2035-07-21, label: Fête nationale}
+  - {day: 2035-08-15, label: Assomption}
+  - {day: 2035-11-01, label: Toussaint}
+  - {day: 2035-11-11, label: Armistice}
+  - {day: 2035-12-25, label: Noël}

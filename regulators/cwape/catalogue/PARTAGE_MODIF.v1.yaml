@@ -1,0 +1,357 @@
+# Modification of a sharing operation (spec, "Catalogue des démarches CWaPE").
+# Delays: CWaPE, "Guide explicatif formulaire modification partage" (July 2024
+# edition; check the version in force before release, spec "Risques").
+#
+# Two routes (variant):
+# - simple: removed participant or consumer meter, key or representative
+#   change. The GRD checks (20 working days) and proposes the amendment.
+# - authorization: an added meter, an added or removed installation (a
+#   producer meter), or any mix. GRD completeness (10 wd), supplements within
+#   6 months or the request lapses, GRD opinion (20 wd), CWaPE decision
+#   (40 wd), non-conformity answered within 2 months.
+# Both: signed amendment returned within 10 wd, effect on the 20th wd after it.
+#
+# Not encoded: the observations period a non-standard key adds (20 wd simple,
+# 2 months authorization). The engine has no conditional rule yet; the piece
+# key_description is conditional, the delay is not.
+code: PARTAGE_MODIF
+version: 1
+valid_from: 2026-01-01
+scope: operation
+recipient: grd_ref
+channel: email
+family: PARTAGE_MODIF
+handles_change_kinds:
+  - meter_added
+  - meter_removed
+  - key_changed
+  - representative_changed
+  - installation_added
+  - installation_removed
+variants: [simple, authorization]
+default_variant: simple
+# CwapePlugin.variant: one change that needs the CWaPE's authorization moves the
+# whole draft to that route. A removed meter is a removed installation when it
+# is a producer's (injection_status set).
+escalation:
+  escalate_to: authorization
+  when_any: [meter_added, installation_added, installation_removed]
+  when_producer: [meter_removed]
+labels: {fr: Modification du partage, en: Sharing modification, nl: Wijziging van de deling, de: Änderung der Teilung}
+
+initial_step: draft
+steps:
+  - code: draft
+    status: draft
+    bucket: todo
+    next_action:
+      code: complete_documents
+      labels: {fr: Compléter les pièces, en: Complete the documents, nl: De documenten aanvullen, de: Die Unterlagen vervollständigen}
+    labels: {fr: Brouillon, en: Draft, nl: Concept, de: Entwurf}
+  - code: ready
+    status: ready
+    bucket: todo
+    next_action:
+      code: send
+      labels: {fr: Envoyer la modification du partage, en: Send the sharing modification, nl: De wijziging van de deling versturen, de: Die Änderung der Teilung senden}
+    labels: {fr: Prêt, en: Ready, nl: Klaar, de: Bereit}
+  - code: sent
+    status: sent
+    bucket: waiting
+    next_action:
+      code: record_response
+      labels: {fr: Réponse du GRD attendue, en: Awaiting the DSO's answer, nl: Wachten op het antwoord van de netbeheerder, de: Antwort des Netzbetreibers erwartet}
+    labels: {fr: Envoyé, en: Sent, nl: Verstuurd, de: Gesendet}
+  - code: incomplete
+    status: sent
+    bucket: todo
+    next_action:
+      code: record_response
+      labels: {fr: Envoyer les compléments, en: Send the additional information, nl: De aanvullingen versturen, de: Die Ergänzungen senden}
+    labels: {fr: Incomplet, en: Incomplete, nl: Onvolledig, de: Unvollständig}
+  - code: in_review
+    status: sent
+    bucket: waiting
+    variants: [authorization]
+    next_action:
+      code: record_response
+      labels: {fr: Avis du GRD attendu, en: Awaiting the DSO's opinion, nl: Wachten op het advies van de netbeheerder, de: Stellungnahme des Netzbetreibers erwartet}
+    labels: {fr: En instruction, en: Under review, nl: In behandeling, de: In Prüfung}
+  - code: at_regulator
+    status: sent
+    bucket: waiting
+    variants: [authorization]
+    next_action:
+      code: record_response
+      labels: {fr: Décision de la CWaPE attendue, en: Awaiting the CWaPE's decision, nl: Wachten op de beslissing van de CWaPE, de: Entscheidung der CWaPE erwartet}
+    labels: {fr: Instruction CWaPE, en: Under CWaPE review, nl: In behandeling bij de CWaPE, de: In Prüfung bei der CWaPE}
+  - code: non_conformity
+    status: sent
+    bucket: todo
+    variants: [authorization]
+    next_action:
+      code: record_response
+      labels: {fr: Répondre à la CWaPE, en: Reply to the CWaPE, nl: De CWaPE antwoorden, de: Der CWaPE antworten}
+    labels: {fr: Non-conformité, en: Non-conformity, nl: Niet-conformiteit, de: Nichtkonformität}
+  - code: granted
+    status: sent
+    bucket: waiting
+    variants: [authorization]
+    next_action:
+      code: record_response
+      labels: {fr: Proposition d'avenant du GRD attendue, en: Awaiting the DSO's amendment, nl: Wachten op het aanhangsel van de netbeheerder, de: Nachtrag des Netzbetreibers erwartet}
+    labels: {fr: Autorisé, en: Authorised, nl: Gemachtigd, de: Genehmigt}
+  - code: accepted
+    status: sent
+    bucket: todo
+    next_action:
+      code: record_response
+      labels: {fr: Renvoyer l'avenant signé, en: Return the signed amendment, nl: Het ondertekende aanhangsel terugsturen, de: Den unterzeichneten Nachtrag zurücksenden}
+    labels: {fr: Accepté, en: Accepted, nl: Aanvaard, de: Angenommen}
+  - code: amendment_signed
+    status: sent
+    bucket: planned
+    next_action: {code: none}
+    labels: {fr: Avenant signé, en: Amendment signed, nl: Aanhangsel ondertekend, de: Nachtrag unterzeichnet}
+  - code: in_force
+    status: in_force
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: En vigueur, en: In force, nl: Van kracht, de: In Kraft}
+  - code: refused
+    status: refused
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Refusé, en: Refused, nl: Geweigerd, de: Abgelehnt}
+  - code: cancelled
+    status: cancelled
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Annulé, en: Cancelled, nl: Geannuleerd, de: Storniert}
+  - code: lapsed
+    status: lapsed
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Caduc, en: Lapsed, nl: Vervallen, de: Verfallen}
+
+transitions:
+  - {from: draft, to: ready, automatic: true}       # every required piece ready
+  - {from: ready, to: draft, automatic: true}       # a new change arrived
+  - {from: draft, to: cancelled}
+  - {from: ready, to: cancelled}
+  - {from: ready, to: sent}
+  - {from: sent, to: incomplete}
+  - {from: incomplete, to: sent}
+  - {from: incomplete, to: lapsed}                  # proposed, never automatic
+  # simple: the GRD's check leads straight to the amendment
+  - {from: sent, to: accepted, variants: [simple]}
+  - {from: sent, to: refused, variants: [simple]}
+  # authorization: GRD completeness, GRD opinion, CWaPE decision
+  - {from: sent, to: in_review, variants: [authorization]}
+  - {from: in_review, to: at_regulator, variants: [authorization]}
+  - {from: at_regulator, to: non_conformity, variants: [authorization]}
+  - {from: non_conformity, to: at_regulator, variants: [authorization]}
+  - {from: non_conformity, to: refused, variants: [authorization]}
+  - {from: at_regulator, to: refused, variants: [authorization]}
+  - {from: at_regulator, to: granted, variants: [authorization]}
+  - {from: granted, to: accepted, variants: [authorization]}
+  - {from: accepted, to: amendment_signed}
+  - {from: amendment_signed, to: in_force, automatic: true}  # on the effect date
+  # A converted July dossier closed with no recorded outcome: correctable.
+  - {from: in_force, to: refused}
+
+response_types:
+  - code: sent
+    direction: outbound
+    counterparty: grd
+    to_step: sent
+    labels: {fr: Envoi, en: Sending, nl: Verzending, de: Versand}
+  - code: receipt
+    direction: inbound
+    counterparty: grd
+    labels: {fr: Accusé de réception, en: Acknowledgement of receipt, nl: Ontvangstbevestiging, de: Empfangsbestätigung}
+  - code: completeness_ack
+    direction: inbound
+    counterparty: grd
+    to_step: in_review
+    variants: [authorization]
+    labels: {fr: Accusé de complétude, en: Completeness acknowledgement, nl: Bevestiging van volledigheid, de: Vollständigkeitsbestätigung}
+  - code: incomplete_notice
+    direction: inbound
+    counterparty: grd
+    to_step: incomplete
+    labels: {fr: Demande de compléments, en: Request for additional information, nl: Verzoek om aanvullingen, de: Nachforderung von Unterlagen}
+  - code: technical_opinion
+    direction: inbound
+    counterparty: grd
+    to_step: at_regulator
+    variants: [authorization]
+    labels: {fr: Avis technique transmis à la CWaPE, en: Technical opinion sent to the CWaPE, nl: Technisch advies aan de CWaPE bezorgd, de: Technische Stellungnahme an die CWaPE übermittelt}
+  - code: non_conformity
+    direction: inbound
+    counterparty: regulator
+    to_step: non_conformity
+    variants: [authorization]
+    labels: {fr: Invitation à se conformer, en: Request to comply, nl: Verzoek tot conformering, de: Aufforderung zur Konformität}
+  - code: non_conformity_reply
+    direction: outbound
+    counterparty: regulator
+    to_step: at_regulator
+    variants: [authorization]
+    labels: {fr: Réponse à l'invitation à se conformer, en: Reply to the request to comply, nl: Antwoord op het verzoek tot conformering, de: Antwort auf die Aufforderung zur Konformität}
+  - code: decision_granted
+    direction: inbound
+    counterparty: regulator
+    to_step: granted
+    variants: [authorization]
+    labels: {fr: Décision d'autorisation, en: Authorisation decision, nl: Machtigingsbeslissing, de: Genehmigungsentscheidung}
+  - code: decision_refused
+    direction: inbound
+    counterparty: regulator
+    to_step: refused
+    labels: {fr: Décision de refus, en: Refusal decision, nl: Weigeringsbeslissing, de: Ablehnungsentscheidung}
+  - code: amendment_proposal
+    direction: inbound
+    counterparty: grd
+    to_step: accepted
+    labels: {fr: Proposition d'avenant, en: Amendment proposal, nl: Voorstel van aanhangsel, de: Nachtragsvorschlag}
+  - code: amendment_signed
+    direction: outbound
+    counterparty: grd
+    to_step: amendment_signed
+    labels: {fr: Avenant signé renvoyé, en: Signed amendment returned, nl: Ondertekend aanhangsel teruggestuurd, de: Unterzeichneter Nachtrag zurückgesandt}
+  - code: other
+    direction: inbound
+    counterparty: other
+    labels: {fr: Autre, en: Other, nl: Andere, de: Sonstiges}
+
+deadline_rules:
+  - code: grd_control
+    kind: relative
+    anchor: step:sent
+    offset: {value: 20, unit: working_days}
+    party: grd
+    deadline_kind: response
+    closes_on: [response:amendment_proposal, response:incomplete_notice, response:decision_refused]
+    variants: [simple]
+    labels: {fr: Contrôle du GRD, en: DSO check, nl: Controle door de netbeheerder, de: Prüfung durch den Netzbetreiber}
+  - code: completeness
+    kind: relative
+    anchor: step:sent
+    offset: {value: 10, unit: working_days}
+    party: grd
+    deadline_kind: response
+    closes_on: [response:completeness_ack, response:incomplete_notice]
+    variants: [authorization]
+    labels: {fr: Contrôle de complétude, en: Completeness check, nl: Volledigheidscontrole, de: Vollständigkeitsprüfung}
+  - code: lapse
+    kind: relative
+    anchor: response:incomplete_notice
+    offset: {value: 6, unit: months}
+    party: community
+    deadline_kind: lapse
+    closes_on: [step:sent]
+    variants: [authorization]
+    labels: {fr: Compléments avant caducité, en: Additional information before lapse, nl: Aanvullingen vóór verval, de: Ergänzungen vor dem Verfall}
+  - code: grd_opinion
+    kind: relative
+    anchor: response:completeness_ack
+    offset: {value: 20, unit: working_days}
+    party: grd
+    deadline_kind: response
+    closes_on: [response:technical_opinion]
+    variants: [authorization]
+    labels: {fr: Avis du GRD, en: DSO opinion, nl: Advies van de netbeheerder, de: Stellungnahme des Netzbetreibers}
+  - code: regulator_decision
+    kind: relative
+    anchor: response:technical_opinion
+    offset: {value: 40, unit: working_days}
+    party: regulator
+    deadline_kind: response
+    closes_on: [response:decision_granted, response:decision_refused, response:non_conformity]
+    variants: [authorization]
+    labels: {fr: Décision de la CWaPE, en: CWaPE decision, nl: Beslissing van de CWaPE, de: Entscheidung der CWaPE}
+  - code: non_conformity_reply
+    kind: relative
+    anchor: response:non_conformity
+    offset: {value: 2, unit: months}
+    party: community
+    deadline_kind: submission
+    closes_on: [response:non_conformity_reply]
+    variants: [authorization]
+    labels: {fr: Réponse à la CWaPE, en: Reply to the CWaPE, nl: Antwoord aan de CWaPE, de: Antwort an die CWaPE}
+  - code: amendment_return
+    kind: relative
+    anchor: response:amendment_proposal
+    offset: {value: 10, unit: working_days}
+    party: community
+    deadline_kind: submission
+    closes_on: [response:amendment_signed]
+    labels: {fr: Renvoi de l'avenant signé, en: Return of the signed amendment, nl: Terugzending van het ondertekende aanhangsel, de: Rücksendung des unterzeichneten Nachtrags}
+  # Counted from the sending of the signed amendment: the GRD's receipt is
+  # what the regulation says, the sending is what OptimCE knows (spec, "Risques").
+  - code: effect
+    kind: relative
+    anchor: response:amendment_signed
+    offset: {value: 20, unit: working_days}
+    party: grd
+    deadline_kind: effect
+    closes_on: [step:in_force]
+    labels: {fr: Prise d'effet, en: Takes effect, nl: Inwerkingtreding, de: Inkrafttreten}
+  # Informative: the remedies a refusal opens.
+  - code: appeal_annulment
+    kind: relative
+    anchor: response:decision_refused
+    offset: {value: 30, unit: calendar_days}
+    party: community
+    deadline_kind: submission
+    labels: {fr: Recours en annulation, en: Action for annulment, nl: Beroep tot nietigverklaring, de: Nichtigkeitsklage}
+  - code: appeal_review
+    kind: relative
+    anchor: response:decision_refused
+    offset: {value: 2, unit: months}
+    party: community
+    deadline_kind: submission
+    labels: {fr: Demande de réexamen, en: Request for review, nl: Verzoek tot heroverweging, de: Antrag auf Überprüfung}
+
+# Codes are the July doc_type values, so converted documents keep their piece.
+documents:
+  - code: sharing_modification
+    kind: generated
+    template: sharing_modification
+    labels: {fr: Formulaire de modification de partage, en: Sharing modification form, nl: Wijzigingsformulier delen, de: Änderungsformular Teilung}
+  - code: annex6_sharing_form
+    kind: generated
+    template: annex6_sharing_form
+    labels: {fr: Annexe 6 – formulaire de partage, en: Annex 6 – sharing form, nl: Bijlage 6 – deelformulier, de: Anlage 6 – Teilungsformular}
+  - code: annex8_sworn_declaration
+    kind: collected
+    per_member: true          # one per new participant, generated then signed
+    template: annex8_sworn_declaration
+    variants: [authorization]
+    labels: {fr: Annexe 8 – déclaration sur l'honneur, en: Annex 8 – sworn declaration, nl: Bijlage 8 – verklaring op erewoord, de: Anlage 8 – eidesstattliche Erklärung}
+  - code: producer_status_proof
+    kind: collected
+    condition: new_installation
+    variants: [authorization]
+    labels: {fr: Preuve du statut de producteur, en: Proof of producer status, nl: Bewijs van producentenstatus, de: Nachweis des Erzeugerstatus}
+  - code: key_description
+    kind: generated
+    condition: non_standard_key
+    labels: {fr: Description et formules de la clé, en: Key description and formulas, nl: Beschrijving en formules van de verdeelsleutel, de: Beschreibung und Formeln des Schlüssels}
+  - code: representative_power_proof
+    kind: collected
+    condition: representative_changed
+    labels: {fr: Preuve du pouvoir du nouveau représentant, en: Proof of the new representative's authority, nl: Bewijs van de bevoegdheid van de nieuwe vertegenwoordiger, de: Vollmachtsnachweis des neuen Vertreters}
+  # "Actualisation jointe": wallonie.be asks for the community's update form
+  # with every sharing request; required when the community's data changed.
+  - code: community_modification
+    kind: generated
+    condition: community_update_attached
+    template: community_modification
+    labels: {fr: Formulaire de modification de communauté, en: Community modification form, nl: Wijzigingsformulier gemeenschap, de: Änderungsformular Gemeinschaft}
+  # Arrives after the sending, so it never holds the draft back.
+  - code: dso_amendment
+    kind: received
+    required: false
+    labels: {fr: Avenant du GRD, en: DSO amendment, nl: Aanhangsel van de netbeheerder, de: Nachtrag des Netzbetreibers}

@@ -25,6 +25,11 @@ from pathlib import Path
 
 import asyncpg
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+
+from engine.catalogue_sync import SyncReport, sync_plugin
+from regulators.cwape.plugin import CwapePlugin
 
 pytestmark = pytest.mark.asyncio
 
@@ -316,41 +321,43 @@ class Migrated:
     world: JulyWorld
 
 
+async def _migrate_a_july_world(name: str) -> JulyWorld:
+    """Create database `name` as production's was, fill it, apply 0003."""
+    admin = await asyncpg.connect(f"{SERVER}/test_db_be")
+    await admin.execute(f'CREATE DATABASE "{name}"')
+    await admin.close()
+    conn = await asyncpg.connect(f"{SERVER}/{name}")
+    try:
+        await conn.execute(BASELINE_SQL)
+        for seed in SEEDS_SQL:
+            await conn.execute(seed)
+        world = await _build_july_world(conn)
+        await conn.execute(MIGRATION_SQL)
+        return world
+    finally:
+        await conn.close()
+
+
+async def _drop(name: str) -> None:
+    admin = await asyncpg.connect(f"{SERVER}/test_db_be")
+    await admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+    await admin.close()
+
+
 @pytest.fixture(scope="module")
 def migrated(test_db_ready) -> Iterator[Migrated]:
     """Sync fixture driving asyncio.run, like conftest.py's schema fixture: an
     async module-scoped fixture would outlive its event loop on Windows."""
     name = f"m0003_{uuid.uuid4().hex[:12]}"
-
-    async def _build() -> JulyWorld:
-        admin = await asyncpg.connect(f"{SERVER}/test_db_be")
-        await admin.execute(f'CREATE DATABASE "{name}"')
-        await admin.close()
-        conn = await asyncpg.connect(f"{SERVER}/{name}")
-        try:
-            await conn.execute(BASELINE_SQL)
-            for seed in SEEDS_SQL:
-                await conn.execute(seed)
-            world = await _build_july_world(conn)
-            await conn.execute(MIGRATION_SQL)
-            return world
-        finally:
-            await conn.close()
-
-    async def _drop() -> None:
-        admin = await asyncpg.connect(f"{SERVER}/test_db_be")
-        await admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-        await admin.close()
-
     try:
-        world = asyncio.run(_build())
+        world = asyncio.run(_migrate_a_july_world(name))
         yield Migrated(dsn=f"{SERVER}/{name}", world=world)
     finally:
-        asyncio.run(_drop())
+        asyncio.run(_drop(name))
 
 
 @contextlib.asynccontextmanager
-async def _read(migrated: Migrated) -> AsyncIterator[asyncpg.Connection]:
+async def _read(migrated: Migrated | Synced) -> AsyncIterator[asyncpg.Connection]:
     conn = await asyncpg.connect(migrated.dsn)
     try:
         yield conn
@@ -686,3 +693,119 @@ class TestItRefusesToGuess:
                 dossier_id,
             )
             await self._refused(conn, "custom_override_clock")
+
+
+# ---------------------------------------------------------------------------
+# Then the real CWaPE catalogue syncs onto it, as the first deploy will
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Synced:
+    dsn: str
+    world: JulyWorld
+    report: SyncReport
+
+
+@pytest.fixture(scope="module")
+def synced(test_db_ready) -> Iterator[Synced]:
+    """A second migrated July world (`migrated` must stay as 0003 left it),
+    then engine/catalogue_sync.py with the shipped CWaPE plugin."""
+    name = f"m0003_{uuid.uuid4().hex[:12]}"
+
+    async def _build() -> tuple[JulyWorld, SyncReport]:
+        world = await _migrate_a_july_world(name)
+        engine = create_async_engine(
+            f"postgresql+asyncpg://postgres:postgres@localhost:5433/{name}", poolclass=NullPool
+        )
+        try:
+            async with async_sessionmaker(engine)() as session, session.begin():
+                report = await sync_plugin(session, CwapePlugin())
+        finally:
+            await engine.dispose()
+        return world, report
+
+    try:
+        world, report = asyncio.run(_build())
+        yield Synced(dsn=f"{SERVER}/{name}", world=world, report=report)
+    finally:
+        asyncio.run(_drop(name))
+
+
+class TestTheCatalogueSyncsOntoIt:
+    async def test_every_reserved_row_is_filled_and_none_refused(self, synced):
+        assert sorted(synced.report.filled) == sorted(f"{code} v1" for code, _ in TYPES.values())
+        assert synced.report.inserted == []
+        async with _read(synced) as conn:
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM procedure_definition WHERE content_sha256 IS NULL"
+                )
+                == 0
+            )
+
+    async def test_every_converted_dossier_sits_on_a_step_of_its_definition(self, synced):
+        catalogue = CwapePlugin().catalogue()
+        async with _read(synced) as conn:
+            rows = await conn.fetch(
+                "SELECT d.id, d.status, d.step, d.variant, pd.code, pd.version FROM dossier d "
+                "JOIN procedure_definition pd ON pd.id = d.id_procedure_definition"
+            )
+        assert len(rows) == len(TYPES) * len(DOSSIER_PATHS)
+        for row in rows:
+            entry = catalogue.get(row["code"], row["version"])
+            assert entry is not None, row
+            definition = entry.definition
+            step = definition.step(row["step"])
+            assert step.common_status == row["status"], dict(row)
+            assert row["variant"] in (definition.variants or (None,)), dict(row)
+            assert step.variants is None or row["variant"] in step.variants, dict(row)
+
+    @pytest.mark.parametrize(
+        ("name", "procedure", "rule"),
+        [
+            ("completeness_check", "PARTAGE_MODIF", "completeness"),
+            ("completeness_check_ce", "CE_NOTIFICATION", "completeness"),
+            ("lapse", "CE_NOTIFICATION", "lapse"),
+            ("modification_notification", "CE_ACTUALISATION", "submission"),
+        ],
+    )
+    async def test_the_converted_deadlines_find_their_rule(self, synced, name, procedure, rule):
+        async with _read(synced) as conn:
+            row = await conn.fetchrow(
+                "SELECT pd.code AS procedure, r.code, r.party, r.deadline_kind, "
+                "       dl.party AS deadline_party, dl.kind AS deadline_kind_now "
+                "FROM deadline dl "
+                "JOIN deadline_rule r ON r.id = dl.id_deadline_rule "
+                "JOIN procedure_definition pd ON pd.id = r.id_procedure_definition "
+                "WHERE dl.id = $1",
+                synced.world.deadlines[name],
+            )
+        assert row is not None, f"{name} was not linked to a rule"
+        assert (row["procedure"], row["code"]) == (procedure, rule)
+        # Who and what 0003 gave the deadline agree with the rule it now follows.
+        assert (row["deadline_party"], row["deadline_kind_now"]) == (
+            row["party"],
+            row["deadline_kind"],
+        )
+
+    async def test_the_july_annual_report_clock_waits_for_the_daily_job(self, synced):
+        """CE_NOTIFICATION has no 'submission' rule: the yearly filing is
+        CE_RAPPORT_ANNUEL's now, and the daily job closes this leftover when it
+        opens the year's report."""
+        async with _read(synced) as conn:
+            assert (
+                await conn.fetchval(
+                    "SELECT id_deadline_rule FROM deadline WHERE id = $1",
+                    synced.world.deadlines["annual_report"],
+                )
+                is None
+            )
+        assert synced.report.deadlines_relinked == 4
+
+    async def test_the_holidays_are_projected(self, synced):
+        async with _read(synced) as conn:
+            assert (
+                await conn.fetchval("SELECT count(*) FROM working_calendar WHERE region = 'WAL'")
+                == 100
+            )

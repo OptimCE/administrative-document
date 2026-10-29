@@ -12,5 +12,6 @@ broken file stops the process at import, before it serves anything.
 from __future__ import annotations
 
 from engine.contracts import PluginRegistry, build_registry
+from regulators.cwape.plugin import CwapePlugin
 
-REGISTRY: PluginRegistry = build_registry([])
+REGISTRY: PluginRegistry = build_registry([CwapePlugin()])

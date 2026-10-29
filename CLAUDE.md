@@ -25,6 +25,12 @@ bundles through `document-generation`. Read `README.md` for the domain.
   refused, and a grep). The contract is `engine/contracts.py`; plugins import
   it; `regulators/registry.py` lists them and the entry points hand `REGISTRY`
   in. Engine tests use `regulators/testing/fake.py`, never a real plugin.
+  `regulators/README.md` explains adding a regulator. CWaPE (`regulators/cwape/`)
+  is the only real one; its tests live in `tests/regulators/cwape/` (not in
+  the plugin: the images copy `regulators/`, and the DB fixtures are here).
+  Its catalogue must keep agreeing with migration 0003's reservations:
+  `tests/test_migration_0003.py::TestTheCatalogueSyncsOntoIt` syncs the real
+  plugin onto a converted July world.
 - **Plugin files are the source, the DB their projection.** One YAML per
   procedure VERSION (`<CODE>.v<N>.yaml`) plus `calendar/<REGION>.yaml`.
   `engine/catalogue_sync.py` runs at startup in the API AND the worker

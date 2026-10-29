@@ -1,0 +1,115 @@
+# Annual reporting to the CWaPE through its online form (wallonie.be,
+# "Notifier l'actualisation des informations / rapportage annuel"): by
+# 1 September at the latest. The daily job opens one per community and year on
+# 1 June (the spec's proposal); period_key is the year.
+code: CE_RAPPORT_ANNUEL
+version: 1
+valid_from: 2026-01-01
+scope: community
+recipient: regulator
+channel: online_form
+family: CE_RAPPORT_ANNUEL
+handles_change_kinds: []
+opens_annually: {month: 6, day: 1}
+labels: {fr: Rapportage annuel, en: Annual reporting, nl: Jaarlijkse rapportering, de: Jährliche Berichterstattung}
+
+initial_step: draft
+steps:
+  - code: draft
+    status: draft
+    bucket: planned
+    next_action:
+      code: complete_documents
+      labels: {fr: Préparer le rapportage annuel, en: Prepare the annual reporting, nl: De jaarlijkse rapportering voorbereiden, de: Die jährliche Berichterstattung vorbereiten}
+    labels: {fr: Brouillon, en: Draft, nl: Concept, de: Entwurf}
+  - code: ready
+    status: ready
+    bucket: todo
+    next_action:
+      code: send
+      labels: {fr: Déposer le rapportage annuel, en: File the annual reporting, nl: De jaarlijkse rapportering indienen, de: Die jährliche Berichterstattung einreichen}
+    labels: {fr: Prêt, en: Ready, nl: Klaar, de: Bereit}
+  - code: sent
+    status: sent
+    bucket: waiting
+    next_action:
+      code: record_response
+      labels: {fr: Accusé de la CWaPE attendu, en: Awaiting the CWaPE's acknowledgement, nl: Wachten op de bevestiging van de CWaPE, de: Bestätigung der CWaPE erwartet}
+    labels: {fr: Déposé, en: Filed, nl: Ingediend, de: Eingereicht}
+  - code: incomplete
+    status: sent
+    bucket: todo
+    next_action:
+      code: record_response
+      labels: {fr: Envoyer les compléments, en: Send the additional information, nl: De aanvullingen versturen, de: Die Ergänzungen senden}
+    labels: {fr: Incomplet, en: Incomplete, nl: Onvolledig, de: Unvollständig}
+  - code: in_force
+    status: in_force
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Clôturé, en: Closed, nl: Afgesloten, de: Abgeschlossen}
+  - code: cancelled
+    status: cancelled
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Annulé, en: Cancelled, nl: Geannuleerd, de: Storniert}
+  # Kept for converted July dossiers that lapsed.
+  - code: lapsed
+    status: lapsed
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Caduc, en: Lapsed, nl: Vervallen, de: Verfallen}
+
+transitions:
+  - {from: draft, to: ready, automatic: true}
+  - {from: ready, to: draft, automatic: true}
+  - {from: draft, to: cancelled}
+  - {from: ready, to: cancelled}
+  - {from: ready, to: sent}
+  - {from: sent, to: incomplete}
+  - {from: incomplete, to: sent}
+  - {from: incomplete, to: lapsed}
+  - {from: sent, to: in_force}
+
+response_types:
+  - code: sent
+    direction: outbound
+    counterparty: regulator
+    to_step: sent
+    labels: {fr: Envoi, en: Sending, nl: Verzending, de: Versand}
+  - code: receipt
+    direction: inbound
+    counterparty: regulator
+    labels: {fr: Accusé de réception, en: Acknowledgement of receipt, nl: Ontvangstbevestiging, de: Empfangsbestätigung}
+  - code: completeness_ack
+    direction: inbound
+    counterparty: regulator
+    to_step: in_force
+    labels: {fr: Accusé de complétude, en: Completeness acknowledgement, nl: Bevestiging van volledigheid, de: Vollständigkeitsbestätigung}
+  - code: incomplete_notice
+    direction: inbound
+    counterparty: regulator
+    to_step: incomplete
+    labels: {fr: Demande de compléments, en: Request for additional information, nl: Verzoek om aanvullingen, de: Nachforderung von Unterlagen}
+  - code: other
+    direction: inbound
+    counterparty: other
+    labels: {fr: Autre, en: Other, nl: Andere, de: Sonstiges}
+
+deadline_rules:
+  - code: submission
+    kind: annual
+    annual: {month: 9, day: 1}
+    party: community
+    deadline_kind: submission
+    closes_on: [step:sent]
+    labels: {fr: Dépôt du rapportage annuel, en: Annual reporting filing, nl: Indiening van de jaarlijkse rapportering, de: Einreichung der jährlichen Berichterstattung}
+
+documents:
+  - code: annual_participant_list
+    kind: generated
+    template: annual_participant_list
+    labels: {fr: Listes participants / installations, en: Participant / installation lists, nl: Lijsten deelnemers / installaties, de: Listen Teilnehmer / Anlagen}
+  - code: annual_activity_report
+    kind: collected
+    labels: {fr: Rapport annuel d'activités, en: Annual activity report, nl: Jaarlijks activiteitenverslag, de: Jährlicher Tätigkeitsbericht}
