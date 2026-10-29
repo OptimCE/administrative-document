@@ -50,6 +50,7 @@ from engine.filing import (
     refile_change,
 )
 from engine.lifecycle import (
+    UNRESOLVED,
     ProcedureContext,
     close_rules,
     context_for,
@@ -67,7 +68,6 @@ from shared.const import (
     Channel,
     CorrespondenceDirection,
     Counterparty,
-    DeadlineStatus,
     DocOrigin,
     DocumentKind,
     OpenedBy,
@@ -281,7 +281,7 @@ class ProcedureService:
                 .where(
                     DeadlineModel.id_community == id_community,
                     DeadlineModel.id_dossier.in_(open_ids or [0]),
-                    DeadlineModel.status == int(DeadlineStatus.OPEN),
+                    DeadlineModel.status.in_(UNRESOLVED),
                 )
                 .order_by(DeadlineModel.due_date, DeadlineModel.id)
                 .limit(3)
@@ -343,7 +343,7 @@ class ProcedureService:
             )
         )
         if start is None and end is None:
-            stmt = stmt.where(DeadlineModel.status == int(DeadlineStatus.OPEN))
+            stmt = stmt.where(DeadlineModel.status.in_(UNRESOLVED))
         if start is not None:
             stmt = stmt.where(DeadlineModel.due_date >= start)
         if end is not None:

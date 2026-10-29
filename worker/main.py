@@ -117,12 +117,12 @@ async def main() -> None:
     try:
         subs = await dispatcher.subscribe_all(js, inflight=inflight, registry=REGISTRY)
         heartbeat_task = asyncio.create_task(_heartbeat(shutdown_event), name="heartbeat")
-        # The deadline sweep, which nothing invoked before. It lives here rather
-        # than behind a cron container because it needs the service, its two
-        # sessions and the tenant ContextVar — all of which this process already
-        # has. An advisory lock inside makes a second replica a no-op.
+        # The engine's daily jobs. They live here rather than behind a cron
+        # container because they need the registry, the two sessions and the
+        # tenant ContextVar — all of which this process already has. An
+        # advisory lock inside makes a second replica a no-op.
         scheduler_task = asyncio.create_task(
-            run_deadline_scheduler(shutdown_event), name="deadline-scheduler"
+            run_deadline_scheduler(shutdown_event, registry=REGISTRY), name="deadline-scheduler"
         )
 
         logger.info("Administrative-document worker ready")

@@ -14,9 +14,9 @@ from typing import Any
 
 from engine.calendar import CalendarNotCoveredError, WorkingCalendar
 from engine.catalogue import CatalogueEntry, ProcedureDefinition
+from engine.lifecycle import UNRESOLVED
 from shared.const import (
     ChangeStatus,
-    DeadlineStatus,
     DocumentKind,
     ProcedureDocumentStatus,
     ProcedureStatus,
@@ -107,7 +107,7 @@ def deadline_item(
     operation_names: Mapping[int, str],
 ) -> dict[str, Any]:
     rule = next((r for r in definition.deadline_rules if r.code == deadline.deadline_type), None)
-    is_open = deadline.status == int(DeadlineStatus.OPEN)
+    is_open = deadline.status in UNRESOLVED
     return {
         "id": deadline.id,
         "id_dossier": dossier.id,

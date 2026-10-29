@@ -59,6 +59,12 @@ _DEADLINE_SORT_COLUMNS = {
     "id": DeadlineModel.id,
 }
 
+# The July sweep takes July rows only: a procedure's deadlines are the daily
+# jobs' (worker/engine_jobs.py), and both chasing one would notify twice.
+_OF_A_JULY_DOSSIER = DeadlineModel.id_dossier.in_(
+    select(DossierModel.id).where(DossierModel.id_procedure_definition.is_(None))
+)
+
 
 def _tenant_id() -> int:
     """The internal community id for the current request.
@@ -506,6 +512,7 @@ class AdministrativeDocumentRepository:
         stmt = with_community_scope(select(DeadlineModel), DeadlineModel).where(
             DeadlineModel.status == int(DeadlineStatus.OPEN),
             DeadlineModel.due_date < today,
+            _OF_A_JULY_DOSSIER,
         )
         return list((await self._session.execute(stmt)).scalars().all())
 
@@ -526,6 +533,7 @@ class AdministrativeDocumentRepository:
         """
         stmt = with_community_scope(select(DeadlineModel), DeadlineModel).where(
             DeadlineModel.status == int(DeadlineStatus.OPEN),
+            _OF_A_JULY_DOSSIER,
             DeadlineModel.reminded_at.is_(None),
             DeadlineModel.due_date >= as_of,
             DeadlineModel.due_date <= as_of + datetime.timedelta(days=days),

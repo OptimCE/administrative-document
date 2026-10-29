@@ -94,6 +94,11 @@ class EngineCrmRead(Protocol):
         """The community's episodes in one of ``statuses``."""
         ...
 
+    async def communities_with_module(self) -> list[int]:
+        """Every community whose subscription to this module is active: what
+        the daily jobs run for."""
+        ...
+
     async def tracked_subjects(
         self,
         *,
@@ -152,6 +157,12 @@ _PHOTO_KEYS_SQL = text(
     "WHERE sok.id_community = :id_community AND sok.status = 1 "
     "  AND sok.start_date <= :on AND (sok.end_date IS NULL OR sok.end_date >= :on) "
     "ORDER BY sok.id_sharing_operation, sok.start_date DESC, sok.id DESC"
+)
+
+_ACTIVE_COMMUNITIES_SQL = text(
+    "SELECT s.id_community FROM community_subscription s "
+    "JOIN community c ON c.id = s.id_community "
+    "WHERE s.feature = :feature AND s.is_active ORDER BY s.id_community"
 )
 
 _EPISODES_SQL = text(
@@ -269,3 +280,9 @@ class SqlEngineCrmRead:
             )
             for row in result
         ]
+
+    async def communities_with_module(self) -> list[int]:
+        result = await self._session.execute(
+            _ACTIVE_COMMUNITIES_SQL, {"feature": str(FeatureName.ADMINISTRATIVE_DOCUMENT)}
+        )
+        return [int(row) for row in result.scalars()]

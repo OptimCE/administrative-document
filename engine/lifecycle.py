@@ -8,6 +8,11 @@ an appended ``status_event`` row, then a refresh, never an assignment.
 Entering a step is also an *event* for the catalogue (``step:<code>``): the
 rules it closes are met, the rules it anchors start. One deadline per rule is
 open at a time; re-entering a step does not restart a clock still running.
+
+A deadline the community let pass is MISSED (``engine.jobs``) but not resolved:
+it still counts for the next action's due date, so the dashboard keeps showing
+it overdue, and the event that meets it still meets it, late. A new clock for
+the same rule supersedes it.
 """
 
 from __future__ import annotations
@@ -46,6 +51,9 @@ ENGINE_ACTOR = "system:engine"
 # Entering one of these ends the procedure: its running clocks are cancelled.
 # A refusal or a procedure in force keeps them (appeal periods, the effect).
 _ENDS_THE_CLOCKS = (ProcedureStatus.CANCELLED, ProcedureStatus.LAPSED)
+
+# Not resolved yet: running, or let pass by the community.
+UNRESOLVED = (int(DeadlineStatus.OPEN), int(DeadlineStatus.MISSED))
 
 # A piece in one of these statuses counts as there.
 _PIECE_THERE = (ProcedureDocumentStatus.READY, ProcedureDocumentStatus.SIGNED)
@@ -134,12 +142,14 @@ async def _journal(
 # -- deadlines --------------------------------------------------------------
 
 
-async def _open_deadlines(session: AsyncSession, dossier: DossierModel) -> dict[str, DeadlineModel]:
+async def _open_deadlines(
+    session: AsyncSession, dossier: DossierModel, *, statuses: tuple[int, ...] = UNRESOLVED
+) -> dict[str, DeadlineModel]:
     rows = await session.scalars(
         select(DeadlineModel).where(
             DeadlineModel.id_community == dossier.id_community,
             DeadlineModel.id_dossier == dossier.id,
-            DeadlineModel.status == int(DeadlineStatus.OPEN),
+            DeadlineModel.status.in_(statuses),
         )
     )
     return {row.deadline_type: row for row in rows}
@@ -156,11 +166,15 @@ async def start_rules(
     correspondence_id: int | None = None,
 ) -> list[DeadlineModel]:
     """Open a deadline for each rule ``event`` anchors, counted from ``anchor``."""
-    running = await _open_deadlines(session, dossier)
+    unresolved = await _open_deadlines(session, dossier)
     started = []
     for rule in ctx.definition.rules_started_by(event, dossier.variant):
-        if rule.code in running:
+        previous = unresolved.get(rule.code)
+        if previous is not None and previous.status == int(DeadlineStatus.OPEN):
             continue
+        if previous is not None:  # missed: the new clock supersedes it
+            previous.status = int(DeadlineStatus.CANCELLED)
+            previous.resolved_at = datetime.datetime.now(datetime.UTC)
         deadline = DeadlineModel(
             id_community=dossier.id_community,
             id_dossier=dossier.id,
@@ -214,7 +228,7 @@ async def start_annual_rules(
 async def close_rules(
     session: AsyncSession, ctx: ProcedureContext, dossier: DossierModel, event: str
 ) -> list[DeadlineModel]:
-    """Mark met the open deadlines ``event`` closes."""
+    """Mark met the deadlines ``event`` closes, missed ones included (late)."""
     running = await _open_deadlines(session, dossier)
     now = datetime.datetime.now(datetime.UTC)
     met = []
@@ -240,14 +254,15 @@ async def refresh_next_action(
     session: AsyncSession, ctx: ProcedureContext, dossier: DossierModel
 ) -> None:
     """``next_action_code`` from the step, ``next_action_due`` from the
-    soonest running deadline: what the dashboard shows without opening it."""
+    soonest unresolved deadline (a missed one included, so it shows overdue):
+    what the dashboard shows without opening it."""
     step = ctx.definition.step(str(dossier.step))
     dossier.next_action_code = str(step.next_action.code)
     dossier.next_action_due = await session.scalar(
         select(func.min(DeadlineModel.due_date)).where(
             DeadlineModel.id_community == dossier.id_community,
             DeadlineModel.id_dossier == dossier.id,
-            DeadlineModel.status == int(DeadlineStatus.OPEN),
+            DeadlineModel.status.in_(UNRESOLVED),
         )
     )
     await session.flush()

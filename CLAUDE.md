@@ -9,7 +9,7 @@ bundles through `document-generation`. Read `README.md` for the domain.
 - `api/administrative_document/` — `routes` → `service` (orchestration) → `repository` (owned DB) + `mappers`/`schemas`/`deps`.
 - `domain/` — pure, session-free: `statemachine`, `deadlines`, `calendar`, `regions`, `prefill` (CRM → render payload), `cwape_labels` (CRM codes → the regulator's exact vocabulary).
 - `ports/` — `crm_core*` (read-only CRM), `document_generation*` (async NATS render), `events`, `providers` (which adapter backs the port — framework-free on purpose, see `worker/` below).
-- `worker/` — `dispatcher` (consumers) → `generate.process_generate`, `docgen_results.process_docgen_result`; both callable directly in tests via injected sessions; `scheduler`/`sweeps` = the 06:00 Brussels deadline tick.
+- `worker/` — `dispatcher` (consumers) → `generate.process_generate`, `docgen_results.process_docgen_result`; both callable directly in tests via injected sessions; `scheduler` = the 06:00 Brussels tick, which runs `engine_jobs` (the July `sweeps` remain behind the maintenance route only, July rows only, until the cleanup lot).
   - **`Dockerfile.worker` has NO fastapi/uvicorn/starlette** (it installs `requirements/worker.txt`). The worker may import `api.*` — that package IS copied, because the deadline sweep runs the real `AdministrativeDocumentService` — but nothing there may pull the HTTP stack at runtime: providers come from `ports/providers.py`, `service.py` imports `UploadFile` under `TYPE_CHECKING`, and `UPLOAD_MAX_BODY_BYTES` lives in `shared/const.py` because `core/middleware/request_limits.py` imports starlette. This is invisible locally, where `.venv` has everything; it shipped once and crash-looped 62 times. `tests/test_worker_import_graph.py` pins both the import graph and the Dockerfile's `COPY` list.
 - `document-templates/` — the bundles (official CWaPE files + manifests). See its README.
 - `scripts/sql/schema.sql` — raw DDL (NO Alembic). `shared/models/local_models.py` mirrors it.
@@ -72,6 +72,24 @@ bundles through `document-generation`. Read `README.md` for the domain.
   only July rows (its schema cannot carry engine statuses); July generation
   accepts engine pieces (MISSING/STALE/READY, not frozen) and a landed render
   makes a generated engine piece READY (`engine.filing.piece_rendered`).
+- **Daily jobs** (`engine/jobs.py` decides, `worker/engine_jobs.py` runs, session
+  advisory lock `0x0AD3_0004` on a connection of its own: a session hands its
+  connection back at each commit). Communities: the CRM's active subscriptions
+  plus local periods still open (reconciling closes them); module off or no
+  plugin = nothing, no notification. Per community: baseline + calendar
+  procedures (once per family and `period_key` year, only between
+  `opens_annually` and the annual due date) committed LOCAL first (journaled);
+  then the deadline pass and its notifications CRM first (deadline rows only, no
+  deferred check). A community's past-due deadline goes MISSED but stays
+  UNRESOLVED (`lifecycle.UNRESOLVED`: still overdue on the dashboard, still met
+  late, superseded by a new clock); a third party's stays OPEN and is told once
+  (`reminded_at`, in-app only); a finished procedure's closes CANCELLED
+  silently; EFFECT dates are the effect job's (phase 3; listed only). Opening a
+  calendar procedure cancels the converted July deadline it takes over (open,
+  on a MIGRATION dossier, unlinked, same code/party/kind, and no rule of that
+  code in its own procedure). The July sweep reads July rows only: both chasing
+  one deadline would notify twice. Nothing after the commits may read ORM
+  state: a rollback expires it, and async lazy loads raise `MissingGreenlet`.
 - Holidays are data now: `engine/calendar.py` raises `CalendarNotCoveredError`
   past the file's years instead of assuming none. `domain/calendar.py`
   (workalendar) serves the July code only, until the cleanup lot.
