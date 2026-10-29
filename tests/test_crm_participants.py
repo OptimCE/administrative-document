@@ -190,6 +190,34 @@ class TestScopingAndWarnings:
 
         assert result.participants == ()
 
+    async def test_no_operation_reads_the_whole_community(
+        self, db_session, community, other_community, sharing_operation, second_sharing_operation
+    ):
+        """A community-scope procedure (CE_NOTIFICATION…) has no operation: its
+        forms list every participant of every operation, and still no one else's."""
+        await _alice_with_two_meters(db_session, community, sharing_operation)
+        bob = await f.create_member(
+            db_session, id_community=community.id, name="Martin", member_type=1
+        )
+        await f.create_meter(db_session, ean="541448000000000005", id_community=community.id)
+        await f.attribute_meter(
+            db_session,
+            ean="541448000000000005",
+            id_community=community.id,
+            id_sharing_operation=second_sharing_operation,
+            id_member=bob,
+        )
+
+        result = await SqlAlchemyCrmCoreRead(db_session).get_operation_participants(
+            community.id, None
+        )
+        elsewhere = await SqlAlchemyCrmCoreRead(db_session).get_operation_participants(
+            other_community.id, None
+        )
+
+        assert sorted(p.name for p in result.participants) == ["Dupont", "Martin"]
+        assert elsewhere.participants == ()
+
     async def test_another_communitys_data_is_never_returned(
         self, db_session, community, other_community, sharing_operation
     ):

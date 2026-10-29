@@ -86,6 +86,7 @@ class OffsetUnit(IntEnum):
 
     BUSINESS_DAYS = 1  # jours ouvres (Mon-Fri minus Belgian public holidays)
     MONTHS = 2  # calendar months (relativedelta)
+    CALENDAR_DAYS = 3
 
 
 class DeadlineStatus(IntEnum):
@@ -123,6 +124,161 @@ class AcknowledgementResult(StrEnum):
 
     COMPLETE = "complete"
     INCOMPLETE = "incomplete"
+
+
+# --- Procedures engine (espace administratif) --------------------------------
+# Generic enums are coded integers, as everywhere in this schema; a code that
+# belongs to one regulator (a step, a response type, a variant, a piece code)
+# is a string the plugin validates and never appears here.
+
+
+class ProcedureStatus(IntEnum):
+    """The engine's common statuses, held in ``dossier.status``.
+
+    The regulator plugin's own step (incomplete, non-conformity, accepted…) is
+    ``dossier.step``. Codes 1, 2 and 5 keep the meaning they had for the July
+    ``DossierStatus``; 3 (COMPLETE) and 4 (CLOSED) are retired and only survive
+    in the journal's history.
+    """
+
+    DRAFT = 1
+    SENT = 2
+    LAPSED = 5
+    READY = 6
+    IN_FORCE = 7
+    REFUSED = 8
+    CANCELLED = 9
+
+
+class ProcedureDocumentStatus(IntEnum):
+    """Status of a piece of a procedure, held in ``document.status``.
+
+    READY and OBSOLETE keep their July ``DocumentStatus`` codes; 1 (DRAFT), 3
+    (SENT) and 4 (ACKNOWLEDGED) are retired. "Generating" is never a status:
+    it is read from ``document_render``.
+    """
+
+    READY = 2
+    OBSOLETE = 5
+    MISSING = 6
+    STALE = 7
+    SIGNED = 8
+    REJECTED = 9
+
+
+class ProcedureScope(IntEnum):
+    """What a procedure is about: the community itself, or one operation."""
+
+    COMMUNITY = 1
+    OPERATION = 2
+
+
+class Recipient(IntEnum):
+    """Who a procedure is sent to."""
+
+    GRD_REF = 1  # the operation's reference DSO (SPOC when several)
+    REGULATOR = 2
+
+
+class Channel(IntEnum):
+    """How a procedure is sent, or a correspondence travelled."""
+
+    EMAIL = 1
+    ONLINE_FORM = 2
+    POST = 3
+    UPLOAD = 4  # correspondence only: a file someone added by hand
+
+
+class OpenedBy(IntEnum):
+    """Who opened a procedure."""
+
+    SYSTEM = 1  # the event router or a daily job
+    USER = 2
+    MIGRATION = 3  # a July dossier converted by migration 0003
+
+
+class ChangeSubjectType(IntEnum):
+    """What a ``change`` row is about. 1 and 2 match the core's
+    ``regulatory_link_status.subject_type``."""
+
+    METER = 1
+    KEY = 2
+    MEMBER = 3
+    OPERATION = 4
+    COMMUNITY = 5
+
+
+class ChangeStatus(IntEnum):
+    """Lifecycle of a ``change``."""
+
+    PENDING = 1  # detected, not filed yet (baseline awaiting confirmation)
+    ATTACHED = 2  # filed in a procedure
+    DEFERRED = 3  # postponed by the admin to a later procedure
+    EXCLUDED = 4  # the admin decided it needs no procedure
+    CANCELLED = 5  # compensated by its inverse before sending
+    APPLIED = 6  # its effect reached the core
+    REFUSED = 7  # the authority refused it
+
+
+class EventOutcome(IntEnum):
+    """What the consumer did with a core event (``processed_event.outcome``).
+
+    The lower-cased name is the ``reason`` label of
+    ``admin_events_skipped_total``.
+    """
+
+    ROUTED = 1
+    MODULE_DISABLED = 2
+    BEFORE_ACTIVATION = 3
+    ALREADY_REFLECTED = 4
+    REGULATOR_NOT_SUPPORTED = 5
+    NO_PROCEDURE = 6
+
+
+class CorrespondenceDirection(IntEnum):
+    OUTBOUND = 1
+    INBOUND = 2
+
+
+class Counterparty(IntEnum):
+    """The other side of a correspondence."""
+
+    GRD = 1
+    REGULATOR = 2
+    PARTICIPANT = 3
+    OTHER = 4
+
+
+class DocumentKind(IntEnum):
+    """Where a piece comes from."""
+
+    GENERATED = 1  # rendered from a template (annex, amendment)
+    COLLECTED = 2  # supplied by the community or a participant (signed declaration)
+    RECEIVED = 3  # sent back by the recipient
+
+
+class DeadlineParty(IntEnum):
+    """Who a deadline binds."""
+
+    COMMUNITY = 1
+    GRD = 2
+    REGULATOR = 3
+
+
+class DeadlineKind(IntEnum):
+    """What a deadline is for."""
+
+    SUBMISSION = 1  # the community must send something
+    RESPONSE = 2  # the recipient must answer
+    LAPSE = 3  # past it the procedure lapses
+    EFFECT = 4  # the change takes effect
+
+
+class RuleKind(IntEnum):
+    """How a catalogue ``deadline_rule`` computes its date."""
+
+    RELATIVE = 1  # an offset after an anchor event
+    ANNUAL = 2  # a fixed day of the year
 
 
 class FeatureName(StrEnum):

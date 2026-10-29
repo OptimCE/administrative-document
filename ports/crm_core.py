@@ -182,9 +182,13 @@ class CrmCoreReadPort(Protocol):
         ...
 
     async def get_operation_participants(
-        self, id_community: int, id_sharing_operation: int
+        self, id_community: int, id_sharing_operation: int | None
     ) -> OperationParticipants:
         """Participants, production units and storage units of one operation.
+
+        ``id_sharing_operation=None`` reads the whole community instead: a
+        community-scope procedure (CE_NOTIFICATION, CE_RAPPORT_ANNUEL) has no
+        operation, and its forms list every participant.
 
         A single call because the three lists come from the same ``meter_data``
         scan and every annexe needs at least two of them; splitting it would mean

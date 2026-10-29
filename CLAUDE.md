@@ -13,13 +13,34 @@ bundles through `document-generation`. Read `README.md` for the domain.
   - **`Dockerfile.worker` has NO fastapi/uvicorn/starlette** (it installs `requirements/worker.txt`). The worker may import `api.*` — that package IS copied, because the deadline sweep runs the real `AdministrativeDocumentService` — but nothing there may pull the HTTP stack at runtime: providers come from `ports/providers.py`, `service.py` imports `UploadFile` under `TYPE_CHECKING`, and `UPLOAD_MAX_BODY_BYTES` lives in `shared/const.py` because `core/middleware/request_limits.py` imports starlette. This is invisible locally, where `.venv` has everything; it shipped once and crash-looped 62 times. `tests/test_worker_import_graph.py` pins both the import graph and the Dockerfile's `COPY` list.
 - `document-templates/` — the bundles (official CWaPE files + manifests). See its README.
 - `scripts/sql/schema.sql` — raw DDL (NO Alembic). `shared/models/local_models.py` mirrors it.
+  Released, so a change also needs a forward migration in `scripts/sql/migrations/`
+  (read its README: `schema.sql` self-inserts version 1 only, on purpose).
+- Procedures engine (espace administratif, `docs/specs/espace-administratif.md` in
+  the monorepo): `procedure_definition` is a projection of the plugin's YAML;
+  `change`, `processed_event`, `module_activation`, `working_calendar`,
+  `correspondence`. July dossiers were converted by migration 0003; a row with
+  `dossier_type` and no `id_procedure_definition` is an unconverted July one.
 
 ## Two DB-enforced invariants
-- **The journal is the truth.** `status_event` is append-only and a DEFERRED
-  constraint trigger rejects any `status` not backed by a journal row. Make
-  exactly ONE status change per subject per transaction.
-- **A version is evidence.** `document_version` is append-only, `file_ref` is
-  NOT NULL and content-addressed. There is no update path; never add one.
+- **The journal writes the status.** `status_event` is append-only, and
+  appending a row COPIES its `(to_status, to_step)` onto the subject
+  (`propagate_journal_head`). A direct write of `status`/`step` is refused on
+  the spot (`forbid_direct_status_write`, trigger depth 1), and a DEFERRED
+  constraint trigger rejects at COMMIT a subject born with a status nobody
+  journaled. So: never assign `.status`/`.step` on a model — append the event,
+  flush, `refresh(subject, ["status"])`. Several changes per transaction are
+  fine (the deferred check reads the final row).
+- **Two levels of status.** `dossier.status` is the engine's common
+  `ProcedureStatus` (draft, ready, sent, in force, refused, cancelled, lapsed);
+  `dossier.step` is the regulator plugin's string, validated by the plugin. No
+  regulator code is ever a DB enum. July codes 3/4 (dossier) and 1/3/4
+  (document) are retired; they survive only in the journal's history.
+- **A version is evidence.** `document_version` and `correspondence` are
+  append-only; `file_ref` is content-addressed. There is no update path; never
+  add one.
+- **A CHECK that evaluates to NULL passes.** `kind IN (1, 2)` on a NULL kind
+  lets the row through. The multi-branch CHECKs are wrapped in
+  `COALESCE(…, FALSE)`; keep doing that.
 
 ## Generation
 - Three steps: `GET /prefill` (CRM → payload, persists nothing) → `POST /generate`

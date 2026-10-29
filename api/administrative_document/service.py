@@ -154,7 +154,7 @@ class AdministrativeDocumentService:
             raise ErrorException(errors.admin.SHARING_OPERATION_NOT_FOUND, status_code=422)
 
         if external_ref and await self._repo.external_ref_taken(
-            dossier_type=int(dossier_type), external_ref=external_ref
+            dossier_type=int(dossier_type), family=None, external_ref=external_ref
         ):
             raise ErrorException(errors.admin.DUPLICATE_EXTERNAL_REF, status_code=409)
 
@@ -214,6 +214,7 @@ class AdministrativeDocumentService:
         if external_ref is not None and external_ref != dossier.external_ref:
             if await self._repo.external_ref_taken(
                 dossier_type=dossier.dossier_type,
+                family=dossier.family,
                 external_ref=external_ref,
                 exclude_id=dossier.id,
             ):
@@ -551,8 +552,14 @@ class AdministrativeDocumentService:
         if context is None:
             raise ErrorException(errors.admin.REGION_NOT_RESOLVED, status_code=422)
 
-        operation = await self._crm_read.get_sharing_operation(
-            document.id_community, dossier.id_sharing_operation
+        # A community-scope procedure has no operation: its forms are filled
+        # from every participant of the community.
+        operation = (
+            await self._crm_read.get_sharing_operation(
+                document.id_community, dossier.id_sharing_operation
+            )
+            if dossier.id_sharing_operation is not None
+            else None
         )
         crm_data = await self._crm_read.get_operation_participants(
             document.id_community, dossier.id_sharing_operation
@@ -752,10 +759,12 @@ class AdministrativeDocumentService:
             actor_id=current_user_id.get(),
             context=clean_context,
         )
-        subject.status = to_status
         if subject_type == SubjectType.DOSSIER and to_status == int(DossierStatus.SUBMITTED):
             dossier.submitted_at = datetime.datetime.now(datetime.UTC)
         await self._local.flush()
+        # The journal row just flushed wrote the status (propagate_journal_head);
+        # assigning it here would be refused as a direct write.
+        await self._local.refresh(subject, attribute_names=["status"])
 
         created = await self._apply_deadline_effects(
             subject_type=subject_type,
@@ -856,6 +865,10 @@ class AdministrativeDocumentService:
                     )
                 return []
 
+        # The July rules are keyed by DossierType; a procedure's deadlines come
+        # from its catalogue definition instead.
+        if dossier.dossier_type is None:
+            return []
         triggers = self._triggers_for(
             subject_type=subject_type, dossier=dossier, to_status=to_status, context=context
         )

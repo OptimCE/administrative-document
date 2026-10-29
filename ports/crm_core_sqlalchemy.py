@@ -111,7 +111,8 @@ _OPERATION_METERS_SQL = text(
       LEFT JOIN address   ma  ON ma.id = m.id_address
       LEFT JOIN address   ha  ON ha.id = mem.id_home_address
      WHERE md.id_community = :id_community
-       AND md.id_sharing_operation = :id_sharing_operation
+       AND (CAST(:id_sharing_operation AS INTEGER) IS NULL
+            OR md.id_sharing_operation = :id_sharing_operation)
        AND md.status = :active
      ORDER BY mem.name NULLS LAST, mem.id, md.ean
     """
@@ -252,7 +253,7 @@ class SqlAlchemyCrmCoreRead:
         ]
 
     async def get_operation_participants(
-        self, id_community: int, id_sharing_operation: int
+        self, id_community: int, id_sharing_operation: int | None
     ) -> OperationParticipants:
         """Fold the operation's active meter attributions into the annexe lists.
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -167,10 +167,22 @@ class AdministrativeDocumentRepository:
         return rows, total
 
     async def external_ref_taken(
-        self, *, dossier_type: int, external_ref: str, exclude_id: int | None = None
+        self,
+        *,
+        dossier_type: int | None,
+        family: str | None,
+        external_ref: str,
+        exclude_id: int | None = None,
     ) -> bool:
+        """Mirrors uq_dossier_external_ref(_family): a procedure is unique by
+        family, a July dossier not yet converted by its type."""
+        same_kind = (
+            DossierModel.family == family
+            if family is not None
+            else DossierModel.dossier_type == dossier_type
+        )
         stmt = with_community_scope(select(DossierModel.id), DossierModel).where(
-            DossierModel.dossier_type == dossier_type,
+            same_kind,
             DossierModel.external_ref == external_ref,
         )
         if exclude_id is not None:
@@ -338,6 +350,7 @@ class AdministrativeDocumentRepository:
     ) -> list[DeadlineRuleSpec]:
         """Candidate rules for a trigger: platform defaults plus this community's overrides."""
         stmt = select(DeadlineRuleModel).where(
+            DeadlineRuleModel.id_procedure_definition.is_(None),
             DeadlineRuleModel.region == region,
             DeadlineRuleModel.dossier_type == dossier_type,
             DeadlineRuleModel.trigger_event == trigger_event,
@@ -348,8 +361,9 @@ class AdministrativeDocumentRepository:
             DeadlineRuleSpec(
                 id=row.id,
                 deadline_type=row.deadline_type,
-                offset_value=row.offset_value,
-                offset_unit=row.offset_unit,
+                # ck_deadline_rule_generation: a legacy row always has its offset.
+                offset_value=cast(int, row.offset_value),
+                offset_unit=cast(int, row.offset_unit),
                 recurring=row.recurring,
                 recur_months=row.recur_months,
                 id_community=row.id_community,

@@ -275,3 +275,40 @@ CREATE TABLE IF NOT EXISTS notification_preference (
 
     PRIMARY KEY (id_user, type_prefix, channel)
 );
+
+-- ---- regulatory_link_status -------------------------------------------------
+-- The one CRM table this service WRITES beyond audit/notification: its effects
+-- port opens episodes and moves the four effect columns (the real role has
+-- INSERT + UPDATE on those columns only; see monorepo
+-- postgres/provision/30-crm-grants.sql). Mirrors
+-- crm-backend/database_script/2026-10-29_regulatory_link_status.sql, EXCLUDE
+-- included: "one EAN pending/authorised/active in a single operation per date"
+-- is the constraint the effects port must surface, so a test without it would
+-- prove nothing. The updated_at trigger is left out (the CRM's trigger function
+-- does not exist here).
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+CREATE TABLE IF NOT EXISTS regulatory_link_status (
+    id                   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id_community         INT NOT NULL REFERENCES community (id) ON DELETE CASCADE,
+    id_sharing_operation INT NOT NULL REFERENCES sharing_operation (id) ON DELETE CASCADE,
+    subject_type         SMALLINT NOT NULL CHECK (subject_type IN (1, 2)),
+    subject_ref          VARCHAR(64) NOT NULL,
+    id_dossier_origin    BIGINT NOT NULL,
+    regulatory_status    SMALLINT NOT NULL CHECK (regulatory_status BETWEEN 1 AND 8),
+    valid_from           DATE,
+    valid_to             DATE,
+    regulatory_ref       VARCHAR(64),
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_regulatory_link_episode UNIQUE (id_dossier_origin, subject_type, subject_ref),
+    CONSTRAINT ck_regulatory_link_validity
+        CHECK (valid_from IS NULL OR valid_to IS NULL OR valid_from <= valid_to),
+    CONSTRAINT ex_regulatory_link_one_operation EXCLUDE USING gist (
+        subject_ref WITH =,
+        daterange(valid_from, valid_to, '[]') WITH &&
+    ) WHERE (subject_type = 1 AND regulatory_status IN (2, 3, 4, 5))
+);
+
+CREATE INDEX IF NOT EXISTS ix_regulatory_link_operation
+    ON regulatory_link_status (id_community, id_sharing_operation);
