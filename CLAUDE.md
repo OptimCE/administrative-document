@@ -1,16 +1,17 @@
 # administrative-document — working notes for Claude
 
 OptimCE administrative annexe (FastAPI + NATS worker, async SQLAlchemy 2.0).
-Tracks regulatory dossiers through a journaled state machine, derives CWaPE
-deadlines, and **generates the mandated forms** by rendering registered template
+Files the CRM's changes into the regulator's procedures (a generic engine and
+regulator plugins; CWaPE today), tracks them through a journaled lifecycle,
+derives their deadlines, and **generates the mandated forms** by rendering registered template
 bundles through `document-generation`. Read `README.md` for the domain.
 
 ## Layout
-- `api/administrative_document/` — `routes` → `service` (orchestration) → `repository` (owned DB) + `mappers`/`schemas`/`deps`.
-- `domain/` — pure, session-free: `statemachine`, `deadlines`, `calendar`, `regions`, `prefill` (CRM → render payload), `cwape_labels` (CRM codes → the regulator's exact vocabulary).
+- `api/admin/` — the procedures routes (`/admin`, see below). `api/administrative_document/` — what stays outside them: generation (prefill, generate, render status, a version's file), `/filings/mine`, the template registry, the operations; `routes` → `service` → `repository` + `mappers`/`schemas`/`deps`.
+- `domain/` — pure, session-free: `prefill` (CRM → render payload), `cwape_labels` (CRM codes → the regulator's exact vocabulary), `regions`.
 - `ports/` — `crm_core*` (read-only CRM), `document_generation*` (async NATS render), `events`, `providers` (which adapter backs the port — framework-free on purpose, see `worker/` below).
-- `worker/` — `dispatcher` (consumers) → `generate.process_generate`, `docgen_results.process_docgen_result`; both callable directly in tests via injected sessions; `scheduler` = the 06:00 Brussels tick, which runs `engine_jobs` (the July `sweeps` remain behind the maintenance route only, July rows only, until the cleanup lot).
-  - **`Dockerfile.worker` has NO fastapi/uvicorn/starlette** (it installs `requirements/worker.txt`). The worker may import `api.*` — that package IS copied, because the deadline sweep runs the real `AdministrativeDocumentService` — but nothing there may pull the HTTP stack at runtime: providers come from `ports/providers.py`, `service.py` imports `UploadFile` under `TYPE_CHECKING`, and `UPLOAD_MAX_BODY_BYTES` lives in `shared/const.py` because `core/middleware/request_limits.py` imports starlette. This is invisible locally, where `.venv` has everything; it shipped once and crash-looped 62 times. `tests/test_worker_import_graph.py` pins both the import graph and the Dockerfile's `COPY` list.
+- `worker/` — `dispatcher` (consumers) → `core_events`, `generate.process_generate`, `docgen_results.process_docgen_result`; all callable directly in tests via injected sessions; `scheduler` = the 06:00 Brussels tick, which runs `engine_jobs`.
+  - **`Dockerfile.worker` has NO fastapi/uvicorn/starlette** (it installs `requirements/worker.txt`) **and no `api/`**: nothing the worker runs lives there since the July sweep went. Providers come from `ports/providers.py`, and `UPLOAD_MAX_BODY_BYTES` lives in `shared/const.py` because `core/middleware/request_limits.py` imports starlette. This is invisible locally, where `.venv` has everything; it shipped once and crash-looped 62 times. `tests/test_worker_import_graph.py` pins the import graph, refuses a worker import of `api`, and checks the Dockerfile's `COPY` list.
 - `document-templates/` — the bundles (official CWaPE files + manifests). See its README.
 - `scripts/sql/schema.sql` — raw DDL (NO Alembic). `shared/models/local_models.py` mirrors it.
   Released, so a change also needs a forward migration in `scripts/sql/migrations/`
@@ -18,8 +19,11 @@ bundles through `document-generation`. Read `README.md` for the domain.
 - Procedures engine (espace administratif, `docs/specs/espace-administratif.md` in
   the monorepo): `procedure_definition` is a projection of the plugin's YAML;
   `change`, `processed_event`, `module_activation`, `working_calendar`,
-  `correspondence`. July dossiers were converted by migration 0003; a row with
-  `dossier_type` and no `id_procedure_definition` is an unconverted July one.
+  `correspondence`. July dossiers were converted by migration 0003, and 0004
+  made every dossier, piece and deadline engine-shaped (NOT NULLs, strict
+  CHECKs); the July lifecycle code is gone. The July columns that 0003 (and the
+  migrator's released 002) still touch on a fresh install stay, dead:
+  `dossier.dossier_type`, `deadline.recurring`, `deadline_rule`'s July columns.
 - `engine/` is generic and **never imports `regulators/`** nor names a regulator
   (`tests/engine/test_boundary.py`: AST, a subprocess import with `regulators`
   refused, and a grep). The contract is `engine/contracts.py`; plugins import
@@ -79,10 +83,11 @@ bundles through `document-generation`. Read `README.md` for the domain.
   RECEIVED piece still arrives).
   A response's `dry_run` writes nothing. A deferred change moves (the row, not
   a copy: UNIQUE(source_event_id, procedure_code)) into the family's next
-  draft when this one is sent or cancelled. The July `/dossiers` list shows
-  only July rows (its schema cannot carry engine statuses); July generation
-  accepts engine pieces (MISSING/STALE/READY, not frozen) and a landed render
-  makes a generated engine piece READY (`engine.filing.piece_rendered`).
+  draft when this one is sent or cancelled. Generation (outside `/admin`)
+  takes a piece that is MISSING, STALE or READY and not frozen, and a landed
+  render makes it READY (`engine.filing.piece_rendered`). The routes taking a
+  file (`…/versions`, `…/send`, `…/correspondence`) get the upload body cap in
+  `core/middleware/request_limits.py`; a new one must be added there.
 - **Daily jobs** (`engine/jobs.py` decides, `worker/engine_jobs.py` runs, session
   advisory lock `0x0AD3_0004` on a connection of its own: a session hands its
   connection back at each commit). Communities: the CRM's active subscriptions
@@ -98,12 +103,12 @@ bundles through `document-generation`. Read `README.md` for the domain.
   silently; EFFECT dates are the effect job's (phase 3; listed only). Opening a
   calendar procedure cancels the converted July deadline it takes over (open,
   on a MIGRATION dossier, unlinked, same code/party/kind, and no rule of that
-  code in its own procedure). The July sweep reads July rows only: both chasing
-  one deadline would notify twice. Nothing after the commits may read ORM
+  code in its own procedure). Nothing after the commits may read ORM
   state: a rollback expires it, and async lazy loads raise `MissingGreenlet`.
-- Holidays are data now: `engine/calendar.py` raises `CalendarNotCoveredError`
-  past the file's years instead of assuming none. `domain/calendar.py`
-  (workalendar) serves the July code only, until the cleanup lot.
+- Holidays are data: `engine/calendar.py` raises `CalendarNotCoveredError`
+  past the file's years instead of assuming none. workalendar is a TEST
+  dependency only: the independent oracle the plugins' calendar files are
+  checked against.
 
 ## Two DB-enforced invariants
 - **The journal writes the status.** `status_event` is append-only, and
@@ -134,7 +139,8 @@ bundles through `document-generation`. Read `README.md` for the domain.
   NOTHING` (rowcount 0 → 409). Success DELETEs the row; the version is the record.
 - **Never journal a render.** It is a technical retry, not a regulatory
   transition — a `status_event` for it would become the journal head and break
-  every later status write. A generated document stays DRAFT.
+  every later status write. The piece it completes is journaled instead
+  (READY, by `engine.filing.piece_rendered`).
 - **The snapshot is captured at REQUEST time.** `GenerationResult` is
   `extra="forbid"` and echoes only `metadata`, never `data`, so re-reading the
   CRM when the result lands would defeat the whole point (spec R2).
@@ -148,9 +154,10 @@ bundles through `document-generation`. Read `README.md` for the domain.
 - Tenant column is `id_community`; scope every owned-DB SELECT with
   `with_community_scope`. `with_community_scope` types SELECTs only — a DELETE
   needs the predicate by hand.
-- **The two registries are two-tier, and reads and writes scope differently.**
-  `document_template` and `deadline_rule` use `id_community IS NULL` for a
-  platform default, so they can't use `with_community_scope`. Read through
+- **The template registry is two-tier, and reads and writes scope differently.**
+  `document_template` uses `id_community IS NULL` for a platform default, so it
+  can't use `with_community_scope`. (Deadline rules are the catalogue's only,
+  never overridden.) Read through
   `_visible_row` (own override OR default), write through `_own_row` (own
   override only). `Role.ADMIN` is community-scoped, so a getter feeding a PATCH
   that accepts a default would let any community edit the CWaPE registry for

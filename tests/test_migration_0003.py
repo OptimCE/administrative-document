@@ -39,8 +39,14 @@ CURRENT_SQL = (_ROOT / "scripts" / "sql" / "schema.sql").read_text(encoding="utf
 MIGRATION_SQL = (_ROOT / "scripts" / "sql" / "migrations" / "0003_procedures_engine.sql").read_text(
     encoding="utf-8"
 )
+# The reference data as RELEASED (optimce-migrator 002 = seeds 0001-0003): the
+# July rules seed left the repo with the July code, so it is vendored here,
+# never edited, like the schema it was written for.
 SEEDS_SQL = [
-    p.read_text(encoding="utf-8") for p in sorted((_ROOT / "scripts/sql/seeds").glob("*.sql"))
+    (_ROOT / "tests" / "sql" / "released_seed_0001_wal_deadline_rules.sql").read_text(
+        encoding="utf-8"
+    ),
+    *(p.read_text(encoding="utf-8") for p in sorted((_ROOT / "scripts/sql/seeds").glob("*.sql"))),
 ]
 
 SERVER = "postgresql://postgres:postgres@localhost:5433"
@@ -647,7 +653,8 @@ class TestReruns:
             )
 
     async def test_on_a_fresh_install_it_only_drops_the_july_rules(self, test_db_ready):
-        """schema.sql already embodies 0003 (and self-inserts only version 1)."""
+        """schema.sql already embodies 0003 (and self-inserts only version 1);
+        the released reference data still inserts the July rules into it."""
         async with _scratch(CURRENT_SQL) as conn:
             before = await _counts(conn)
             await conn.execute(MIGRATION_SQL)

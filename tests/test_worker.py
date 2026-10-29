@@ -8,11 +8,14 @@ never be attached twice or attributed to the wrong tenant.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ports.document_generation import DocgenRequest
+from shared.const import ProcedureDocumentStatus
+from shared.models.local_models import DocumentModel, DocumentVersionModel
 from tests.api.administrative_document.test_generation import register_bundle
-from tests.api.administrative_document.test_transitions import make_document, make_dossier
+from tests.procedures import make_piece
 from worker import docgen_results, generate
 
 pytestmark = pytest.mark.asyncio
@@ -32,13 +35,28 @@ class FakeDocGen:
 
 async def _document_with_pending_render(client, headers, db_session, sharing_operation):
     await register_bundle(db_session)
-    dossier_id = await make_dossier(client, headers, sharing_operation)
-    document_id = await make_document(client, headers, dossier_id)
+    _, document_id = await make_piece(client, headers, db_session)
     response = await client.post(
         f"/documents/{document_id}/generate", json={"data": {}}, headers=headers
     )
     assert response.status_code == 200, response.text
     return document_id, response.json()["data"]["docgen_request_id"]
+
+
+async def _piece(db_session: AsyncSession, document_id: int) -> DocumentModel:
+    piece = await db_session.get(DocumentModel, document_id)
+    assert piece is not None
+    await db_session.refresh(piece)
+    return piece
+
+
+async def _versions(db_session, document_id: int) -> list[DocumentVersionModel]:
+    rows = await db_session.scalars(
+        select(DocumentVersionModel)
+        .where(DocumentVersionModel.id_document == document_id)
+        .order_by(DocumentVersionModel.version_no)
+    )
+    return list(rows)
 
 
 def _success(request_id: str, *, document_id: int, tenant: int, uri: str = _URI) -> dict:
@@ -96,8 +114,7 @@ class TestRequestSide:
         self, client, manager_headers, db_session, community, sharing_operation
     ):
         await register_bundle(db_session)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
         await client.post(
             f"/documents/{document_id}/generate",
             json={"data": {"community_legal_name": "Corrected ASBL"}},
@@ -144,16 +161,14 @@ class TestResultSide:
         )
 
         assert outcome == docgen_results.ATTACHED
-        detail = (await client.get(f"/documents/{document_id}", headers=manager_headers)).json()[
-            "data"
-        ]
-        assert detail["current_version_id"] is not None
+        piece = await _piece(db_session, document_id)
+        assert piece.current_version_id is not None
         # origin describes how the current version was produced.
-        assert detail["origin"] == 1  # GENERATED
-        version = detail["versions"][0]
-        assert version["version_no"] == 1
-        assert version["content_sha256"] == "abc123"
-        assert version["id_template"] is not None
+        assert piece.origin == 1  # GENERATED
+        (version,) = await _versions(db_session, document_id)
+        assert version.version_no == 1
+        assert version.content_sha256 == "abc123"
+        assert version.id_template is not None
 
     async def test_the_artifacts_own_filename_is_recorded(
         self, client, manager_headers, db_session, community, sharing_operation
@@ -169,11 +184,9 @@ class TestResultSide:
             crm_session=db_session,
         )
 
-        detail = (await client.get(f"/documents/{document_id}", headers=manager_headers)).json()[
-            "data"
-        ]
         # The bundle named it; the URI's last segment is that name.
-        assert detail["versions"][0]["original_filename"] == "annexe6-notification.xlsx"
+        (version,) = await _versions(db_session, document_id)
+        assert version.original_filename == "annexe6-notification.xlsx"
 
     async def test_an_upload_over_a_generated_document_flips_origin_back(
         self, client, manager_headers, db_session, community, sharing_operation, fake_storage
@@ -187,16 +200,15 @@ class TestResultSide:
             crm_session=db_session,
         )
 
-        await client.post(
-            f"/documents/{document_id}/versions",
+        piece = await _piece(db_session, document_id)
+        response = await client.post(
+            f"/admin/dossiers/{piece.id_dossier}/documents/{document_id}/versions",
             files={"file": ("manual.pdf", b"a hand-corrected filing", "application/pdf")},
             headers=manager_headers,
         )
+        assert response.status_code == 200, response.text
 
-        detail = (await client.get(f"/documents/{document_id}", headers=manager_headers)).json()[
-            "data"
-        ]
-        assert detail["origin"] == 2  # UPLOADED
+        assert (await _piece(db_session, document_id)).origin == 2  # UPLOADED
 
     async def test_the_snapshot_travels_onto_the_version(
         self, client, manager_headers, db_session, community, sharing_operation
@@ -204,8 +216,7 @@ class TestResultSide:
         """Spec R2: the filed version records the state at generation time — and
         the result echoes only metadata, so it can only come from the render row."""
         await register_bundle(db_session)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
         request_id = (
             await client.post(
                 f"/documents/{document_id}/generate",
@@ -246,10 +257,10 @@ class TestResultSide:
         ).json()["data"]
         assert status["render_state"] is None
 
-    async def test_generating_does_not_change_the_document_status(
+    async def test_a_landed_render_makes_the_piece_ready(
         self, client, manager_headers, db_session, community, sharing_operation
     ):
-        """A render is technical. Journaling it would corrupt the status cache."""
+        """The render itself is never journaled; the piece it completes is."""
         document_id, request_id = await _document_with_pending_render(
             client, manager_headers, db_session, sharing_operation
         )
@@ -260,10 +271,7 @@ class TestResultSide:
             crm_session=db_session,
         )
 
-        detail = (await client.get(f"/documents/{document_id}", headers=manager_headers)).json()[
-            "data"
-        ]
-        assert detail["status"] == 1  # DRAFT
+        assert (await _piece(db_session, document_id)).status == int(ProcedureDocumentStatus.READY)
 
     async def test_a_redelivered_success_does_not_attach_twice(
         self, client, manager_headers, db_session, community, sharing_operation

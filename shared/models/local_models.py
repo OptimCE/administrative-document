@@ -165,14 +165,13 @@ class ProcedureDefinitionModel(_TimestampMixin, LocalBase):
 
 
 class DeadlineRuleModel(_TimestampMixin, LocalBase):
-    """A regulatory clock, as data.
+    """A regulatory clock, as data: a rule of one procedure definition, named
+    by ``code``, written by the catalogue sync.
 
-    Two generations share the table until the July lifecycle is removed. A
-    legacy row (``id_procedure_definition`` NULL) says: "when ``trigger_event``
-    happens on a ``dossier_type`` in ``region``, a ``deadline_type`` deadline
-    falls due ``offset_value`` ``offset_unit`` later". A catalogue row belongs
-    to one procedure definition and is named by ``code``; ``ck_deadline_rule_
-    generation`` keeps every row wholly one or the other.
+    The July columns (``region`` … ``description``) outlive the July code: on a
+    fresh install the released reference data inserts July rules into them,
+    which migrations 0003 and 0004 delete. Nothing reads them; the sync only
+    writes their defaults.
     """
 
     __tablename__ = "deadline_rule"
@@ -201,12 +200,11 @@ class DeadlineRuleModel(_TimestampMixin, LocalBase):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     id_community: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # The five legacy columns are NULL on catalogue rows. Typed non-optional
-    # because only the July code reads them, and it only ever reads legacy rows.
-    region: Mapped[int] = mapped_column(Integer, nullable=True)  # Region
-    dossier_type: Mapped[int] = mapped_column(Integer, nullable=True)  # DossierType
-    trigger_event: Mapped[str] = mapped_column(String(64), nullable=True)  # TriggerEvent
-    deadline_type: Mapped[str] = mapped_column(String(64), nullable=True)  # DeadlineType
+    # July columns: NULL on every catalogue row.
+    region: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dossier_type: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    trigger_event: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    deadline_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     offset_value: Mapped[int | None] = mapped_column(Integer, nullable=True)
     offset_unit: Mapped[int | None] = mapped_column(Integer, nullable=True)  # OffsetUnit
     recurring: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -239,24 +237,15 @@ class DossierModel(_TimestampMixin, LocalBase):
     the ``status_event`` journal head, written by the database when a journal row
     is appended. Never assign them: append the event, flush, refresh.
 
-    ``dossier_type`` is the July classification, set only on rows that predate
-    the engine; ``ck_dossier_procedure`` requires every other row to carry its
-    procedure definition, regulator, family, scope and ``opened_by``.
+    Every row is a procedure of a catalogue (migration 0004 made the procedure
+    columns NOT NULL). The July ``dossier_type`` column survives in the table,
+    unmapped: migration 0003 reads it on a fresh install.
     """
 
     __tablename__ = "dossier"
     __table_args__ = (
         Index("ix_dossier_status", "id_community", "status"),
-        Index("ix_dossier_type", "id_community", "dossier_type"),
         Index("ix_dossier_operation", "id_community", "id_sharing_operation"),
-        Index(
-            "uq_dossier_external_ref",
-            "id_community",
-            "dossier_type",
-            "external_ref",
-            unique=True,
-            postgresql_where=text("external_ref IS NOT NULL"),
-        ),
         Index(
             "uq_dossier_external_ref_family",
             "id_community",
@@ -284,9 +273,8 @@ class DossierModel(_TimestampMixin, LocalBase):
     # Validated against the CRM (scoped to the community) when the dossier is
     # created. NULL for a community-scope procedure.
     id_sharing_operation: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    dossier_type: Mapped[int | None] = mapped_column(Integer, nullable=True)  # DossierType
     status: Mapped[int] = mapped_column(Integer, nullable=False)  # ProcedureStatus
-    step: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    step: Mapped[str] = mapped_column(String(64), nullable=False)
     region: Mapped[int] = mapped_column(Integer, nullable=False)  # Region
     external_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -296,17 +284,17 @@ class DossierModel(_TimestampMixin, LocalBase):
     metadata_json: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
-    id_procedure_definition: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("procedure_definition.id"), nullable=True
+    id_procedure_definition: Mapped[int] = mapped_column(
+        Integer, ForeignKey("procedure_definition.id"), nullable=False
     )
-    regulator: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    family: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    scope: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)  # ProcedureScope
+    regulator: Mapped[str] = mapped_column(String(32), nullable=False)
+    family: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # ProcedureScope
     grd_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
     variant: Mapped[str | None] = mapped_column(String(32), nullable=True)
     requested_effective_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
     effective_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
-    opened_by: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)  # OpenedBy
+    opened_by: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # OpenedBy
     frozen_at: Mapped[datetime.datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -337,16 +325,16 @@ class DocumentModel(_TimestampMixin, LocalBase):
     )
     doc_type: Mapped[str] = mapped_column(String(64), nullable=False)
     origin: Mapped[int] = mapped_column(Integer, nullable=False)  # DocOrigin
-    status: Mapped[int] = mapped_column(Integer, nullable=False)  # DocumentStatus
+    status: Mapped[int] = mapped_column(Integer, nullable=False)  # ProcedureDocumentStatus
     current_version_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("document_version.id"), nullable=True
     )
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    kind: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)  # DocumentKind
+    kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # DocumentKind
     required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("TRUE")
     )
-    requirement_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requirement_code: Mapped[str] = mapped_column(String(64), nullable=False)
     condition_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # Cross-DB reference to the participant who supplies or signs the piece.
     id_member: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -473,7 +461,8 @@ class StatusEventModel(LocalBase):
 
 
 class DeadlineModel(_TimestampMixin, LocalBase):
-    """A regulatory deadline derived from a status transition."""
+    """A clock of a procedure, started by a catalogue rule (``id_deadline_rule``)
+    when its anchor event happened; ``deadline_type`` is the rule's code."""
 
     __tablename__ = "deadline"
     __table_args__ = (
@@ -487,14 +476,6 @@ class DeadlineModel(_TimestampMixin, LocalBase):
             "derived_from_event_id",
             unique=True,
             postgresql_where=text("derived_from_event_id IS NOT NULL"),
-        ),
-        # A recurring obligation has exactly one OPEN occurrence at a time.
-        Index(
-            "uq_deadline_open_recurring",
-            "id_dossier",
-            "deadline_type",
-            unique=True,
-            postgresql_where=text("status = 1 AND recurring = TRUE"),
         ),
         # The reminder sweep: open, un-reminded, due inside the window.
         Index(
@@ -510,7 +491,7 @@ class DeadlineModel(_TimestampMixin, LocalBase):
     id_dossier: Mapped[int] = mapped_column(
         Integer, ForeignKey("dossier.id", ondelete="CASCADE"), nullable=False
     )
-    deadline_type: Mapped[str] = mapped_column(String(64), nullable=False)  # DeadlineType
+    deadline_type: Mapped[str] = mapped_column(String(64), nullable=False)  # rule code
     due_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
     status: Mapped[int] = mapped_column(Integer, nullable=False, default=1)  # DeadlineStatus
     recurring: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -533,9 +514,8 @@ class DeadlineModel(_TimestampMixin, LocalBase):
     reminded_at: Mapped[datetime.datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
-    # NULL only on a July deadline not yet converted by migration 0003.
-    party: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)  # DeadlineParty
-    kind: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)  # DeadlineKind
+    party: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # DeadlineParty
+    kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # DeadlineKind
     derived_from_correspondence_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("correspondence.id"), nullable=True
     )

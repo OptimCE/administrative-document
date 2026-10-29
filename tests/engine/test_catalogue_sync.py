@@ -342,19 +342,20 @@ class TestReservedRows:
 
     async def test_a_deadline_already_linked_is_left_alone(self, db_session):
         reserved = await _reserve(db_session)
+        await sync_plugin(db_session, FakeRegulator())
+        # Linked to ANOTHER procedure's rule: only an unlinked deadline is relinked.
+        other = (await _rules(db_session, (await _definition(db_session, "FAKE_COMMUNITY")).id))[
+            "confirmation"
+        ]
         dossier = await _converted_dossier(db_session, reserved)
-        legacy_rule = await db_session.scalar(
-            select(DeadlineRuleModel.id).where(DeadlineRuleModel.id_procedure_definition.is_(None))
-        )
-        assert legacy_rule is not None, "the July seeds should provide a legacy rule"
-        kept = await _deadline(db_session, dossier, "grd_answer", rule=legacy_rule)
+        kept = await _deadline(db_session, dossier, "grd_answer", rule=other.id)
 
         report = await sync_plugin(db_session, FakeRegulator())
 
         assert report.deadlines_relinked == 0
         row = await db_session.get(DeadlineModel, kept)
         await db_session.refresh(row)
-        assert row.id_deadline_rule == legacy_rule
+        assert row.id_deadline_rule == other.id
 
 
 class TestTheCalendarProjection:

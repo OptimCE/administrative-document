@@ -7,10 +7,10 @@ no uvicorn) precisely to keep the HTTP stack out of that image, so the deadline
 scheduler's ``from api.administrative_document.deps import ...`` crash-looped the
 container on every start.
 
-So the selection lives here, next to the adapters, and both callers import it:
-``deps.py`` wraps it in ``Depends``, ``worker/sweeps.py`` calls it directly. One
-definition, so the request path and the daily tick cannot drift onto different
-adapters — which matters here, because the choice is conditional.
+So the selection lives here, next to the adapters, framework-free: ``deps.py``
+wraps it in ``Depends``, and a worker path that ever needs to publish calls it
+directly, so the two cannot drift onto different adapters — which matters here,
+because the choice is conditional.
 """
 
 from __future__ import annotations

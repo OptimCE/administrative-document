@@ -167,16 +167,17 @@ CREATE TRIGGER trg_procedure_definition_updated_at BEFORE UPDATE ON procedure_de
 -- ---- deadline_rule ---------------------------------------------------------
 -- The regulatory clocks, as data.
 --
--- Two generations share the table until the July lifecycle is removed:
---   * LEGACY rows (id_procedure_definition IS NULL): "when <trigger_event>
---     happens on a dossier of <dossier_type> in <region>, a <deadline_type>
---     deadline falls due <offset_value> <offset_unit> later". Seeded by
---     seeds/0001, community-overridable, read only by the July code.
---   * CATALOGUE rows: belong to one procedure_definition, written by the
---     catalogue sync, never overridden per community. `code` names the rule
---     inside its procedure and is what deadline.deadline_type carries.
---     kind 1 (relative) = <offset_value> <offset_unit> after <anchor_event>;
---     kind 2 (annual) = on <annual_month>/<annual_day> of the period.
+-- Every rule belongs to one procedure_definition, written by the catalogue
+-- sync, never overridden per community. `code` names the rule inside its
+-- procedure and is what deadline.deadline_type carries.
+--   kind 1 (relative) = <offset_value> <offset_unit> after <anchor_event>;
+--   kind 2 (annual) = on <annual_month>/<annual_day> of the period.
+--
+-- The July columns (region, dossier_type, trigger_event, deadline_type,
+-- recurring, recur_months, description) and the LEGACY branch of the CHECK
+-- outlive the July code on purpose: on a fresh install the released reference
+-- data (optimce-migrator 002) still inserts the July rules, which migration
+-- 0003 then deletes, and 0004 deletes any left. Nothing reads them.
 CREATE TABLE IF NOT EXISTS deadline_rule (
     id            SERIAL       PRIMARY KEY,
     id_community  INTEGER,                    -- NULL = platform default
@@ -259,30 +260,29 @@ CREATE TRIGGER trg_deadline_rule_updated_at BEFORE UPDATE ON deadline_rule
 -- own; both are a copy of the journal head, written only by appending a
 -- status_event (see propagate_journal_head below).
 --
--- dossier_type is the July classification, kept until that lifecycle is removed:
--- a row with dossier_type and no procedure definition is a July dossier not yet
--- converted (migration 0003 converts them all).
+-- dossier_type is the July classification, dead since the July lifecycle went:
+-- migration 0003 reads it to convert July dossiers, so the column stays.
 CREATE TABLE IF NOT EXISTS dossier (
     id                   SERIAL       PRIMARY KEY,
     id_community         INTEGER      NOT NULL,
     id_sharing_operation INTEGER,                  -- cross-DB ref; NULL for community scope
-    dossier_type         INTEGER,                  -- DossierType (July rows only)
+    dossier_type         INTEGER,                  -- July DossierType (converted rows)
     status               INTEGER      NOT NULL,    -- ProcedureStatus (journal-head copy)
-    step                 VARCHAR(64),              -- plugin step (journal-head copy)
+    step                 VARCHAR(64)  NOT NULL,    -- plugin step (journal-head copy)
     region               INTEGER      NOT NULL,    -- resolved from community.regulator
     external_ref         VARCHAR(128),             -- CWaPE / DSO file reference
     title                VARCHAR(255),
     submitted_at         TIMESTAMPTZ,
     metadata_json        JSONB        NOT NULL DEFAULT '{}'::jsonb,
-    id_procedure_definition INTEGER   REFERENCES procedure_definition (id),
-    regulator            VARCHAR(32),              -- plugin code, kept from creation
-    family               VARCHAR(64),
-    scope                SMALLINT,                 -- ProcedureScope, copied from the definition
+    id_procedure_definition INTEGER   NOT NULL REFERENCES procedure_definition (id),
+    regulator            VARCHAR(32)  NOT NULL,    -- plugin code, kept from creation
+    family               VARCHAR(64)  NOT NULL,
+    scope                SMALLINT     NOT NULL,    -- ProcedureScope, copied from the definition
     grd_ref              VARCHAR(64),              -- reference DSO, when the recipient is one
     variant              VARCHAR(32),              -- plugin route; CWaPE: simple | authorization
     requested_effective_date DATE,
     effective_date       DATE,
-    opened_by            SMALLINT,                 -- OpenedBy: 1=system, 2=user, 3=migration
+    opened_by            SMALLINT     NOT NULL,    -- OpenedBy: 1=system, 2=user, 3=migration
     frozen_at            TIMESTAMPTZ,              -- sent: no change is attached after this
     period_key           VARCHAR(16),              -- calendar procedures: one per period
     next_action_code     VARCHAR(64),
@@ -290,32 +290,18 @@ CREATE TABLE IF NOT EXISTS dossier (
     effect_error_json    JSONB,                    -- last effect write the core DB refused
     created_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    -- A row is a July dossier awaiting conversion, or a complete procedure.
-    CONSTRAINT ck_dossier_procedure CHECK (COALESCE(
-        (id_procedure_definition IS NULL AND dossier_type IS NOT NULL
-            AND id_sharing_operation IS NOT NULL)
-        OR
-        (id_procedure_definition IS NOT NULL AND regulator IS NOT NULL
-            AND family IS NOT NULL AND scope IN (1, 2) AND opened_by IN (1, 2, 3)),
-        FALSE)
-    ),
+    CONSTRAINT ck_dossier_procedure CHECK (scope IN (1, 2) AND opened_by IN (1, 2, 3)),
     CONSTRAINT ck_dossier_scope_subject CHECK (
-        scope IS NULL
-        OR (scope = 1 AND id_sharing_operation IS NULL)
+        (scope = 1 AND id_sharing_operation IS NULL)
         OR (scope = 2 AND id_sharing_operation IS NOT NULL)
     )
 );
 
 CREATE INDEX IF NOT EXISTS ix_dossier_status ON dossier (id_community, status);
-CREATE INDEX IF NOT EXISTS ix_dossier_type   ON dossier (id_community, dossier_type);
 -- The per-operation view: "everything filed for this sharing operation".
 CREATE INDEX IF NOT EXISTS ix_dossier_operation
     ON dossier (id_community, id_sharing_operation);
--- An authority reference identifies exactly one dossier of a given type (July
--- rows) and one procedure of a given family (every converted or engine row).
-CREATE UNIQUE INDEX IF NOT EXISTS uq_dossier_external_ref
-    ON dossier (id_community, dossier_type, external_ref)
-    WHERE external_ref IS NOT NULL;
+-- An authority reference identifies exactly one procedure of a given family.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_dossier_external_ref_family
     ON dossier (id_community, family, external_ref)
     WHERE external_ref IS NOT NULL AND family IS NOT NULL;
@@ -345,17 +331,14 @@ CREATE TABLE IF NOT EXISTS document (
     status             INTEGER      NOT NULL,   -- ProcedureDocumentStatus (journal-head copy)
     current_version_id INTEGER,                 -- FK added after document_version exists
     title              VARCHAR(255),
-    kind               SMALLINT,                -- DocumentKind: 1=generated, 2=collected, 3=received
+    kind               SMALLINT     NOT NULL,   -- DocumentKind: 1=generated, 2=collected, 3=received
     required           BOOLEAN      NOT NULL DEFAULT TRUE,
-    requirement_code   VARCHAR(64),             -- plugin piece code
+    requirement_code   VARCHAR(64)  NOT NULL,   -- plugin piece code
     condition_json     JSONB,                   -- why a conditional piece is required
     id_member          INTEGER,                 -- cross-DB ref: who supplies or signs it
     created_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    CONSTRAINT ck_document_kind CHECK (kind IS NULL OR kind IN (1, 2, 3)),
-    -- A piece is a July document awaiting conversion, or fully described.
-    CONSTRAINT ck_document_requirement
-        CHECK ((kind IS NULL) = (requirement_code IS NULL))
+    CONSTRAINT ck_document_kind CHECK (kind IN (1, 2, 3))
 );
 
 CREATE INDEX IF NOT EXISTS ix_document_dossier ON document (id_community, id_dossier);
@@ -677,33 +660,26 @@ CREATE TABLE IF NOT EXISTS deadline (
     id                    SERIAL       PRIMARY KEY,
     id_community          INTEGER      NOT NULL,
     id_dossier            INTEGER      NOT NULL REFERENCES dossier (id) ON DELETE CASCADE,
-    deadline_type         VARCHAR(64)  NOT NULL,   -- DeadlineType
+    deadline_type         VARCHAR(64)  NOT NULL,   -- the catalogue rule's code
     due_date              DATE         NOT NULL,
     status                INTEGER      NOT NULL DEFAULT 1,  -- DeadlineStatus: 1=open
-    recurring             BOOLEAN      NOT NULL DEFAULT FALSE,
+    recurring             BOOLEAN      NOT NULL DEFAULT FALSE,  -- July; always FALSE
     derived_from_event_id BIGINT       REFERENCES status_event (id),
     id_deadline_rule      INTEGER      REFERENCES deadline_rule (id),
     resolved_at           TIMESTAMPTZ,
-    -- When the "due soon" reminder was emitted for THIS occurrence. The local
-    -- idempotency marker for a sweep that does not mutate the row it reads:
-    -- `outbound_message.dedupe_key` protects the email, but nothing protects the
-    -- in-app notification, so a daily sweep would otherwise create a duplicate
-    -- bell entry every day until the due date. A rolled recurring occurrence is
-    -- a fresh INSERT, so it starts NULL and gets its own reminder.
+    -- When the reminder was emitted for this deadline. The daily jobs' local
+    -- idempotency marker: `outbound_message.dedupe_key` protects the email, but
+    -- nothing protects the in-app notification, so a daily pass would otherwise
+    -- create a duplicate bell entry every day until the due date.
     reminded_at           TIMESTAMPTZ,
-    -- Who must act and what kind of clock this is. NULL on a July deadline not
-    -- yet converted (migration 0003 converts them all).
-    party                 SMALLINT,    -- DeadlineParty: 1=community, 2=grd, 3=regulator
-    kind                  SMALLINT,    -- DeadlineKind: 1=submission, 2=response, 3=lapse, 4=effect
+    -- Who must act and what kind of clock this is.
+    party                 SMALLINT     NOT NULL,   -- DeadlineParty: 1=community, 2=grd, 3=regulator
+    kind                  SMALLINT     NOT NULL,   -- DeadlineKind: 1=submission, 2=response, 3=lapse, 4=effect
     -- The message that started this clock (an incomplete notice, a decision…).
     derived_from_correspondence_id BIGINT REFERENCES correspondence (id),
     created_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    CONSTRAINT ck_deadline_party_kind CHECK (COALESCE(
-        (party IS NULL AND kind IS NULL)
-        OR (party IN (1, 2, 3) AND kind IN (1, 2, 3, 4)),
-        FALSE)
-    )
+    CONSTRAINT ck_deadline_party_kind CHECK (party IN (1, 2, 3) AND kind IN (1, 2, 3, 4))
 );
 
 -- CREATE TABLE IF NOT EXISTS never adds a column, so an added column needs an
@@ -714,23 +690,16 @@ ALTER TABLE deadline ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS ix_deadline_dashboard
     ON deadline (id_community, status, due_date);
 CREATE INDEX IF NOT EXISTS ix_deadline_dossier ON deadline (id_dossier);
--- The reminder sweep: open, un-reminded, due inside the window.
+-- The daily reminder pass: open, un-reminded, due inside the window.
 CREATE INDEX IF NOT EXISTS ix_deadline_reminder
     ON deadline (id_community, due_date) WHERE status = 1 AND reminded_at IS NULL;
 
 -- Idempotency: re-processing the same status_event cannot create a second
--- deadline of the same type. Partial, because a rolled recurring occurrence
--- carries no originating event (see below).
+-- deadline of the same type. Partial: a deadline started by a response carries
+-- no status_event.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_deadline_event
     ON deadline (id_dossier, deadline_type, derived_from_event_id)
     WHERE derived_from_event_id IS NOT NULL;
-
--- A recurring obligation (annual reporting) has exactly ONE open occurrence at
--- a time; the next is only created when the current one is resolved. This index
--- is what makes the roll safe under concurrency and retries.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_deadline_open_recurring
-    ON deadline (id_dossier, deadline_type)
-    WHERE status = 1 AND recurring = TRUE;
 
 DROP TRIGGER IF EXISTS trg_deadline_updated_at ON deadline;
 CREATE TRIGGER trg_deadline_updated_at BEFORE UPDATE ON deadline

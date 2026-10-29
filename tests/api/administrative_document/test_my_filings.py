@@ -18,6 +18,7 @@ from sqlalchemy import text
 import tests.factories.crm_participant_factory as f
 from domain import prefill
 from tests.conftest import gateway_headers
+from tests.procedures import make_piece
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,26 +29,6 @@ STRANGER_USER = "auth-user-stranger"
 
 def member_headers_for(auth_community_id: str, user_id: str) -> dict[str, str]:
     return gateway_headers(auth_community_id, role="MEMBER", user_id=user_id)
-
-
-async def make_dossier(client, headers, sharing_operation) -> int:
-    response = await client.post(
-        "/dossiers",
-        json={"dossier_type": 1, "title": "Dossier", "id_sharing_operation": sharing_operation},
-        headers=headers,
-    )
-    assert response.status_code == 200, response.text
-    return int(response.json()["data"]["id"])
-
-
-async def make_document(client, headers, dossier_id, doc_type="annex6_sharing_form") -> int:
-    response = await client.post(
-        f"/dossiers/{dossier_id}/documents",
-        json={"doc_type": doc_type, "title": "Annexe"},
-        headers=headers,
-    )
-    assert response.status_code == 200, response.text
-    return int(response.json()["data"]["id"])
 
 
 async def freeze_version(db_session, *, document_id: int, id_community: int, snapshot: dict) -> int:
@@ -124,8 +105,7 @@ class TestOwnRowsOnly:
         self, client, manager_headers, db_session, community, sharing_operation
     ):
         alice, bob = await seed_two_members(db_session, community)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        dossier_id, document_id = await make_piece(client, manager_headers, db_session)
         await freeze_version(
             db_session,
             document_id=document_id,
@@ -149,8 +129,7 @@ class TestOwnRowsOnly:
         self, client, manager_headers, db_session, community, sharing_operation
     ):
         alice, bob = await seed_two_members(db_session, community)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        dossier_id, document_id = await make_piece(client, manager_headers, db_session)
         await freeze_version(
             db_session,
             document_id=document_id,
@@ -173,8 +152,7 @@ class TestOwnRowsOnly:
         self, client, manager_headers, db_session, community, sharing_operation
     ):
         alice, _bob = await seed_two_members(db_session, community)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        dossier_id, document_id = await make_piece(client, manager_headers, db_session)
         # A filing frozen before identity stamping existed: it names Alice, but
         # only by display name. Guessing from that would collide on homonyms, so
         # the filing is simply not hers to see.
@@ -198,8 +176,7 @@ class TestReachability:
         self, client, manager_headers, db_session, community, sharing_operation
     ):
         alice, bob = await seed_two_members(db_session, community)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        dossier_id, document_id = await make_piece(client, manager_headers, db_session)
         await freeze_version(
             db_session,
             document_id=document_id,
@@ -220,8 +197,7 @@ class TestReachability:
         self, client, manager_headers, db_session, community, sharing_operation
     ):
         alice, bob = await seed_two_members(db_session, community)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        dossier_id, document_id = await make_piece(client, manager_headers, db_session)
         await freeze_version(
             db_session,
             document_id=document_id,
@@ -238,8 +214,7 @@ class TestReachability:
         self, client, manager_headers, db_session, community, sharing_operation
     ):
         alice, _bob = await seed_two_members(db_session, community)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        dossier_id, document_id = await make_piece(client, manager_headers, db_session)
         version_id = int(
             (
                 await db_session.execute(
@@ -283,8 +258,7 @@ class TestTenancy:
     ):
         alice, bob = await seed_two_members(db_session, community)
         # The SAME member ids appear in a filing owned by the other community.
-        other_dossier = await make_dossier(client, other_manager_headers, other_sharing_operation)
-        other_document = await make_document(client, other_manager_headers, other_dossier)
+        other_dossier, other_document = await make_piece(client, other_manager_headers, db_session)
         await freeze_version(
             db_session,
             document_id=other_document,
@@ -307,8 +281,7 @@ class TestPayload:
         self, client, manager_headers, db_session, community, sharing_operation
     ):
         alice, bob = await seed_two_members(db_session, community)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        dossier_id, document_id = await make_piece(client, manager_headers, db_session)
         await freeze_version(
             db_session,
             document_id=document_id,
@@ -321,7 +294,7 @@ class TestPayload:
         )
 
         filing = response.json()["data"][0]
-        assert filing["document"]["doc_type"] == "annex6_sharing_form"
+        assert filing["document"]["doc_type"] == "annex6_notification"
         assert filing["version"]["version_no"] == 1
         assert filing["dossier"]["id"] == dossier_id
         # `generated_by` is a Keycloak subject — which manager pressed the

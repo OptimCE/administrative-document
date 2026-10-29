@@ -370,8 +370,11 @@ def fake_storage(monkeypatch) -> dict[tuple[str | None, str], bytes]:
     """In-memory stand-in for the object store.
 
     Nothing real is contacted in tests, but versions still round-trip through
-    upload/download so the key layout and the download path stay covered.
+    upload/download so the key layout and the download path stay covered. One
+    store for both modules that touch it: /admin uploads (pieces, messages) and
+    the version download outside /admin.
     """
+    from api.admin import procedures
     from api.administrative_document import service as service_module
 
     store: dict[tuple[str | None, str], bytes] = {}
@@ -385,7 +388,8 @@ def fake_storage(monkeypatch) -> dict[tuple[str | None, str], bytes]:
         except KeyError:
             raise FileNotFoundError(key) from None
 
-    monkeypatch.setattr(service_module, "upload", _upload)
+    monkeypatch.setattr(procedures, "upload", _upload)
+    monkeypatch.setattr(procedures, "download", _download)
     monkeypatch.setattr(service_module, "download", _download)
     return store
 

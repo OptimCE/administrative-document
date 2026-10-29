@@ -162,14 +162,6 @@ class TestTheDashboard:
         rows = (await client.get("/admin/deadlines", headers=headers)).json()["data"]
         assert [(r["code"], r["id_dossier"]) for r in rows] == [("grd_control", dossier_id)]
 
-    async def test_july_lists_leave_engine_procedures_out(self, client, db_session):
-        world = await _world(db_session)
-        headers = await _headers(db_session, world)
-        await _file(world, "operation.meter_removed", EAN[0])
-        response = await client.get("/dossiers", headers=headers)
-        assert response.status_code == 200, response.text
-        assert response.json()["data"] == []
-
 
 class TestTheFullList:
     async def test_keeps_what_the_dashboard_lets_go_newest_first(

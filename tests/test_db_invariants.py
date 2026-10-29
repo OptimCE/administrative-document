@@ -10,7 +10,7 @@ ALL IMMEDIATE`` forces the check to happen where the test can observe it — thi
 is the standard way to test a deferred constraint.
 """
 
-import datetime
+import itertools
 
 import pytest
 from sqlalchemy import text
@@ -21,14 +21,23 @@ pytestmark = pytest.mark.asyncio
 DOCUMENT, DOSSIER = 1, 2
 
 
+_TYPES = itertools.count(1)
+
+
 async def _insert_dossier(session, *, status: int = 1) -> int:
+    """A procedure NOT yet journaled (the caller journals its birth), of a type
+    of its own so that two drafts in one test never share a drawer."""
+    code = f"TYPE_{next(_TYPES)}"
+    definition = await _definition(session, code=code)
     result = await session.execute(
         text(
             "INSERT INTO dossier "
-            "(id_community, id_sharing_operation, dossier_type, status, region) "
-            "VALUES (1, 1, 1, :status, 1) RETURNING id"
+            "(id_community, id_sharing_operation, status, step, region, "
+            " id_procedure_definition, regulator, family, scope, opened_by) "
+            "VALUES (1, 1, :status, 'draft', 1, :definition, 'TEST-REG', :code, 2, 1) "
+            "RETURNING id"
         ),
-        {"status": status},
+        {"status": status, "definition": definition, "code": code},
     )
     return int(result.scalar_one())
 
@@ -42,6 +51,8 @@ async def _journal(
     to_step: str | None = None,
     id_community: int = 1,
 ) -> int:
+    if subject_type == DOSSIER and to_step is None:
+        to_step = "draft"  # a dossier's step is NOT NULL, and the journal writes it
     result = await session.execute(
         text(
             "INSERT INTO status_event "
@@ -159,7 +170,7 @@ class TestStatusIsBackedByTheJournal:
         dossier_id = await _insert_dossier(db_session, status=1)
         await _journal(db_session, subject_type=DOSSIER, subject_id=dossier_id, to_status=1)
         await _journal(db_session, subject_type=DOSSIER, subject_id=dossier_id, to_status=2)
-        assert await _dossier_status(db_session, dossier_id) == (2, None)
+        assert await _dossier_status(db_session, dossier_id) == (2, "draft")
         await _check_now(db_session)  # must not raise
 
     async def test_a_document_status_is_checked_against_its_own_subject_type(self, db_session):
@@ -168,8 +179,9 @@ class TestStatusIsBackedByTheJournal:
         await _journal(db_session, subject_type=DOSSIER, subject_id=dossier_id, to_status=1)
         result = await db_session.execute(
             text(
-                "INSERT INTO document (id_community, id_dossier, doc_type, origin, status) "
-                "VALUES (1, :id_dossier, 'annex6', 2, 1) RETURNING id"
+                "INSERT INTO document (id_community, id_dossier, doc_type, origin, status, "
+                " kind, requirement_code) "
+                "VALUES (1, :id_dossier, 'annex6', 2, 1, 2, 'annex6') RETURNING id"
             ),
             {"id_dossier": dossier_id},
         )
@@ -211,8 +223,9 @@ class TestVersionsAreAppendOnly:
         await _journal(session, subject_type=DOSSIER, subject_id=dossier_id, to_status=1)
         result = await session.execute(
             text(
-                "INSERT INTO document (id_community, id_dossier, doc_type, origin, status) "
-                "VALUES (1, :id_dossier, 'annex6', 2, 1) RETURNING id"
+                "INSERT INTO document (id_community, id_dossier, doc_type, origin, status, "
+                " kind, requirement_code) "
+                "VALUES (1, :id_dossier, 'annex6', 2, 1, 2, 'annex6') RETURNING id"
             ),
             {"id_dossier": dossier_id},
         )
@@ -273,8 +286,10 @@ class TestRenderStateIsSeparateFromTheJournal:
         await _journal(session, subject_type=DOSSIER, subject_id=dossier_id, to_status=1)
         result = await session.execute(
             text(
-                "INSERT INTO document (id_community, id_dossier, doc_type, origin, status) "
-                "VALUES (1, :id_dossier, 'annex6_notification', 1, 1) RETURNING id"
+                "INSERT INTO document (id_community, id_dossier, doc_type, origin, status, "
+                " kind, requirement_code) "
+                "VALUES (1, :id_dossier, 'annex6_notification', 1, 1, 1, 'annex6_notification') "
+                "RETURNING id"
             ),
             {"id_dossier": dossier_id},
         )
@@ -369,28 +384,14 @@ class TestDeadlineIdempotency:
         )
         insert = text(
             "INSERT INTO deadline "
-            "(id_community, id_dossier, deadline_type, due_date, status, derived_from_event_id) "
-            "VALUES (1, :id_dossier, 'completeness_check', DATE '2026-09-21', 1, :event_id)"
+            "(id_community, id_dossier, deadline_type, due_date, status, party, kind, "
+            " derived_from_event_id) "
+            "VALUES (1, :id_dossier, 'completeness', DATE '2026-09-21', 1, 2, 2, :event_id)"
         )
         params = {"id_dossier": dossier_id, "event_id": event_id}
         await db_session.execute(insert, params)
         with pytest.raises(DBAPIError):
             await db_session.execute(insert, params)
-
-    async def test_only_one_recurring_occurrence_may_be_open_at_a_time(self, db_session):
-        dossier_id = await _insert_dossier(db_session)
-        insert = text(
-            "INSERT INTO deadline "
-            "(id_community, id_dossier, deadline_type, due_date, status, recurring) "
-            "VALUES (1, :id_dossier, 'annual_report', :due, 1, TRUE)"
-        )
-        await db_session.execute(
-            insert, {"id_dossier": dossier_id, "due": datetime.date(2027, 9, 21)}
-        )
-        with pytest.raises(DBAPIError):
-            await db_session.execute(
-                insert, {"id_dossier": dossier_id, "due": datetime.date(2028, 9, 21)}
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +461,7 @@ class TestTheJournalWritesTheStatus:
         await _journal(
             db_session, subject_type=DOSSIER, subject_id=dossier_id, to_status=5, id_community=2
         )
-        assert await _dossier_status(db_session, dossier_id) == (1, None)
+        assert await _dossier_status(db_session, dossier_id) == (1, "draft")
         await _check_now(db_session)
 
     async def test_a_document_status_is_written_by_its_journal(self, db_session):
@@ -470,8 +471,9 @@ class TestTheJournalWritesTheStatus:
             (
                 await db_session.execute(
                     text(
-                        "INSERT INTO document (id_community, id_dossier, doc_type, origin, status) "
-                        "VALUES (1, :id_dossier, 'annex6', 2, 6) RETURNING id"
+                        "INSERT INTO document (id_community, id_dossier, doc_type, origin, status, "
+                        " kind, requirement_code) "
+                        "VALUES (1, :id_dossier, 'annex6', 2, 6, 2, 'annex6') RETURNING id"
                     ),
                     {"id_dossier": dossier_id},
                 )
@@ -598,7 +600,7 @@ class TestAProcedureIsWhole:
             await _procedure(db_session, id_definition=definition, operation=None)
 
     async def test_a_procedure_without_a_definition_is_refused(self, db_session):
-        """Only a July row (dossier_type set) may lack the engine's columns."""
+        """Every row is a procedure of a catalogue (migration 0004)."""
         with pytest.raises(DBAPIError):
             await db_session.execute(
                 text(
@@ -621,12 +623,13 @@ class TestAProcedureIsWhole:
                 {"definition": definition},
             )
 
-    async def test_a_july_row_still_needs_its_operation(self, db_session):
+    async def test_a_july_shaped_row_is_refused(self, db_session):
+        """A July type and an operation no longer make a dossier."""
         with pytest.raises(DBAPIError):
             await db_session.execute(
                 text(
-                    "INSERT INTO dossier (id_community, dossier_type, status, region) "
-                    "VALUES (1, 1, 1, 1)"
+                    "INSERT INTO dossier (id_community, id_sharing_operation, dossier_type, "
+                    " status, region) VALUES (1, 1, 1, 1, 1)"
                 )
             )
 
@@ -683,15 +686,18 @@ class TestCatalogueRules:
         with pytest.raises(DBAPIError):
             await self._rule(db_session, definition=await _definition(db_session), kind=None)
 
-    async def test_a_deadline_has_both_party_and_kind_or_neither(self, db_session):
+    @pytest.mark.parametrize(("party", "kind"), [(2, None), (None, 2), (None, None)])
+    async def test_a_deadline_says_who_and_what(self, db_session, party, kind):
+        """Party and kind are always there: no July deadline remains (0004)."""
         dossier_id = await _insert_dossier(db_session)
         with pytest.raises(DBAPIError):
             await db_session.execute(
                 text(
                     "INSERT INTO deadline (id_community, id_dossier, deadline_type, due_date, "
-                    " party, kind) VALUES (1, :id, 'completeness', DATE '2026-11-20', 2, NULL)"
+                    " party, kind) VALUES (1, :id, 'completeness', DATE '2026-11-20', "
+                    " :party, :kind)"
                 ),
-                {"id": dossier_id},
+                {"id": dossier_id, "party": party, "kind": kind},
             )
 
     async def test_an_annual_rule_needs_no_offset(self, db_session):

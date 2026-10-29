@@ -1,9 +1,8 @@
-"""Request/response models for the administrative-document API.
+"""Request/response models for the administrative-document routes outside
+``/admin`` (``api/admin/schemas.py`` has the procedures').
 
 Wire conventions match the other OptimCE annexes: snake_case fields, enums sent
-as their integer values, dates as ISO-8601. Statuses are never writable
-directly — they change only through a transition endpoint, which is what keeps
-the journal authoritative.
+as their integer values, dates as ISO-8601.
 """
 
 import datetime
@@ -11,121 +10,19 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.const import (
-    AcknowledgementResult,
-    DeadlineStatus,
-    DocOrigin,
-    DocumentStatus,
-    DossierStatus,
-    DossierType,
-    OffsetUnit,
-    Region,
-    RenderState,
-)
+from shared.const import Region, RenderState
 
 # --- sharing operations (read-only mirror of the CRM) ------------------------
 
 
 class SharingOperationOut(BaseModel):
-    """A sharing operation a dossier can be filed for. Sourced from the CRM."""
+    """A sharing operation of the community. Sourced from the CRM."""
 
     id: int
     name: str
 
 
-# --- dossiers ---------------------------------------------------------------
-
-
-class DossierCreate(BaseModel):
-    dossier_type: DossierType
-    id_sharing_operation: int = Field(
-        description=(
-            "The CRM sharing operation this dossier is filed for. Required: a "
-            "community running several operations files one dossier per operation."
-        )
-    )
-    title: str | None = Field(default=None, max_length=255)
-    external_ref: str | None = Field(
-        default=None, max_length=128, description="CWaPE / DSO file reference, once known."
-    )
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class DossierUpdate(BaseModel):
-    """Only the free-form fields.
-
-    Status changes go through /transition, and the sharing operation is fixed at
-    creation — re-pointing a filed dossier at a different operation would
-    invalidate everything already recorded against it.
-    """
-
-    title: str | None = Field(default=None, max_length=255)
-    external_ref: str | None = Field(default=None, max_length=128)
-    metadata: dict[str, Any] | None = None
-
-
-class DossierOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    dossier_type: DossierType
-    status: DossierStatus
-    region: Region
-    id_sharing_operation: int
-    title: str | None = None
-    external_ref: str | None = None
-    submitted_at: datetime.datetime | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime.datetime
-    updated_at: datetime.datetime
-
-
-# --- documents --------------------------------------------------------------
-
-
-class DocumentCreate(BaseModel):
-    doc_type: str = Field(max_length=64)
-    title: str | None = Field(default=None, max_length=255)
-
-
-class DocumentVersionOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    version_no: int
-    content_sha256: str | None = None
-    content_type: str | None = None
-    byte_size: int | None = None
-    original_filename: str | None = None
-    id_template: int | None = None
-    generated_by: str | None = None
-    #: The frozen render input. NULL for uploaded versions; for generated ones it
-    #: is exactly what was sent to the renderer (spec R2).
-    data_snapshot_json: dict[str, Any] | None = None
-    docgen_request_id: str | None = None
-    created_at: datetime.datetime
-
-
-class DocumentOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    id_dossier: int
-    doc_type: str
-    origin: DocOrigin
-    status: DocumentStatus
-    title: str | None = None
-    current_version_id: int | None = None
-    version_count: int = 0
-    created_at: datetime.datetime
-    updated_at: datetime.datetime
-
-
-class DocumentDetailOut(DocumentOut):
-    versions: list[DocumentVersionOut] = Field(default_factory=list)
-
-
-# --- generation (Phase 2) ---------------------------------------------------
+# --- generation ---------------------------------------------------
 
 
 class PrefillWarningOut(BaseModel):
@@ -180,99 +77,8 @@ class RenderStatusOut(BaseModel):
     render_error: dict[str, Any] | None = None
     requested_at: datetime.datetime | None = None
     current_version_id: int | None = None
-    status: DocumentStatus
-
-
-# --- transitions ------------------------------------------------------------
-
-
-class TransitionRequest(BaseModel):
-    """Generic transition. ``context`` carries whatever the target status requires."""
-
-    to_status: int
-    context: dict[str, Any] = Field(default_factory=dict)
-
-
-class MarkSentRequest(BaseModel):
-    submission_date: datetime.date = Field(
-        description="The date the document was actually transmitted; drives derived deadlines."
-    )
-    note: str | None = None
-
-
-class AcknowledgeRequest(BaseModel):
-    acknowledged_date: datetime.date
-    authority_file_ref: str = Field(
-        max_length=128, description="The CWaPE / DSO reference for the acknowledged filing."
-    )
-    result: AcknowledgementResult = AcknowledgementResult.COMPLETE
-    note: str | None = None
-
-
-class RollbackRequest(BaseModel):
-    """A traced corrective transition. History is appended to, never rewritten.
-
-    ``reason`` is mandatory for every corrective edge, but some of them also
-    carry the target status' own requirement — rolling a document back *to* SENT
-    still needs the submission date it is being restored to. ``context`` carries
-    those, exactly as it does on the generic transition endpoint.
-    """
-
-    to_status: int
-    reason: str = Field(min_length=1, max_length=512)
-    context: dict[str, Any] = Field(default_factory=dict)
-
-
-class StatusEventOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    subject_type: int
-    subject_id: int
-    from_status: int | None = None
-    to_status: int
-    is_corrective: bool
-    actor_id: str | None = None
-    occurred_at: datetime.datetime
-    context: dict[str, Any] = Field(default_factory=dict)
-
-
-# --- deadlines --------------------------------------------------------------
-
-
-class DeadlineOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    id_dossier: int
-    deadline_type: str
-    due_date: datetime.date
-    status: DeadlineStatus
-    recurring: bool
-    derived_from_event_id: int | None = None
-    id_deadline_rule: int | None = None
-    resolved_at: datetime.datetime | None = None
-    created_at: datetime.datetime
-
-
-class DeadlineResolveRequest(BaseModel):
-    """Resolve an open deadline. Only met/cancelled are caller-settable —
-    ``missed`` is derived by the sweep, never asserted by a user."""
-
-    status: DeadlineStatus = Field(description="2 = met, 4 = cancelled")
-
-
-class DeadlineSweepOut(BaseModel):
-    missed: int
-    rolled: int
-
-
-# --- dossier detail (composed) ----------------------------------------------
-
-
-class DossierDetailOut(DossierOut):
-    documents: list[DocumentOut] = Field(default_factory=list)
-    deadlines: list[DeadlineOut] = Field(default_factory=list)
+    #: ProcedureDocumentStatus: the piece's status, READY once a render landed.
+    status: int
 
 
 # --- registries -------------------------------------------------------------
@@ -312,49 +118,13 @@ class TemplateUpdate(BaseModel):
     label: str | None = Field(default=None, max_length=255)
 
 
-class DeadlineRuleOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    id_community: int | None = None
-    region: Region
-    dossier_type: DossierType
-    trigger_event: str
-    deadline_type: str
-    offset_value: int
-    offset_unit: OffsetUnit
-    recurring: bool
-    recur_months: int | None = None
-    description: str | None = None
-
-
-class DeadlineRuleCreate(BaseModel):
-    region: Region
-    dossier_type: DossierType
-    trigger_event: str = Field(max_length=64)
-    deadline_type: str = Field(max_length=64)
-    offset_value: int = Field(ge=0)
-    offset_unit: OffsetUnit
-    recurring: bool = False
-    recur_months: int | None = Field(default=None, ge=1)
-    description: str | None = Field(default=None, max_length=255)
-
-
-class DeadlineRuleUpdate(BaseModel):
-    offset_value: int | None = Field(default=None, ge=0)
-    offset_unit: OffsetUnit | None = None
-    recurring: bool | None = None
-    recur_months: int | None = Field(default=None, ge=1)
-    description: str | None = Field(default=None, max_length=255)
-
-
 # --------------------------------------------------------------------------- #
 # "What has been filed about me" — the member-facing read
 #
-# A separate schema tree from DocumentDetailOut on purpose. That one exposes the
-# WHOLE `data_snapshot_json`, which names every participant of the community; a
-# member-facing DTO that reused it would leak the rest of the community in the
-# network response even if the UI only rendered one row (decision B4).
+# Never a version's `data_snapshot_json`: it names every participant of the
+# community, and a member-facing DTO that carried it would leak the rest of the
+# community in the network response even if the UI only rendered one row
+# (decision B4).
 # --------------------------------------------------------------------------- #
 
 
@@ -362,11 +132,11 @@ class MyFilingDossierOut(BaseModel):
     """Document-level context. Safe to show: it identifies the filing, not people."""
 
     id: int
-    # None for an engine procedure, which names its type by family and step.
-    dossier_type: DossierType | None = None
+    #: ProcedureStatus, the engine's common status.
     status: int
-    family: str | None = None
-    step: str | None = None
+    family: str
+    #: The regulator plugin's step code.
+    step: str
     title: str | None = None
     external_ref: str | None = None
     submitted_at: datetime.datetime | None = None
@@ -375,7 +145,8 @@ class MyFilingDossierOut(BaseModel):
 class MyFilingDocumentOut(BaseModel):
     id: int
     doc_type: str
-    status: DocumentStatus
+    #: ProcedureDocumentStatus.
+    status: int
     title: str | None = None
 
 

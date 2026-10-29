@@ -12,8 +12,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select, text
 
-from core.context_vars import current_internal_community_id
-from engine.catalogue_sync import sync_plugin
+from core.notifications.repository import NotificationRepository
 from engine.contracts import build_registry
 from engine.lifecycle import context_for, open_procedure
 from regulators.testing.fake import FakeRegulator
@@ -23,14 +22,13 @@ from shared.const import (
     DeadlineStatus,
     OpenedBy,
 )
+from shared.models.crm_models import NotificationModel
 from shared.models.crm_notification_models import OutboundMessageModel
 from shared.models.local_models import DeadlineModel, DossierModel, ModuleActivationModel
-from tests.api.administrative_document.test_notifications import notifications_of, seed_roster
-from tests.api.administrative_document.test_transitions import make_dossier
 from tests.engine.world import World, baseline_procedure, make_world, set_subscription
+from tests.notifications import notifications_of, seed_roster
 from worker import engine_jobs
 from worker.engine_jobs import _JOBS_ADVISORY_LOCK_KEY, run_daily_jobs, try_run_daily_jobs
-from worker.sweeps import sweep_deadlines_for_every_community
 
 pytestmark = pytest.mark.asyncio
 
@@ -206,6 +204,26 @@ class TestNotifications:
         await _run(world, APRIL_15 + datetime.timedelta(hours=2))
         assert len(await notifications_of(world.session)) == 3
 
+    async def test_a_failing_notification_store_does_not_undo_the_day(
+        self, db_session, monkeypatch
+    ):
+        """``publish`` runs in a SAVEPOINT: the deadline still goes MISSED, and
+        the rolled-back savepoint leaves no half-written notification."""
+        world = await make_world(db_session)
+        await _manager(world)
+        missed = await _deadline(world, await _procedure(world), D(2026, 4, 1))
+
+        async def _boom(self: NotificationRepository, rows: list[NotificationModel]) -> None:
+            raise RuntimeError("notification store unavailable")
+
+        monkeypatch.setattr(NotificationRepository, "insert_many", _boom)
+
+        report = await _run(world, APRIL_15)
+
+        assert report.failed == 0
+        assert await _status(world, missed) == int(DeadlineStatus.MISSED)
+        assert await notifications_of(world.session) == []
+
     async def test_a_community_without_a_due_date_coming_is_not_notified(self, db_session):
         world = await make_world(db_session)
         await _manager(world)
@@ -214,68 +232,6 @@ class TestNotifications:
         await _run(world, APRIL_15)
 
         assert await notifications_of(world.session) == []
-
-
-class TestJulyRowsAreTheJulySweeps:
-    async def test_the_jobs_leave_a_july_deadline_alone(
-        self, client, manager_headers, sharing_operation, db_session, community
-    ):
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        response = await client.post(
-            f"/dossiers/{dossier_id}/transition",
-            json={"to_status": 2, "context": {"submission_date": "2020-01-06"}},
-            headers=manager_headers,
-        )
-        assert response.status_code == 200, response.text
-        july = await db_session.get(DossierModel, dossier_id)
-        assert july is not None and july.id_procedure_definition is None
-        plugin = FakeRegulator()
-        await db_session.execute(
-            text("UPDATE community SET regulator = :r WHERE id = :id"),
-            {"r": plugin.code, "id": community.id},
-        )
-        await sync_plugin(db_session, plugin)
-        open_before = set(
-            await db_session.scalars(
-                select(DeadlineModel.id).where(
-                    DeadlineModel.id_dossier == dossier_id,
-                    DeadlineModel.status == int(DeadlineStatus.OPEN),
-                )
-            )
-        )
-        assert open_before
-
-        await run_daily_jobs(
-            registry=build_registry([plugin]),
-            local_session=db_session,
-            crm_session=db_session,
-            now=NOVEMBER,
-            region_of=lambda _code: 1,
-        )
-
-        db_session.expire_all()
-        still_open = set(
-            await db_session.scalars(
-                select(DeadlineModel.id).where(
-                    DeadlineModel.id_dossier == dossier_id,
-                    DeadlineModel.status == int(DeadlineStatus.OPEN),
-                )
-            )
-        )
-        assert still_open == open_before
-
-    async def test_the_july_sweep_leaves_a_procedures_deadline_alone(self, db_session):
-        world = await make_world(db_session)
-        overdue = await _deadline(world, await _procedure(world), D(2020, 1, 6))
-        token = current_internal_community_id.set(None)
-        try:
-            await sweep_deadlines_for_every_community(
-                local_session=db_session, crm_session=db_session
-            )
-        finally:
-            current_internal_community_id.reset(token)
-
-        assert await _status(world, overdue) == int(DeadlineStatus.OPEN)
 
 
 class TestIsolation:
@@ -348,8 +304,8 @@ class TestTheLock:
         )
 
     async def test_the_key_is_its_own(self):
-        """The July sweep's, the catalogue sync's, the activation's and
-        billing's keys live in the same cluster."""
+        """The retired July sweep's, the catalogue sync's, the activation's
+        and billing's keys live in the same cluster."""
         assert _JOBS_ADVISORY_LOCK_KEY not in {0x0AD3_0001, 0x0AD3_0002, 0x0AD3_0003, 0x0B111_0001}
 
 

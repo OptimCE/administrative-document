@@ -14,37 +14,6 @@ class Region(IntEnum):
     VLA = 3
 
 
-class DossierType(IntEnum):
-    """Administrative dossier kinds (spec §5.3)."""
-
-    CREATION_NOTIFICATION = 1  # → CWaPE, via Mon Espace
-    MODIFICATION = 2  # → CWaPE, 15-business-day notification
-    ANNUAL_REPORT = 3  # → CWaPE, recurring
-    SHARING_AUTHORIZATION = 4  # → DSO, then opinion → CWaPE
-    SHARING_MODIFICATION = 5  # → DSO
-    CESSATION = 6  # → CWaPE (via modification)
-
-
-class DossierStatus(IntEnum):
-    """Dossier lifecycle. Transitions are journaled in ``status_event``."""
-
-    IN_PREPARATION = 1
-    SUBMITTED = 2
-    COMPLETE = 3
-    CLOSED = 4
-    LAPSED = 5
-
-
-class DocumentStatus(IntEnum):
-    """Document lifecycle. Transitions are journaled in ``status_event``."""
-
-    DRAFT = 1
-    READY = 2
-    SENT = 3
-    ACKNOWLEDGED = 4
-    OBSOLETE = 5
-
-
 class DocOrigin(IntEnum):
     """How a document's versions are produced.
 
@@ -96,34 +65,6 @@ class DeadlineStatus(IntEnum):
     MET = 2
     MISSED = 3
     CANCELLED = 4
-
-
-class TriggerEvent(StrEnum):
-    """Keys that link a state transition to the ``deadline_rule`` rows it fires.
-
-    Stored as text in ``deadline_rule.trigger_event`` so a new rule is pure data.
-    """
-
-    DOSSIER_SUBMITTED = "dossier.submitted"
-    DOSSIER_COMPLETE = "dossier.complete"
-    DOSSIER_MODIFICATION = "dossier.modification"
-    DOCUMENT_ACKNOWLEDGED_INCOMPLETE = "document.acknowledged.incomplete"
-
-
-class DeadlineType(StrEnum):
-    """Keys stored in ``deadline.deadline_type`` / ``deadline_rule.deadline_type``."""
-
-    COMPLETENESS_CHECK = "completeness_check"  # +10 business days
-    LAPSE = "lapse"  # +6 months
-    MODIFICATION_NOTIFICATION = "modification_notification"  # +15 business days
-    ANNUAL_REPORT = "annual_report"  # recurring, +12 months
-
-
-class AcknowledgementResult(StrEnum):
-    """``context_json.result`` supplied when acknowledging a document."""
-
-    COMPLETE = "complete"
-    INCOMPLETE = "incomplete"
 
 
 # --- Procedures engine (espace administratif) --------------------------------
@@ -340,11 +281,7 @@ ADMIN_DOCUMENT_EVENTS_STREAM = "ADMIN_DOCUMENT_EVENTS"  # limits: fire-and-forge
 ADMIN_DOCUMENT_STREAM = "ADMIN_DOCUMENT"  # work_queue: generation requests
 ADMIN_DOCUMENT_DLQ_STREAM = "ADMIN_DOCUMENT_DLQ"  # limits: poison messages
 
-# --- Subjects the API publishes --------------------------------------------
-SUBJECT_DOCUMENT_STATUS_CHANGED = "optimce.administrative_document.document.status_changed"
-SUBJECT_DOSSIER_STATUS_CHANGED = "optimce.administrative_document.dossier.status_changed"
-SUBJECT_DEADLINE_CREATED = "optimce.administrative_document.deadline.created"
-SUBJECT_DEADLINE_MISSED = "optimce.administrative_document.deadline.missed"
+# --- Subjects the worker publishes -----------------------------------------
 SUBJECT_DOCUMENT_RENDERED = "optimce.administrative_document.document.rendered"
 
 # --- Work + dead-letter subjects (worker) ----------------------------------
@@ -360,10 +297,6 @@ CORE_EVENTS_STREAM = "CORE_EVENTS"
 CORE_EVENTS_SUBJECT = "core.evt.>"
 
 # --- Event.type values carried in the envelope (spec R6) -------------------
-EVENT_DOCUMENT_STATUS_CHANGED = "admin.document.status_changed"
-EVENT_DOSSIER_STATUS_CHANGED = "admin.dossier.status_changed"
-EVENT_DEADLINE_CREATED = "admin.dossier.deadline_created"
-EVENT_DEADLINE_MISSED = "admin.dossier.deadline_missed"
 EVENT_DOCUMENT_RENDERED = "admin.document.rendered"
 EVENT_GENERATE_REQUESTED = "admin.document.generate_requested"
 
