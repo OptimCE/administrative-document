@@ -11,6 +11,7 @@ import datetime
 import pytest
 from sqlalchemy import func, select, text
 
+from api.admin.procedures import ProcedureService
 from engine.baseline import brussels_today
 from engine.calendar import WorkingCalendar
 from engine.routing import route_event
@@ -168,6 +169,78 @@ class TestTheDashboard:
         response = await client.get("/dossiers", headers=headers)
         assert response.status_code == 200, response.text
         assert response.json()["data"] == []
+
+
+class TestTheFullList:
+    async def test_keeps_what_the_dashboard_lets_go_newest_first(
+        self, client, db_session, monkeypatch
+    ):
+        world = await _world(db_session)
+        headers = await _headers(db_session, world)
+        modification = await _file(world, "operation.meter_removed", EAN[0])
+        created = await client.post(
+            "/admin/dossiers",
+            json={"code": "PARTAGE_FIN", "id_sharing_operation": world.operation},
+            headers=headers,
+        )
+        ended = created.json()["data"]["id"]
+        cancelled = await client.post(
+            f"/admin/dossiers/{ended}/transition",
+            json={"to_step": "cancelled", "reason": "opened by mistake"},
+            headers=headers,
+        )
+        assert cancelled.status_code == 200, cancelled.text
+        later = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=40)
+        monkeypatch.setattr(ProcedureService, "_now", staticmethod(lambda: later))
+
+        inbox = (await client.get("/admin/inbox", headers=headers)).json()["data"]
+        listed = await client.get("/admin/dossiers", headers=headers)
+
+        assert [r["id"] for r in inbox["groups"]["done"]] == []
+        assert listed.status_code == 200, listed.text
+        body = listed.json()
+        # The starting state, confirmed at once in a community with no meter,
+        # is a procedure too: the oldest.
+        assert [(r["id"], r["code"], r["step"]) for r in body["data"]] == [
+            (ended, "PARTAGE_FIN", "cancelled"),
+            (modification, "PARTAGE_MODIF", "draft"),
+            (world_baseline := body["data"][2]["id"], "ETAT_DE_DEPART", "in_force"),
+        ]
+        assert world_baseline < modification
+        assert body["data"][1]["changes_count"] == 1
+        assert body["pagination"] == {"page": 1, "limit": 20, "total": 3, "total_pages": 1}
+
+    async def test_filters_and_pages(self, client, db_session):
+        world = await _world(db_session)
+        headers = await _headers(db_session, world)
+        modification = await _file(world, "operation.meter_removed", EAN[0])
+        created = await client.post(
+            "/admin/dossiers",
+            json={"code": "PARTAGE_FIN", "id_sharing_operation": world.operation},
+            headers=headers,
+        )
+        ended = created.json()["data"]["id"]
+
+        async def ids(query: str) -> list[int]:
+            response = await client.get(f"/admin/dossiers?{query}", headers=headers)
+            assert response.status_code == 200, response.text
+            return [r["id"] for r in response.json()["data"]]
+
+        assert await ids("code=PARTAGE_MODIF") == [modification]
+        assert await ids("status=1") == [ended, modification]
+        assert await ids("status=2") == []
+        assert await ids(f"operation_id={world.operation}") == [ended, modification]
+        assert await ids("operation_id=999999") == []
+        second = await client.get("/admin/dossiers?limit=1&page=2", headers=headers)
+        assert [r["id"] for r in second.json()["data"]] == [modification]
+        assert second.json()["pagination"]["total_pages"] == 3  # with the starting state
+
+    async def test_is_for_managers_only(self, client, db_session):
+        world = await _world(db_session)
+        response = await client.get(
+            "/admin/dossiers", headers=await _headers(db_session, world, "MEMBER")
+        )
+        assert response.status_code == 403
 
 
 class TestTheDetail:

@@ -72,8 +72,11 @@ bundles through `document-generation`. Read `README.md` for the domain.
 - **`/admin` routes** (`api/admin/`, managers only, module active):
   `procedures.py` holds the use cases, `views.py` the read model (labels from
   the procedure's OWN catalogue version; "due in N working days" counted here
-  on the plugin's calendar). After `frozen_at` a procedure takes no change and
-  no new version of a piece it was sent with (a RECEIVED piece still arrives).
+  on the plugin's calendar). The dashboard (`/inbox`) keeps a finished
+  procedure for 30 days; `GET /admin/dossiers` lists them all, newest first,
+  paginated (the front's "Toutes les démarches"). After `frozen_at` a
+  procedure takes no change and no new version of a piece it was sent with (a
+  RECEIVED piece still arrives).
   A response's `dry_run` writes nothing. A deferred change moves (the row, not
   a copy: UNIQUE(source_event_id, procedure_code)) into the family's next
   draft when this one is sent or cancelled. The July `/dossiers` list shows

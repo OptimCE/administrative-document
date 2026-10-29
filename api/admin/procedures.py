@@ -300,6 +300,70 @@ class ProcedureService:
         ]
         return {"today": today, "banner": banner, "groups": groups}
 
+    async def procedures(
+        self,
+        id_community: int,
+        *,
+        page: int,
+        limit: int,
+        status: int | None = None,
+        code: str | None = None,
+        operation: int | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Every procedure of the community, newest first, finished ones
+        included (the dashboard keeps those for RECENT_DAYS only)."""
+        plugin, _ = await self._plugin(id_community)
+        if plugin is None:
+            return [], 0
+        today = brussels_today(self._now())
+        stmt = select(DossierModel).where(
+            DossierModel.id_community == id_community,
+            DossierModel.id_procedure_definition.is_not(None),
+            DossierModel.regulator == plugin.code,
+        )
+        if status is not None:
+            stmt = stmt.where(DossierModel.status == status)
+        if code is not None:
+            stmt = stmt.where(
+                DossierModel.id_procedure_definition.in_(
+                    select(ProcedureDefinitionModel.id).where(ProcedureDefinitionModel.code == code)
+                )
+            )
+        if operation is not None:
+            stmt = stmt.where(DossierModel.id_sharing_operation == operation)
+        total = int(
+            await self._local.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+        )
+        dossiers = list(
+            await self._local.scalars(
+                stmt.order_by(DossierModel.id.desc()).offset((page - 1) * limit).limit(limit)
+            )
+        )
+        ids = [d.id for d in dossiers]
+        definitions = await self._definitions([d.id_procedure_definition or 0 for d in dossiers])
+        names = await self._operation_names(id_community)
+        changes = await self._active_change_counts(ids)
+        pieces = await self._pieces_by_dossier(ids)
+        calendar = self._calendar(plugin)
+        rows = []
+        for dossier in dossiers:
+            definition = self._definition(
+                plugin, definitions.get(dossier.id_procedure_definition or 0)
+            )
+            if definition is not None:
+                rows.append(
+                    views.item(
+                        dossier,
+                        definition,
+                        calendar,
+                        today=today,
+                        operation_names=names,
+                        changes_count=changes.get(dossier.id, 0),
+                        pieces=views.piece_counts(pieces.get(dossier.id, [])),
+                    )
+                )
+        return rows, total
+
     async def _active_change_counts(self, ids: Sequence[int]) -> dict[int, int]:
         if not ids:
             return {}

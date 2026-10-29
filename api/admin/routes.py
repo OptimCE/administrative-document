@@ -9,6 +9,7 @@ the top of ``api/administrative_document/routes.py``.
 """
 
 import datetime
+import math
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
@@ -26,11 +27,12 @@ from api.admin.schemas import (
     ProcedureCreateIn,
     ProcedureDefinitionOut,
     ProcedureDetailOut,
+    ProcedureItemOut,
     StatusOut,
     TransitionIn,
 )
 from api.admin.service import AdminService, ModuleInactiveError
-from core.api_response import ApiResponse
+from core.api_response import ApiResponse, ApiResponsePaginated, Pagination
 from core.context_vars import current_internal_community_id, current_locale, current_user_id
 from core.errors.errors import ErrorException
 from core.errors.with_default_error import with_default_error
@@ -168,6 +170,32 @@ async def list_procedure_deadlines(
     """The agenda. Without a range: every open deadline."""
     rows = await service.deadlines(_community(), start=start, end=end)
     return ApiResponse(data=[DeadlineItemOut.model_validate(r) for r in rows])
+
+
+@admin_routes.get("/dossiers", response_model=ApiResponsePaginated[list[ProcedureItemOut]])
+@with_default_error(errors.admin.GET_PROCEDURES)
+async def list_procedures(
+    service: ProceduresDep,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=20, ge=1, le=200),
+    status: int | None = Query(default=None, description="ProcedureStatus"),
+    code: str | None = Query(default=None, max_length=64),
+    operation_id: int | None = None,
+):
+    """Every procedure, newest first, finished ones included: the dashboard
+    keeps those for a month only."""
+    rows, total = await service.procedures(
+        _community(), page=page, limit=limit, status=status, code=code, operation=operation_id
+    )
+    return ApiResponsePaginated(
+        data=[ProcedureItemOut.model_validate(r) for r in rows],
+        pagination=Pagination(
+            page=page,
+            limit=limit,
+            total=total,
+            total_pages=math.ceil(total / limit),
+        ),
+    )
 
 
 @admin_routes.get("/dossiers/{dossier_id}", response_model=ApiResponse[ProcedureDetailOut])
