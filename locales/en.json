@@ -52,7 +52,18 @@
       "GET_BASELINE": "Failed to retrieve the starting state (code: 2370)",
       "CONFIRM_BASELINE": "Failed to confirm the starting state (code: 2371)",
       "BASELINE_INVALID": "These choices do not match the starting state (code: 2372)",
-      "BASELINE_CONFLICT": "Some meters are already tracked in another operation on these dates (code: 2373)"
+      "BASELINE_CONFLICT": "Some meters are already tracked in another operation on these dates (code: 2373)",
+      "GET_PROCEDURES": "Failed to retrieve the procedures (code: 2374)",
+      "PROCEDURE_NOT_FOUND": "Procedure not found (code: 2375)",
+      "UNKNOWN_PROCEDURE_TYPE": "This type of procedure does not exist for your regulator (code: 2376)",
+      "DRAFT_EXISTS": "A draft of this procedure is already open (code: 2377)",
+      "PROCEDURE_FROZEN": "This procedure has been sent and can no longer be changed (code: 2378)",
+      "TRANSITION_NOT_ALLOWED": "This step change is not possible from the current step (code: 2379)",
+      "UNKNOWN_RESPONSE_TYPE": "This type of response does not exist for this procedure (code: 2380)",
+      "CHANGE_NOT_FOUND": "Change not found in this procedure (code: 2381)",
+      "PIECE_NOT_FOUND": "Piece not found in this procedure (code: 2382)",
+      "CORRESPONDENCE_NOT_FOUND": "Message not found (code: 2383)",
+      "PROCEDURE_ACTION_FAILED": "The action on the procedure failed (code: 2384)"
     }
   }
 }

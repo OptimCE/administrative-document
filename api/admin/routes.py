@@ -8,13 +8,27 @@ NOTE: no ``from __future__ import annotations`` here, for the reason given at
 the top of ``api/administrative_document/routes.py``.
 """
 
-from typing import Annotated
+import datetime
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from fastapi.responses import JSONResponse
 
-from api.admin.deps import get_admin_service
-from api.admin.schemas import BaselineConfirmIn, BaselineOut
+from api.admin.deps import get_admin_service, get_procedure_service
+from api.admin.procedures import ProcedureService
+from api.admin.schemas import (
+    BaselineConfirmIn,
+    BaselineOut,
+    ChangeExcludeIn,
+    CorrespondenceProposalOut,
+    DeadlineItemOut,
+    InboxOut,
+    ProcedureCreateIn,
+    ProcedureDefinitionOut,
+    ProcedureDetailOut,
+    StatusOut,
+    TransitionIn,
+)
 from api.admin.service import AdminService, ModuleInactiveError
 from core.api_response import ApiResponse
 from core.context_vars import current_internal_community_id, current_locale, current_user_id
@@ -97,3 +111,225 @@ async def confirm_baseline(body: BaselineConfirmIn, service: ServiceDep):
             },
         )
     return ApiResponse(data=BaselineOut.model_validate(view))
+
+
+# ---------------------------------------------------------------------------
+# Procedures
+# ---------------------------------------------------------------------------
+
+ProceduresDep = Annotated[ProcedureService, Depends(get_procedure_service)]
+
+
+def _actor() -> str:
+    return current_user_id.get() or "unknown"
+
+
+@admin_routes.get("/status", response_model=ApiResponse[StatusOut])
+@with_default_error(errors.admin.GET_PROCEDURES)
+async def get_status(service: ProceduresDep):
+    """The module for this community: active, regulator followed or not, the
+    starting state to confirm. Opens the tracking period on first sight."""
+    return ApiResponse(data=StatusOut.model_validate(await service.status(_community())))
+
+
+@admin_routes.get(
+    "/procedure-definitions", response_model=ApiResponse[list[ProcedureDefinitionOut]]
+)
+@with_default_error(errors.admin.GET_PROCEDURES)
+async def list_procedure_definitions(service: ProceduresDep):
+    """The regulator's catalogue, every version: steps, responses, deadlines,
+    pieces and their labels in four languages."""
+    rows = await service.definitions(_community())
+    return ApiResponse(data=[ProcedureDefinitionOut.model_validate(r) for r in rows])
+
+
+@admin_routes.get("/inbox", response_model=ApiResponse[InboxOut])
+@with_default_error(errors.admin.GET_PROCEDURES)
+async def get_inbox(
+    service: ProceduresDep,
+    operation_id: int | None = None,
+    grd: str | None = None,
+    bucket: Literal["todo", "waiting", "planned", "done"] | None = None,
+):
+    """The dashboard: procedures grouped by bucket with their next action and
+    its due date (in working days, counted here), and the three soonest
+    deadlines."""
+    view = await service.inbox(_community(), operation=operation_id, grd=grd, bucket=bucket)
+    return ApiResponse(data=InboxOut.model_validate(view))
+
+
+@admin_routes.get("/deadlines", response_model=ApiResponse[list[DeadlineItemOut]])
+@with_default_error(errors.admin.GET_PROCEDURES)
+async def list_procedure_deadlines(
+    service: ProceduresDep,
+    start: Annotated[datetime.date | None, Query(alias="from")] = None,
+    end: Annotated[datetime.date | None, Query(alias="to")] = None,
+):
+    """The agenda. Without a range: every open deadline."""
+    rows = await service.deadlines(_community(), start=start, end=end)
+    return ApiResponse(data=[DeadlineItemOut.model_validate(r) for r in rows])
+
+
+@admin_routes.get("/dossiers/{dossier_id}", response_model=ApiResponse[ProcedureDetailOut])
+@with_default_error(errors.admin.GET_PROCEDURES)
+async def get_procedure(dossier_id: int, service: ProceduresDep):
+    """One procedure: header, timeline, changes, pieces, deadlines, thread."""
+    view = await service.procedure(_community(), dossier_id)
+    return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.post("/dossiers", response_model=ApiResponse[ProcedureDetailOut])
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def create_procedure(body: ProcedureCreateIn, service: ProceduresDep):
+    """A procedure opened by hand from the catalogue (an end of sharing, a
+    procedure the CRM does not trigger yet)."""
+    view = await service.create(
+        _community(),
+        code=body.code,
+        id_sharing_operation=body.id_sharing_operation,
+        requested_effective_date=body.requested_effective_date,
+        actor=_actor(),
+    )
+    return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.post(
+    "/dossiers/{dossier_id}/changes/{change_id}/defer",
+    response_model=ApiResponse[ProcedureDetailOut],
+)
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def defer_change(dossier_id: int, change_id: int, service: ProceduresDep):
+    """Take a change out of this procedure; it joins the next one of its type
+    once this one is sent or cancelled."""
+    view = await service.defer_change(_community(), dossier_id, change_id, actor=_actor())
+    return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.post(
+    "/dossiers/{dossier_id}/changes/{change_id}/exclude",
+    response_model=ApiResponse[ProcedureDetailOut],
+)
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def exclude_change(
+    dossier_id: int, change_id: int, body: ChangeExcludeIn, service: ProceduresDep
+):
+    """Decide a change needs no procedure, with the reason (audited)."""
+    view = await service.exclude_change(
+        _community(), dossier_id, change_id, reason=body.reason, actor=_actor()
+    )
+    return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.post(
+    "/dossiers/{dossier_id}/transition", response_model=ApiResponse[ProcedureDetailOut]
+)
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def transition_procedure(dossier_id: int, body: TransitionIn, service: ProceduresDep):
+    """A step change by hand, along one of the catalogue's edges, with its
+    reason (journaled)."""
+    view = await service.transition(
+        _community(),
+        dossier_id,
+        to_step=body.to_step,
+        reason=body.reason,
+        on=body.on,
+        actor=_actor(),
+    )
+    return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.post(
+    "/dossiers/{dossier_id}/documents/{document_id}/versions",
+    response_model=ApiResponse[ProcedureDetailOut],
+)
+@with_default_error(errors.admin.UPLOAD_VERSION_FAILED)
+async def upload_piece(
+    dossier_id: int,
+    document_id: int,
+    service: ProceduresDep,
+    file: Annotated[UploadFile, File()],
+):
+    """Upload a piece: a signed declaration, a document received. Refused once
+    the procedure was sent, except for a piece that is received after it."""
+    view = await service.upload_piece(_community(), dossier_id, document_id, file, actor=_actor())
+    return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.post("/dossiers/{dossier_id}/send", response_model=ApiResponse[ProcedureDetailOut])
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def send_procedure(
+    dossier_id: int,
+    service: ProceduresDep,
+    sent_on: Annotated[datetime.date | None, Form()] = None,
+    channel: Annotated[Literal["email", "online_form", "post"] | None, Form()] = None,
+    subject: Annotated[str | None, Form(max_length=255)] = None,
+    body_text: Annotated[str | None, Form()] = None,
+    file: Annotated[UploadFile | None, File()] = None,
+):
+    """Mark as sent: the sending as it was done (date, channel, optionally the
+    .eml sent or the online form's receipt). Freezes the procedure."""
+    view = await service.send(
+        _community(),
+        dossier_id,
+        on=sent_on,
+        channel=channel,
+        subject=subject,
+        body_text=body_text,
+        file=file,
+        actor=_actor(),
+    )
+    return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.post(
+    "/dossiers/{dossier_id}/correspondence",
+    response_model=ApiResponse[ProcedureDetailOut | CorrespondenceProposalOut],
+)
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def record_correspondence(
+    dossier_id: int,
+    service: ProceduresDep,
+    type: Annotated[str, Form(max_length=64)],
+    occurred_on: Annotated[datetime.date | None, Form()] = None,
+    subject: Annotated[str | None, Form(max_length=255)] = None,
+    body_text: Annotated[str | None, Form()] = None,
+    external_ref: Annotated[str | None, Form(max_length=128)] = None,
+    file: Annotated[UploadFile | None, File()] = None,
+    dry_run: bool = False,
+):
+    """Add a response. With dry_run=true nothing is written: the answer says
+    which step change and which deadlines recording it would make."""
+    view = await service.respond(
+        _community(),
+        dossier_id,
+        type_=type,
+        on=occurred_on,
+        subject=subject,
+        body_text=body_text,
+        external_ref=external_ref,
+        file=file,
+        dry_run=dry_run,
+        actor=_actor(),
+    )
+    if dry_run:
+        return ApiResponse(data=CorrespondenceProposalOut.model_validate(view))
+    return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.get(
+    "/dossiers/{dossier_id}/correspondence/{correspondence_id}/file",
+    responses={200: {"content": {"application/octet-stream": {}}}},
+)
+@with_default_error(errors.admin.STORAGE_DOWNLOAD_FAILED)
+async def download_correspondence(dossier_id: int, correspondence_id: int, service: ProceduresDep):
+    """The file of a message, exactly as it was recorded."""
+    message, content = await service.correspondence_file(
+        _community(), dossier_id, correspondence_id
+    )
+    name = message.original_filename or f"message-{message.id}"
+    name = "".join(ch for ch in name if ch.isprintable() and ch not in '"\\\r\n')[:200]
+    return Response(
+        content=content,
+        media_type=message.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{name or "download"}"'},
+    )

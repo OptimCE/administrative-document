@@ -362,8 +362,11 @@ class MyFilingDossierOut(BaseModel):
     """Document-level context. Safe to show: it identifies the filing, not people."""
 
     id: int
-    dossier_type: DossierType
-    status: DossierStatus
+    # None for an engine procedure, which names its type by family and step.
+    dossier_type: DossierType | None = None
+    status: int
+    family: str | None = None
+    step: str | None = None
     title: str | None = None
     external_ref: str | None = None
     submitted_at: datetime.datetime | None = None

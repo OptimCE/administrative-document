@@ -21,7 +21,7 @@ import datetime
 from collections.abc import Sequence
 from typing import Any, cast
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import ColumnElement, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -146,7 +146,9 @@ class AdministrativeDocumentRepository:
         count_base = with_community_scope(
             select(func.count()).select_from(DossierModel), DossierModel
         )
-        filters = []
+        # July rows only: an engine procedure has the engine's statuses, which
+        # the July schema cannot carry. It is listed by /admin/inbox.
+        filters: list[ColumnElement[bool]] = [DossierModel.id_procedure_definition.is_(None)]
         if status is not None:
             filters.append(DossierModel.status == status)
         if dossier_type is not None:

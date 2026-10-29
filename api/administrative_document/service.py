@@ -70,6 +70,7 @@ from shared.const import (
     DocumentStatus,
     DossierStatus,
     DossierType,
+    ProcedureDocumentStatus,
     SubjectType,
     TriggerEvent,
 )
@@ -90,6 +91,13 @@ if TYPE_CHECKING:
     from fastapi import UploadFile
 
 logger = logging.getLogger(__name__)
+
+# The engine statuses a piece may be (re)generated from.
+_GENERATABLE_PIECE = (
+    int(ProcedureDocumentStatus.MISSING),
+    int(ProcedureDocumentStatus.STALE),
+    int(ProcedureDocumentStatus.READY),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -600,13 +608,17 @@ class AdministrativeDocumentService:
         orphaned renders.
         """
         document = await self.get_document_or_404(document_id)
+        dossier = await self.get_dossier_or_404(document.id_dossier)
 
         # Same rule as add_version, for the same reason: a filed document must be
-        # rolled back before it can be replaced.
-        if document.status not in (int(DocumentStatus.DRAFT), int(DocumentStatus.READY)):
+        # rolled back before it can be replaced. A piece of an engine procedure
+        # (its `kind` is set) has the engine's statuses instead, and is frozen
+        # with its procedure once that was sent.
+        if document.kind is None:
+            if document.status not in (int(DocumentStatus.DRAFT), int(DocumentStatus.READY)):
+                raise ErrorException(errors.admin.GENERATION_NOT_ALLOWED, status_code=409)
+        elif dossier.frozen_at is not None or document.status not in _GENERATABLE_PIECE:
             raise ErrorException(errors.admin.GENERATION_NOT_ALLOWED, status_code=409)
-
-        dossier = await self.get_dossier_or_404(document.id_dossier)
         template = await self._repo.get_current_template(
             region=dossier.region, doc_type=document.doc_type
         )

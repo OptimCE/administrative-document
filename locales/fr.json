@@ -52,7 +52,18 @@
       "GET_BASELINE": "Impossible de récupérer l'état de départ (code: 2370)",
       "CONFIRM_BASELINE": "Impossible de confirmer l'état de départ (code: 2371)",
       "BASELINE_INVALID": "Ces choix ne correspondent pas à l'état de départ (code: 2372)",
-      "BASELINE_CONFLICT": "Certains compteurs sont déjà suivis dans une autre opération à ces dates (code: 2373)"
+      "BASELINE_CONFLICT": "Certains compteurs sont déjà suivis dans une autre opération à ces dates (code: 2373)",
+      "GET_PROCEDURES": "Impossible de récupérer les démarches (code: 2374)",
+      "PROCEDURE_NOT_FOUND": "Démarche introuvable (code: 2375)",
+      "UNKNOWN_PROCEDURE_TYPE": "Ce type de démarche n'existe pas pour votre régulateur (code: 2376)",
+      "DRAFT_EXISTS": "Un brouillon de cette démarche est déjà ouvert (code: 2377)",
+      "PROCEDURE_FROZEN": "Cette démarche a été envoyée et ne peut plus être modifiée (code: 2378)",
+      "TRANSITION_NOT_ALLOWED": "Ce changement d'étape n'est pas possible depuis l'étape actuelle (code: 2379)",
+      "UNKNOWN_RESPONSE_TYPE": "Ce type de réponse n'existe pas pour cette démarche (code: 2380)",
+      "CHANGE_NOT_FOUND": "Changement introuvable dans cette démarche (code: 2381)",
+      "PIECE_NOT_FOUND": "Pièce introuvable dans cette démarche (code: 2382)",
+      "CORRESPONDENCE_NOT_FOUND": "Message introuvable (code: 2383)",
+      "PROCEDURE_ACTION_FAILED": "L'opération sur la démarche a échoué (code: 2384)"
     }
   }
 }

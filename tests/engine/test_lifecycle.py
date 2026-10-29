@@ -182,3 +182,31 @@ class TestReadiness:
         assert dossier is not None
         assert await settle_readiness(db_session, ctx, dossier, day=SENT_ON)
         assert dossier.status == ProcedureStatus.DRAFT
+
+
+class TestARenderLands:
+    async def test_a_generated_piece_is_ready_and_the_draft_follows(self, db_session):
+        from engine.filing import piece_rendered
+        from tests.engine.world import EAN, meter, pieces, route
+
+        world = await make_world(db_session)
+        result = await route(world, meter(world, "operation.meter_removed", EAN[0]))
+        (dossier_id,) = result.dossiers
+        form = (await pieces(world, dossier_id))[0]
+
+        assert await piece_rendered(db_session, world.registry, form, day=SENT_ON)
+
+        await db_session.refresh(form)
+        dossier = await db_session.get(DossierModel, dossier_id)
+        assert dossier is not None
+        await db_session.refresh(dossier)
+        assert form.status == 2  # READY
+        assert dossier.status == ProcedureStatus.READY
+
+    async def test_a_july_document_is_left_to_a_human(self, db_session):
+        from engine.filing import piece_rendered
+        from shared.models.local_models import DocumentModel
+
+        world = await make_world(db_session)
+        july = DocumentModel(id_community=1, id_dossier=1, doc_type="x", origin=1, status=1)
+        assert not await piece_rendered(db_session, world.registry, july, day=SENT_ON)

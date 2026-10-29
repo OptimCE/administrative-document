@@ -52,7 +52,18 @@
       "GET_BASELINE": "Die Ausgangslage konnte nicht abgerufen werden (code: 2370)",
       "CONFIRM_BASELINE": "Die Ausgangslage konnte nicht bestätigt werden (code: 2371)",
       "BASELINE_INVALID": "Diese Auswahl passt nicht zur Ausgangslage (code: 2372)",
-      "BASELINE_CONFLICT": "Einige Zähler werden an diesen Daten bereits in einer anderen Operation geführt (code: 2373)"
+      "BASELINE_CONFLICT": "Einige Zähler werden an diesen Daten bereits in einer anderen Operation geführt (code: 2373)",
+      "GET_PROCEDURES": "Die Verfahren konnten nicht abgerufen werden (code: 2374)",
+      "PROCEDURE_NOT_FOUND": "Verfahren nicht gefunden (code: 2375)",
+      "UNKNOWN_PROCEDURE_TYPE": "Diese Verfahrensart gibt es für Ihre Regulierungsbehörde nicht (code: 2376)",
+      "DRAFT_EXISTS": "Ein Entwurf dieses Verfahrens ist bereits offen (code: 2377)",
+      "PROCEDURE_FROZEN": "Dieses Verfahren wurde gesendet und kann nicht mehr geändert werden (code: 2378)",
+      "TRANSITION_NOT_ALLOWED": "Dieser Schrittwechsel ist vom aktuellen Schritt aus nicht möglich (code: 2379)",
+      "UNKNOWN_RESPONSE_TYPE": "Diese Antwortart gibt es für dieses Verfahren nicht (code: 2380)",
+      "CHANGE_NOT_FOUND": "Änderung in diesem Verfahren nicht gefunden (code: 2381)",
+      "PIECE_NOT_FOUND": "Unterlage in diesem Verfahren nicht gefunden (code: 2382)",
+      "CORRESPONDENCE_NOT_FOUND": "Nachricht nicht gefunden (code: 2383)",
+      "PROCEDURE_ACTION_FAILED": "Die Aktion am Verfahren ist fehlgeschlagen (code: 2384)"
     }
   }
 }

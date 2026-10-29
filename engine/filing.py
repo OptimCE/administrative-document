@@ -23,7 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.regions import region_for_regulator
 from engine.catalogue import CatalogueEntry
-from engine.contracts import ChangeFact, ProcedureFacts, RegulatorPlugin
+from engine.contracts import (
+    ChangeFact,
+    PluginRegistry,
+    ProcedureFacts,
+    RegulatorPlugin,
+    plugin_for,
+)
 from engine.events import INVERSE, DetectedChange
 from engine.lifecycle import (
     LifecycleError,
@@ -32,13 +38,16 @@ from engine.lifecycle import (
     mark_generated_stale,
     open_procedure,
     refresh_next_action,
+    supply_piece,
     sync_pieces,
     take_automatic_edge,
 )
 from shared.const import (
     ChangeStatus,
     ChangeSubjectType,
+    DocumentKind,
     OpenedBy,
+    ProcedureDocumentStatus,
     ProcedureScope,
     ProcedureStatus,
 )
@@ -109,9 +118,9 @@ async def file_change(
         row.status = int(ChangeStatus.CANCELLED)
         row.id_dossier = holding.id
         await local.flush()
-        ctx = await _context_of(local, plugin, holding)
-        await _content_changed(local, ctx, holding, day)
-        if not await _cancel_if_emptied(local, ctx, holding, day):
+        ctx = await context_of_procedure(local, plugin, holding)
+        await content_changed(local, ctx, holding, day)
+        if not await cancel_if_emptied(local, ctx, holding, day):
             await recompute(local, ctx, holding)
         return holding.id, row.id
 
@@ -134,12 +143,12 @@ async def file_change(
             context=context,
         )
     else:
-        ctx = await _context_of(local, plugin, dossier)
+        ctx = await context_of_procedure(local, plugin, dossier)
 
     row.status = int(ChangeStatus.ATTACHED)
     row.id_dossier = dossier.id
     await local.flush()
-    await _content_changed(local, ctx, dossier, day)
+    await content_changed(local, ctx, dossier, day)
     await recompute(local, ctx, dossier)
     return dossier.id, row.id
 
@@ -151,7 +160,7 @@ async def _dossier(local: AsyncSession, dossier_id: int | None) -> DossierModel:
     return dossier
 
 
-async def _context_of(
+async def context_of_procedure(
     local: AsyncSession, plugin: RegulatorPlugin, dossier: DossierModel
 ) -> ProcedureContext:
     """The context of the version the procedure was opened under, which may no
@@ -224,7 +233,7 @@ async def _active_changes(local: AsyncSession, dossier: DossierModel) -> list[Ch
     )
 
 
-async def _content_changed(
+async def content_changed(
     local: AsyncSession, ctx: ProcedureContext, dossier: DossierModel, day: datetime.date
 ) -> None:
     """What the draft holds changed: its generated pieces are outdated, and a
@@ -237,7 +246,7 @@ async def _content_changed(
         )
 
 
-async def _cancel_if_emptied(
+async def cancel_if_emptied(
     local: AsyncSession, ctx: ProcedureContext, dossier: DossierModel, day: datetime.date
 ) -> bool:
     """A draft the system opened, left with no change and no file, is cancelled
@@ -297,3 +306,85 @@ async def recompute(local: AsyncSession, ctx: ProcedureContext, dossier: Dossier
     )
     await sync_pieces(local, dossier, requirements)
     await refresh_next_action(local, ctx, dossier)
+
+
+async def refile_change(
+    local: AsyncSession,
+    plugin: RegulatorPlugin,
+    change: ChangeModel,
+    *,
+    day: datetime.date,
+    region_of: RegionOf = region_for_regulator,
+) -> DossierModel:
+    """Move a deferred change into the open draft of its family (created if
+    none): "reporter à la prochaine démarche". The row moves, it is not copied,
+    so it keeps its source event and stays unique per (event, procedure)."""
+    entry = plugin.catalogue().in_force(change.procedure_code, day)
+    if entry is None:
+        raise LifecycleError(f"{plugin.code} has no {change.procedure_code} in force on {day}")
+    definition = entry.definition
+    period_key = str(day.year) if definition.opens_annually else None
+    dossier = await _open_draft(
+        local, change.id_community, change.id_sharing_operation, definition.family, period_key
+    )
+    if dossier is None:
+        ctx = await context_for(local, plugin, definition.code, definition.version)
+        region = region_of(plugin.code)
+        if region is None:
+            raise LifecycleError(f"regulator {plugin.code} has no region in regulators.json")
+        detected = DetectedChange(
+            kind=change.kind,
+            subject_type=ChangeSubjectType(change.subject_type),
+            subject_ref=change.subject_ref,
+            id_sharing_operation=change.id_sharing_operation,
+            payload=change.payload_json,
+        )
+        dossier = await open_procedure(
+            local,
+            ctx,
+            id_community=change.id_community,
+            id_sharing_operation=change.id_sharing_operation,
+            region=int(region),
+            variant=plugin.variant(definition, [detected.fact()]),
+            opened_by=OpenedBy.SYSTEM,
+            day=day,
+            period_key=period_key,
+            context={"reason": "deferred", "change": change.id},
+        )
+    else:
+        ctx = await context_of_procedure(local, plugin, dossier)
+    change.status = int(ChangeStatus.ATTACHED)
+    change.id_dossier = dossier.id
+    await local.flush()
+    await content_changed(local, ctx, dossier, day)
+    await recompute(local, ctx, dossier)
+    return dossier
+
+
+async def piece_rendered(
+    local: AsyncSession, registry: PluginRegistry, piece: DocumentModel, *, day: datetime.date
+) -> bool:
+    """A generated piece of an engine procedure got its rendered version: it is
+    ready, and the procedure's readiness follows. A July document (no ``kind``)
+    is left alone: there a human marks it ready. Returns whether it moved."""
+    if piece.kind != int(DocumentKind.GENERATED) or piece.status not in (
+        int(ProcedureDocumentStatus.MISSING),
+        int(ProcedureDocumentStatus.STALE),
+    ):
+        return False
+    dossier = await local.get(DossierModel, piece.id_dossier)
+    plugin = plugin_for(registry, dossier.regulator) if dossier is not None else None
+    if dossier is None or plugin is None:
+        return False
+    ctx = await context_of_procedure(local, plugin, dossier)
+    await supply_piece(
+        local,
+        ctx,
+        dossier,
+        piece,
+        status=ProcedureDocumentStatus.READY,
+        day=day,
+        actor="system:docgen",
+        context={"reason": "rendered"},
+    )
+    return True

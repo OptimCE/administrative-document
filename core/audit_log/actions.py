@@ -51,4 +51,6 @@ class AuditActions:
         "administrative_document.regulatory_effect.applied"
     )
     BASELINE_CONFIRMED: Final[AuditAction] = "administrative_document.baseline.confirmed"
+    CHANGE_DEFERRED: Final[AuditAction] = "administrative_document.change.deferred"
+    CHANGE_EXCLUDED: Final[AuditAction] = "administrative_document.change.excluded"
     DEADLINE_RULE_SAVED: Final[AuditAction] = "administrative_document.deadline_rule.saved"

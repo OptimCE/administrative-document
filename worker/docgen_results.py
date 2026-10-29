@@ -17,6 +17,7 @@ message. That forces the initial lookup to run unscoped — see
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 from typing import Any
@@ -32,6 +33,9 @@ from core.audit_log import AuditActions, AuditLogInput, AuditLogService
 from core.config import settings
 from core.database.database import AsyncSessionCRMFactory, AsyncSessionLocalFactory
 from core.queue.helper import Event, send_event, subscribe_durable
+from engine.events import BRUSSELS
+from engine.filing import piece_rendered
+from regulators.registry import REGISTRY
 from shared.const import (
     CONTENT_TYPE_BY_FORMAT,
     EVENT_DOCUMENT_RENDERED,
@@ -240,10 +244,12 @@ async def _attach(
     # whether it will be uploaded or generated, so this is the only place the
     # answer is actually known.
     document.origin = int(DocOrigin.GENERATED)
-    # Success clears the in-flight slot: the version row is now the record. The
-    # document's STATUS is untouched — a render is technical, and only a human
-    # moves a document to READY.
+    # Success clears the in-flight slot: the version row is now the record. A
+    # July document's STATUS is untouched (a render is technical, only a human
+    # moves it to READY); a generated piece of an engine procedure is ready
+    # now, and its procedure's readiness follows.
     await local.delete(render)
+    await piece_rendered(local, REGISTRY, document, day=datetime.datetime.now(BRUSSELS).date())
     if own_local:
         await local.commit()
 

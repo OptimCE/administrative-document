@@ -52,7 +52,18 @@
       "GET_BASELINE": "De beginsituatie kon niet worden opgehaald (code: 2370)",
       "CONFIRM_BASELINE": "De beginsituatie kon niet worden bevestigd (code: 2371)",
       "BASELINE_INVALID": "Deze keuzes passen niet bij de beginsituatie (code: 2372)",
-      "BASELINE_CONFLICT": "Sommige meters worden op deze data al in een andere operatie gevolgd (code: 2373)"
+      "BASELINE_CONFLICT": "Sommige meters worden op deze data al in een andere operatie gevolgd (code: 2373)",
+      "GET_PROCEDURES": "De procedures konden niet worden opgehaald (code: 2374)",
+      "PROCEDURE_NOT_FOUND": "Procedure niet gevonden (code: 2375)",
+      "UNKNOWN_PROCEDURE_TYPE": "Dit type procedure bestaat niet voor uw regulator (code: 2376)",
+      "DRAFT_EXISTS": "Er staat al een concept van deze procedure open (code: 2377)",
+      "PROCEDURE_FROZEN": "Deze procedure is verstuurd en kan niet meer worden gewijzigd (code: 2378)",
+      "TRANSITION_NOT_ALLOWED": "Deze stapwijziging is vanuit de huidige stap niet mogelijk (code: 2379)",
+      "UNKNOWN_RESPONSE_TYPE": "Dit type antwoord bestaat niet voor deze procedure (code: 2380)",
+      "CHANGE_NOT_FOUND": "Wijziging niet gevonden in deze procedure (code: 2381)",
+      "PIECE_NOT_FOUND": "Stuk niet gevonden in deze procedure (code: 2382)",
+      "CORRESPONDENCE_NOT_FOUND": "Bericht niet gevonden (code: 2383)",
+      "PROCEDURE_ACTION_FAILED": "De actie op de procedure is mislukt (code: 2384)"
     }
   }
 }

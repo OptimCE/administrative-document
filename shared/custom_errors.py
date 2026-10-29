@@ -100,6 +100,23 @@ class _AdminErrors:
     # operations at once. The response lists them. -> 409.
     BASELINE_CONFLICT = Error(code=2373, key="ERRORS.ADMIN.BASELINE_CONFLICT")
 
+    # ---- procedures engine: the /admin routes ----
+    GET_PROCEDURES = Error(code=2374, key="ERRORS.ADMIN.GET_PROCEDURES")
+    PROCEDURE_NOT_FOUND = Error(code=2375, key="ERRORS.ADMIN.PROCEDURE_NOT_FOUND")
+    # Not a type of the community's catalogue in force, or not one created by hand. -> 422.
+    UNKNOWN_PROCEDURE_TYPE = Error(code=2376, key="ERRORS.ADMIN.UNKNOWN_PROCEDURE_TYPE")
+    # A draft of this type is already open for this operation (one per family). -> 409.
+    DRAFT_EXISTS = Error(code=2377, key="ERRORS.ADMIN.DRAFT_EXISTS")
+    # Sent: its changes and the pieces it was sent with no longer change. -> 409.
+    PROCEDURE_FROZEN = Error(code=2378, key="ERRORS.ADMIN.PROCEDURE_FROZEN")
+    # The catalogue has no such step change from the current step. -> 409.
+    TRANSITION_NOT_ALLOWED = Error(code=2379, key="ERRORS.ADMIN.TRANSITION_NOT_ALLOWED")
+    UNKNOWN_RESPONSE_TYPE = Error(code=2380, key="ERRORS.ADMIN.UNKNOWN_RESPONSE_TYPE")
+    CHANGE_NOT_FOUND = Error(code=2381, key="ERRORS.ADMIN.CHANGE_NOT_FOUND")
+    PIECE_NOT_FOUND = Error(code=2382, key="ERRORS.ADMIN.PIECE_NOT_FOUND")
+    CORRESPONDENCE_NOT_FOUND = Error(code=2383, key="ERRORS.ADMIN.CORRESPONDENCE_NOT_FOUND")
+    PROCEDURE_ACTION_FAILED = Error(code=2384, key="ERRORS.ADMIN.PROCEDURE_ACTION_FAILED")
+
 
 class _Errors:
     auth = _AuthErrors()

@@ -522,3 +522,23 @@ async def settle_readiness(
             context={"reason": "incomplete"},
         )
     return False
+
+
+async def supply_piece(
+    session: AsyncSession,
+    ctx: ProcedureContext,
+    dossier: DossierModel,
+    piece: DocumentModel,
+    *,
+    status: ProcedureDocumentStatus,
+    day: datetime.date,
+    actor: str = ENGINE_ACTOR,
+    context: dict[str, Any] | None = None,
+) -> bool:
+    """A piece got a version that makes it ``status`` (ready, signed): journal
+    it, then let readiness follow. Returns whether the procedure moved."""
+    if piece.status != int(status):
+        await _journal(session, piece, to_status=int(status), actor=actor, context=context)
+    moved = await settle_readiness(session, ctx, dossier, day=day)
+    await refresh_next_action(session, ctx, dossier)
+    return moved

@@ -61,6 +61,17 @@ bundles through `document-generation`. Read `README.md` for the domain.
   `regulatory_ref`; each step idempotent. An "already sent" procedure is BORN
   at its sent step (`open_procedure(step=...)`): passing through draft would
   collide with the family's open draft.
+- **`/admin` routes** (`api/admin/`, managers only, module active):
+  `procedures.py` holds the use cases, `views.py` the read model (labels from
+  the procedure's OWN catalogue version; "due in N working days" counted here
+  on the plugin's calendar). After `frozen_at` a procedure takes no change and
+  no new version of a piece it was sent with (a RECEIVED piece still arrives).
+  A response's `dry_run` writes nothing. A deferred change moves (the row, not
+  a copy: UNIQUE(source_event_id, procedure_code)) into the family's next
+  draft when this one is sent or cancelled. The July `/dossiers` list shows
+  only July rows (its schema cannot carry engine statuses); July generation
+  accepts engine pieces (MISSING/STALE/READY, not frozen) and a landed render
+  makes a generated engine piece READY (`engine.filing.piece_rendered`).
 - Holidays are data now: `engine/calendar.py` raises `CalendarNotCoveredError`
   past the file's years instead of assuming none. `domain/calendar.py`
   (workalendar) serves the July code only, until the cleanup lot.
