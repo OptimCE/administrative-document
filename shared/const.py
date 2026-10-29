@@ -281,6 +281,47 @@ class RuleKind(IntEnum):
     ANNUAL = 2  # a fixed day of the year
 
 
+class Bucket(StrEnum):
+    """The dashboard group a procedure's current step puts it in. Derived from
+    the catalogue, never stored; the value is what the API returns."""
+
+    TODO = "todo"  # the community has something to do
+    WAITING = "waiting"  # the GRD or the regulator has to answer
+    PLANNED = "planned"  # scheduled: an annual filing, an effect to come
+    DONE = "done"
+
+
+class NextActionCode(StrEnum):
+    """What the dashboard's one button does, stored in ``dossier.next_action_code``.
+
+    Generic on purpose: the frontend knows these and nothing else, so adding a
+    regulator never touches it. What the button SAYS comes from the catalogue.
+    """
+
+    COMPLETE_DOCUMENTS = "complete_documents"
+    SEND = "send"
+    RECORD_RESPONSE = "record_response"
+    NONE = "none"
+
+
+class RegulatoryStatus(IntEnum):
+    """``regulatory_link_status.regulatory_status`` in the CORE database.
+
+    A mirror of crm-backend's ``RegulatoryStatus``
+    (src/modules/regulatory/domain/regulatory-link-status.models.ts); the core
+    owns the codes and its CHECK accepts 1 to 8.
+    """
+
+    TO_NOTIFY = 1
+    PENDING_GRD = 2
+    PENDING_REGULATOR = 3
+    AUTHORIZED = 4
+    ACTIVE = 5
+    LEAVING = 6
+    ENDED = 7
+    REFUSED = 8
+
+
 class FeatureName(StrEnum):
     """CRM subscription feature gate key (see ``require_feature``)."""
 

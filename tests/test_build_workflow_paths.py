@@ -19,9 +19,10 @@ The rule pinned here: every `COPY` source in each image's Dockerfile appears in
 BOTH trigger lists of the workflow that builds it - as `<dir>/**` for a
 directory, verbatim for a file.
 
-PyYAML is not a dependency, so both files are read as text. The readers are
-deliberately narrow and refuse what they do not recognise: a workflow they
-cannot read must fail this test, not satisfy it with an empty list.
+Both files are read as text (this test predates PyYAML in base.txt). The
+readers are deliberately narrow and refuse what they do not recognise: a
+workflow they cannot read must fail this test, not satisfy it with an empty
+list.
 """
 
 from __future__ import annotations

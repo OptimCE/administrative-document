@@ -23,11 +23,15 @@ COPY --from=builder /install /usr/local
 
 # Copy application code. `domain/` holds the pure state-machine / deadline logic
 # and `ports/` the CRM + NATS adapters; both are imported by the API process.
+# `engine/` is the procedures engine and `regulators/` its plugins, whose YAML
+# catalogues and calendars are read and synced to the database at startup.
 COPY main.py .
 COPY core/ core/
 COPY api/ api/
 COPY domain/ domain/
+COPY engine/ engine/
 COPY ports/ ports/
+COPY regulators/ regulators/
 COPY shared/ shared/
 COPY scripts/ scripts/
 COPY locales/ locales/

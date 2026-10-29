@@ -21,11 +21,13 @@ import pathlib
 import signal
 import sys
 
-from core.database.database import crm_engine, local_engine
+from core.database.database import AsyncSessionLocalFactory, crm_engine, local_engine
 from core.logging import configure_logging
 from core.queue.init import close_nats, get_jetstream, init_nats
 from core.realtime import log_realtime_state
 from core.tracing import setup_tracer_provider
+from engine.catalogue_sync import sync_registry
+from regulators.registry import REGISTRY
 from worker import dispatcher
 from worker.scheduler import run_deadline_scheduler
 
@@ -97,6 +99,10 @@ async def main() -> None:
     # see core/realtime/bus.py. Must come after configure_logging().
     log_realtime_state("administrative-document-worker")
     setup_tracer_provider()
+
+    # Before consuming anything, like the API: the worker files changes into
+    # procedures that point at these rows. A conflict raises and stops it.
+    await sync_registry(AsyncSessionLocalFactory, REGISTRY)
 
     await _connect_nats_with_retry()
     js = get_jetstream()

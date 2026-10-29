@@ -42,13 +42,19 @@ COPY --from=builder /install /usr/local
 # TYPE_CHECKING, and why the upload cap moved to shared/const.py. It is pinned by
 # tests/test_worker_import_graph.py. routes.py/deps.py/schemas.py come along
 # unused; nothing imports them here.
-COPY core/    core/
-COPY api/     api/
-COPY domain/  domain/
-COPY ports/   ports/
-COPY shared/  shared/
-COPY worker/  worker/
-COPY locales/ locales/
+#
+# engine/ and regulators/ are the procedures engine and its plugins; the
+# plugins' YAML catalogues and calendars travel inside regulators/ and are
+# read (and synced to the database) at startup.
+COPY core/       core/
+COPY api/        api/
+COPY domain/     domain/
+COPY engine/     engine/
+COPY ports/      ports/
+COPY regulators/ regulators/
+COPY shared/     shared/
+COPY worker/     worker/
+COPY locales/    locales/
 
 RUN chown -R app:app /app
 USER app

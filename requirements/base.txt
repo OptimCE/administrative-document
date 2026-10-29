@@ -39,6 +39,11 @@ opentelemetry-util-http==0.60b1
 workalendar==17.0.0
 python-dateutil==2.9.0.post0
 
+# The regulator plugins' catalogues and holiday calendars are versioned YAML
+# files (regulators/<plugin>/catalogue, calendar), read at startup by the API AND
+# the worker, so it is a base dependency. Always yaml.safe_load: see engine/catalogue.py.
+PyYAML==6.0.3
+
 # Realtime SSE hints (fire-and-forget pub/sub consumed by crm-backend's hub).
 # redis.asyncio, not the unmaintained aioredis — it is aioredis's successor and
 # ships in the same package.

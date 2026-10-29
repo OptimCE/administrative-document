@@ -20,6 +20,22 @@ bundles through `document-generation`. Read `README.md` for the domain.
   `change`, `processed_event`, `module_activation`, `working_calendar`,
   `correspondence`. July dossiers were converted by migration 0003; a row with
   `dossier_type` and no `id_procedure_definition` is an unconverted July one.
+- `engine/` is generic and **never imports `regulators/`** nor names a regulator
+  (`tests/engine/test_boundary.py`: AST, a subprocess import with `regulators`
+  refused, and a grep). The contract is `engine/contracts.py`; plugins import
+  it; `regulators/registry.py` lists them and the entry points hand `REGISTRY`
+  in. Engine tests use `regulators/testing/fake.py`, never a real plugin.
+- **Plugin files are the source, the DB their projection.** One YAML per
+  procedure VERSION (`<CODE>.v<N>.yaml`) plus `calendar/<REGION>.yaml`.
+  `engine/catalogue_sync.py` runs at startup in the API AND the worker
+  (advisory xact lock `0x0AD30002`): it inserts, fills a row 0003 reserved,
+  refreshes labels in place, and REFUSES a released version whose content
+  changed — `content_sha256` excludes labels, so a typo fix is not a bump. A
+  refusal stops the process on purpose. Runtime reads the in-memory catalogue
+  and calendar; the tables are for FKs and SQL.
+- Holidays are data now: `engine/calendar.py` raises `CalendarNotCoveredError`
+  past the file's years instead of assuming none. `domain/calendar.py`
+  (workalendar) serves the July code only, until the cleanup lot.
 
 ## Two DB-enforced invariants
 - **The journal writes the status.** `status_event` is append-only, and
@@ -109,4 +125,5 @@ bundles through `document-generation`. Read `README.md` for the domain.
 ## Verify
 `cd administrative-document` then: `ENV=test DOCKER_CONTEXT=desktop-linux
 .venv/Scripts/python.exe -m pytest -q` (needs Docker Postgres on 5433) ·
-`.venv/Scripts/python.exe -m ruff check .` · `... -m mypy api domain ports shared worker`.
+`.venv/Scripts/python.exe -m ruff check .` · `... -m ruff format --check .` ·
+`... -m mypy .` (what CI runs: tests included).

@@ -1,0 +1,202 @@
+# The fake regulator's change procedure: one operation, two routes.
+# "light" goes to the GRD only; "full" adds a review, and any added meter
+# escalates the whole draft to it (see FakeRegulator.variant).
+code: FAKE_CHANGE
+version: 1
+valid_from: 2026-01-01
+scope: operation
+recipient: grd_ref
+channel: email
+family: FAKE_CHANGE
+handles_change_kinds: [meter_added, meter_removed, key_changed, representative_changed]
+variants: [light, full]
+default_variant: light
+escalation:
+  escalate_to: full
+  when_any: [meter_added]
+labels: {fr: Changement factice, en: Fake change, nl: Valse wijziging, de: Falsche Änderung}
+
+initial_step: draft
+steps:
+  - code: draft
+    status: draft
+    bucket: todo
+    next_action:
+      code: complete_documents
+      labels: {fr: Compléter les pièces, en: Complete the documents, nl: Documenten aanvullen, de: Unterlagen vervollständigen}
+    labels: {fr: Brouillon, en: Draft, nl: Concept, de: Entwurf}
+  - code: ready
+    status: ready
+    bucket: todo
+    next_action:
+      code: send
+      labels: {fr: Envoyer le changement, en: Send the change, nl: De wijziging versturen, de: Die Änderung senden}
+    labels: {fr: Prêt, en: Ready, nl: Klaar, de: Bereit}
+  - code: sent
+    status: sent
+    bucket: waiting
+    next_action:
+      code: record_response
+      labels: {fr: Réponse du GRD attendue, en: Awaiting the DSO, nl: Wachten op de DNB, de: Antwort des VNB erwartet}
+    labels: {fr: Envoyé, en: Sent, nl: Verstuurd, de: Gesendet}
+  - code: missing_info
+    status: sent
+    bucket: todo
+    next_action:
+      code: record_response
+      labels: {fr: Envoyer les compléments, en: Send the missing information, nl: Aanvullingen versturen, de: Ergänzungen senden}
+    labels: {fr: Incomplet, en: Incomplete, nl: Onvolledig, de: Unvollständig}
+  - code: reviewed
+    status: sent
+    bucket: waiting
+    variants: [full]
+    next_action:
+      code: record_response
+      labels: {fr: Décision attendue, en: Awaiting the decision, nl: Wachten op de beslissing, de: Entscheidung erwartet}
+    labels: {fr: En examen, en: Under review, nl: In behandeling, de: In Prüfung}
+  - code: accepted
+    status: sent
+    bucket: todo
+    next_action:
+      code: record_response
+      labels: {fr: Renvoyer le document signé, en: Return the signed document, nl: Het ondertekende document terugsturen, de: Das unterschriebene Dokument zurücksenden}
+    labels: {fr: Accepté, en: Accepted, nl: Aanvaard, de: Angenommen}
+  - code: signed
+    status: sent
+    bucket: planned
+    next_action: {code: none}
+    labels: {fr: Signé, en: Signed, nl: Ondertekend, de: Unterschrieben}
+  - code: in_force
+    status: in_force
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: En vigueur, en: In force, nl: Van kracht, de: In Kraft}
+  - code: refused
+    status: refused
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Refusé, en: Refused, nl: Geweigerd, de: Abgelehnt}
+  - code: lapsed
+    status: lapsed
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Caduc, en: Lapsed, nl: Vervallen, de: Verfallen}
+  - code: cancelled
+    status: cancelled
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Annulé, en: Cancelled, nl: Geannuleerd, de: Storniert}
+
+transitions:
+  - {from: draft, to: ready, automatic: true}
+  - {from: ready, to: draft, automatic: true}
+  - {from: draft, to: cancelled}
+  - {from: ready, to: cancelled}
+  - {from: ready, to: sent}
+  - {from: sent, to: missing_info}
+  - {from: missing_info, to: sent}
+  - {from: missing_info, to: lapsed}
+  - {from: sent, to: accepted, variants: [light]}
+  - {from: sent, to: reviewed, variants: [full]}
+  - {from: reviewed, to: accepted, variants: [full]}
+  - {from: reviewed, to: refused, variants: [full]}
+  - {from: accepted, to: signed}
+  - {from: signed, to: in_force, automatic: true}
+
+response_types:
+  - code: missing_info_notice
+    direction: inbound
+    counterparty: grd
+    to_step: missing_info
+    labels: {fr: Demande de compléments, en: Request for information, nl: Verzoek om aanvulling, de: Nachforderung}
+  - code: review_ack
+    direction: inbound
+    counterparty: grd
+    to_step: reviewed
+    variants: [full]
+    labels: {fr: Accusé d'examen, en: Review acknowledgement, nl: Ontvangstbevestiging, de: Prüfbestätigung}
+  - code: approval
+    direction: inbound
+    counterparty: grd
+    to_step: accepted
+    labels: {fr: Accord, en: Approval, nl: Goedkeuring, de: Zustimmung}
+  - code: refusal
+    direction: inbound
+    counterparty: grd
+    to_step: refused
+    variants: [full]
+    labels: {fr: Refus, en: Refusal, nl: Weigering, de: Ablehnung}
+  - code: signed_return
+    direction: outbound
+    counterparty: grd
+    to_step: signed
+    labels: {fr: Document signé renvoyé, en: Signed document returned, nl: Ondertekend document teruggestuurd, de: Unterschriebenes Dokument zurückgesandt}
+  - code: note
+    direction: inbound
+    counterparty: other
+    labels: {fr: Note, en: Note, nl: Notitie, de: Notiz}
+
+deadline_rules:
+  - code: grd_answer
+    kind: relative
+    anchor: step:sent
+    offset: {value: 10, unit: working_days}
+    party: grd
+    deadline_kind: response
+    closes_on: [response:missing_info_notice, response:review_ack, response:approval]
+    labels: {fr: Réponse du GRD, en: DSO answer, nl: Antwoord van de DNB, de: Antwort des VNB}
+  - code: supplements
+    kind: relative
+    anchor: response:missing_info_notice
+    offset: {value: 6, unit: months}
+    party: community
+    deadline_kind: lapse
+    closes_on: [step:sent]
+    labels: {fr: Compléments, en: Missing information, nl: Aanvullingen, de: Ergänzungen}
+  - code: decision
+    kind: relative
+    anchor: response:review_ack
+    offset: {value: 40, unit: working_days}
+    party: regulator
+    deadline_kind: response
+    closes_on: [response:approval, response:refusal]
+    variants: [full]
+    labels: {fr: Décision, en: Decision, nl: Beslissing, de: Entscheidung}
+  - code: return_signed
+    kind: relative
+    anchor: response:approval
+    offset: {value: 10, unit: working_days}
+    party: community
+    deadline_kind: submission
+    closes_on: [response:signed_return]
+    labels: {fr: Renvoi signé, en: Signed return, nl: Ondertekende terugzending, de: Unterschriebene Rücksendung}
+  - code: objection
+    kind: relative
+    anchor: response:approval
+    offset: {value: 30, unit: calendar_days}
+    party: community
+    deadline_kind: response
+    labels: {fr: Délai de recours, en: Appeal period, nl: Beroepstermijn, de: Einspruchsfrist}
+  - code: effect
+    kind: relative
+    anchor: response:signed_return
+    offset: {value: 20, unit: working_days}
+    party: grd
+    deadline_kind: effect
+    closes_on: [step:in_force]
+    labels: {fr: Prise d'effet, en: Takes effect, nl: Inwerkingtreding, de: Inkrafttreten}
+
+documents:
+  - code: change_form
+    kind: generated
+    template: fake/change_form
+    labels: {fr: Formulaire de changement, en: Change form, nl: Wijzigingsformulier, de: Änderungsformular}
+  - code: member_declaration
+    kind: collected
+    per_member: true
+    variants: [full]
+    labels: {fr: Déclaration du participant, en: Participant declaration, nl: Verklaring van de deelnemer, de: Erklärung des Teilnehmers}
+  - code: key_description
+    kind: generated
+    condition: non_standard_key
+    labels: {fr: Description de la clé, en: Key description, nl: Beschrijving van de sleutel, de: Beschreibung des Schlüssels}

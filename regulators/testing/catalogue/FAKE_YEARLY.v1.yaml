@@ -1,0 +1,74 @@
+# The fake regulator's calendar procedure: one per community and year, opened
+# on 1 April, due on 30 June.
+code: FAKE_YEARLY
+version: 1
+valid_from: 2026-01-01
+scope: community
+recipient: regulator
+channel: online_form
+family: FAKE_YEARLY
+opens_annually: {month: 4, day: 1}
+labels: {fr: Rapport annuel factice, en: Fake yearly report, nl: Vals jaarverslag, de: Falscher Jahresbericht}
+
+initial_step: draft
+steps:
+  - code: draft
+    status: draft
+    bucket: planned
+    next_action:
+      code: complete_documents
+      labels: {fr: Préparer le rapport, en: Prepare the report, nl: Het verslag voorbereiden, de: Den Bericht vorbereiten}
+    labels: {fr: Brouillon, en: Draft, nl: Concept, de: Entwurf}
+  - code: ready
+    status: ready
+    bucket: todo
+    next_action:
+      code: send
+      labels: {fr: Déposer le rapport, en: File the report, nl: Het verslag indienen, de: Den Bericht einreichen}
+    labels: {fr: Prêt, en: Ready, nl: Klaar, de: Bereit}
+  - code: filed
+    status: sent
+    bucket: waiting
+    next_action:
+      code: record_response
+      labels: {fr: Accusé attendu, en: Awaiting the receipt, nl: Wachten op de ontvangstbevestiging, de: Eingangsbestätigung erwartet}
+    labels: {fr: Déposé, en: Filed, nl: Ingediend, de: Eingereicht}
+  - code: done
+    status: in_force
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Clôturé, en: Closed, nl: Afgesloten, de: Abgeschlossen}
+  - code: cancelled
+    status: cancelled
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Annulé, en: Cancelled, nl: Geannuleerd, de: Storniert}
+
+transitions:
+  - {from: draft, to: ready, automatic: true}
+  - {from: ready, to: draft, automatic: true}
+  - {from: draft, to: cancelled}
+  - {from: ready, to: filed}
+  - {from: filed, to: done}
+
+response_types:
+  - code: receipt
+    direction: inbound
+    counterparty: regulator
+    to_step: done
+    labels: {fr: Accusé de réception, en: Receipt, nl: Ontvangstbevestiging, de: Eingangsbestätigung}
+
+deadline_rules:
+  - code: submission
+    kind: annual
+    annual: {month: 6, day: 30}
+    party: community
+    deadline_kind: submission
+    closes_on: [step:filed]
+    labels: {fr: Dépôt du rapport, en: Report filing, nl: Indiening van het verslag, de: Einreichung des Berichts}
+
+documents:
+  - code: yearly_report
+    kind: generated
+    template: fake/yearly_report
+    labels: {fr: Rapport annuel, en: Yearly report, nl: Jaarverslag, de: Jahresbericht}
