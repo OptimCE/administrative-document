@@ -60,7 +60,7 @@ from engine.contracts import PluginRegistry, plugin_for
 from engine.filing import RegionOf
 from engine.jobs import Chase, chase_deadlines, due_effects, open_calendar_procedures
 from ports.crm_engine import SqlEngineCrmRead
-from shared.const import DeadlineParty, DeadlineStatus
+from shared.const import DeadlineParty
 from shared.models.local_models import (
     DeadlineModel,
     DossierModel,
@@ -186,10 +186,7 @@ async def _run_for(
     effects = await due_effects(local, id_community, today=today)
     # Plain values: nothing after the commits reads ORM state, which a
     # rollback anywhere on these sessions would have expired.
-    due = [
-        (d.id, d.status == int(DeadlineStatus.MISSED))
-        for d in (*chase.missed, *chase.reminded, *chase.late_answers)
-    ]
+    due = [d.id for d in (*chase.missed, *chase.reminded, *chase.late_answers)]
     await crm.commit()
     await local.commit()
     report.missed += len(chase.missed)
@@ -302,7 +299,7 @@ def _data(deadline: DeadlineModel, codes: dict[int, str | None]) -> dict[str, ob
     }
 
 
-async def _hint(id_community: int, opened: list[int], due: list[tuple[int, bool]]) -> None:
+async def _hint(id_community: int, opened: list[int], due: list[int]) -> None:
     """Tell the managers to refetch. After the commits; never raises."""
     audience = CommunityAudience(id_community, Tier.MANAGER)
     for dossier_id in opened:
@@ -312,12 +309,13 @@ async def _hint(id_community: int, opened: list[int], due: list[tuple[int, bool]
             resource=("dossier", dossier_id),
             scope_community_id=id_community,
         )
-    for deadline_id, missed in due:
+    # No hint: a client branches on ``hint.status`` only, and its closed set
+    # has no "missed"; the refetch says which it is.
+    for deadline_id in due:
         await emit(
             topic="admin.deadline.due",
             audience=audience,
             resource=("deadline", deadline_id),
-            hint={"missed": missed},
             scope_community_id=id_community,
         )
 

@@ -51,6 +51,14 @@ bundles through `document-generation`. Read `README.md` for the domain.
   `draft -> cancelled`, `automatic: true`). A converted July draft keeps its
   variant. `engine/lifecycle.py` holds the step/deadline/piece operations the
   router, the API and the jobs share; realtime hints go out after the commit.
+- **Realtime topics** (`admin.change.detected`, `admin.dossier.updated`,
+  `admin.document.ready` when a render ends, `hint.status` ready/failed,
+  `admin.deadline.due`) must be in `core/realtime/envelope.py` TOPICS, which is
+  byte-identical in the 4 sibling producers and mirrored by crm-backend's
+  `realtime.topics.ts` (the monorepo's `scripts/check-realtime-parity.sh`
+  compares all of them). An unknown topic is not an error anywhere: the
+  envelope is None and nothing is published. `tests/test_realtime_topics.py`
+  scans every `emit(topic=...)` here. Clients branch on `hint.status` only.
 - **Baseline** (`engine/baseline.py`, `/admin/baseline`): a period opening
   (worker or API, serialised by advisory xact lock `0x0AD30003` per community)
   photographs operations/meters/keys into `module_activation.baseline_json` and

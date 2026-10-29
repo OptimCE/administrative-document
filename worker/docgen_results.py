@@ -33,6 +33,7 @@ from core.audit_log import AuditActions, AuditLogInput, AuditLogService
 from core.config import settings
 from core.database.database import AsyncSessionCRMFactory, AsyncSessionLocalFactory
 from core.queue.helper import Event, send_event, subscribe_durable
+from core.realtime import CommunityAudience, Tier, emit
 from engine.events import BRUSSELS
 from engine.filing import piece_rendered
 from regulators.registry import REGISTRY
@@ -151,9 +152,16 @@ async def process_docgen_result(
             metrics.document_renders.add(1, {"outcome": "dropped"})
             return DROP
 
-        with with_tenant(render.id_community):
+        # Plain values for the realtime hint, which goes out after the commit.
+        id_community, id_document = render.id_community, render.id_document
+        with with_tenant(id_community):
             if body.get("status") == "success":
-                return await _attach(local, crm, render, body, own_local=own_local, own_crm=own_crm)
+                outcome = await _attach(
+                    local, crm, render, body, own_local=own_local, own_crm=own_crm
+                )
+                if outcome == ATTACHED:
+                    await _render_ended(id_community, id_document, status="ready")
+                return outcome
 
             error = body.get("error") or {}
             if error.get("permanent"):
@@ -174,6 +182,7 @@ async def process_docgen_result(
                     commit=own_crm,
                 )
                 metrics.document_renders.add(1, {"outcome": "failed"})
+                await _render_ended(id_community, id_document, status="failed")
                 return RENDER_FAILED
 
             # Transient: docgen will not retry for us (it already gave up on this
@@ -264,6 +273,19 @@ async def _attach(
         commit=own_crm,
     )
     return ATTACHED
+
+
+async def _render_ended(id_community: int, id_document: int, *, status: str) -> None:
+    """Tell the managers a render ended (spec: the end is signalled in SSE),
+    so an open page refetches the piece instead of polling. After the commit;
+    never raises."""
+    await emit(
+        topic="admin.document.ready",
+        audience=CommunityAudience(id_community, Tier.MANAGER),
+        resource=("document", id_document),
+        hint={"status": status},
+        scope_community_id=id_community,
+    )
 
 
 def _first_artifact(body: dict[str, Any]) -> dict[str, Any] | None:

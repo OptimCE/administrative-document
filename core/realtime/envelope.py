@@ -37,6 +37,11 @@ TOPICS: Final[frozenset[str]] = frozenset(
         "simulation.finished",
         "billing_run.finished",
         "session.revoked",
+        # The espace administratif (administrative-document), for managers.
+        "admin.change.detected",
+        "admin.dossier.updated",
+        "admin.document.ready",
+        "admin.deadline.due",
     }
 )
 
