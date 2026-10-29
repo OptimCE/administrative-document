@@ -23,13 +23,16 @@ from nats.js import JetStreamContext
 from nats.js.api import ConsumerConfig
 
 from core.queue.helper import Event, subscribe_durable
+from engine.contracts import PluginRegistry
 from ports.document_generation_nats import NatsDocumentGeneration
+from regulators.registry import REGISTRY
 from shared.const import (
+    SUBJECT_DLQ_CORE_EVENT,
     SUBJECT_DLQ_DOCGEN_RESULT,
     SUBJECT_DLQ_GENERATE,
     SUBJECT_GENERATE_REQUESTED,
 )
-from worker import docgen_results, generate
+from worker import core_events, docgen_results, generate
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +41,22 @@ _ACK_WAIT_SECONDS = 120
 _NAK_RETRY_DELAY_SECONDS = 30
 _MAX_DELIVER = 5
 
-# The docgen results stream is owned by document-generation. On a cold stack it
+# Two streams are owned by other services: docgen results by
+# document-generation, core events by crm-outbox-relay. On a cold stack either
 # may be created *after* we boot, so the first subscribe can lose the race.
-# Rather than leave rendering half-wired for the whole process lifetime, retry in
-# the background with capped backoff (~20 minutes of attempts).
-_DOCGEN_RETRY_BASE_DELAY_SECONDS = 1
-_DOCGEN_RETRY_MAX_DELAY_SECONDS = 30
-_DOCGEN_RETRY_MAX_ATTEMPTS = 40
+# Rather than leave the consumer half-wired for the whole process lifetime,
+# retry in the background with capped backoff (~20 minutes of attempts).
+_ATTACH_RETRY_BASE_DELAY_SECONDS = 1
+_ATTACH_RETRY_MAX_DELAY_SECONDS = 30
+_ATTACH_RETRY_MAX_ATTEMPTS = 40
 
 
-async def subscribe_all(js: JetStreamContext, *, inflight: set[asyncio.Task] | None = None) -> list:
+async def subscribe_all(
+    js: JetStreamContext,
+    *,
+    inflight: set[asyncio.Task] | None = None,
+    registry: PluginRegistry = REGISTRY,
+) -> list:
     """Register the durable consumers. Returns their subscriptions."""
     subs = [
         await subscribe_durable(
@@ -63,22 +72,35 @@ async def subscribe_all(js: JetStreamContext, *, inflight: set[asyncio.Task] | N
     async def _to_result_dlq(msg: Msg) -> None:
         await _to_dlq(js, SUBJECT_DLQ_DOCGEN_RESULT, msg)
 
-    try:
-        subs.append(await docgen_results.subscribe(js, on_dlq=_to_result_dlq))
-        logger.info("Subscribed the docgen results consumer")
-    except Exception as exc:
-        logger.warning("docgen results not ready (%s); retrying attach in the background", exc)
-        _spawn_docgen_result_retry(js, _to_result_dlq, inflight=inflight)
+    async def _attach_results() -> Any:
+        return await docgen_results.subscribe(js, on_dlq=_to_result_dlq)
+
+    async def _to_core_event_dlq(msg: Msg) -> None:
+        await _to_dlq(js, SUBJECT_DLQ_CORE_EVENT, msg)
+
+    async def _attach_core_events() -> Any:
+        return await core_events.subscribe(js, registry=registry, on_dlq=_to_core_event_dlq)
+
+    for name, attach in (
+        ("docgen results", _attach_results),
+        ("core events", _attach_core_events),
+    ):
+        try:
+            subs.append(await attach())
+            logger.info("Subscribed the %s consumer", name)
+        except Exception as exc:
+            logger.warning("%s not ready (%s); retrying attach in the background", name, exc)
+            _spawn_attach_retry(name, attach, inflight=inflight)
     return subs
 
 
-def _spawn_docgen_result_retry(
-    js: JetStreamContext,
-    on_dlq: Callable[[Msg], Awaitable[None]],
+def _spawn_attach_retry(
+    name: str,
+    attach: Callable[[], Awaitable[Any]],
     *,
     inflight: set[asyncio.Task] | None,
 ) -> None:
-    """Background-retry the results subscription until it succeeds.
+    """Background-retry one subscription until it succeeds.
 
     The late subscription is NOT appended to the caller's drain list — mutating
     that list from here would race the shutdown drain. It is torn down by the
@@ -90,27 +112,30 @@ def _spawn_docgen_result_retry(
         return
 
     async def _retry() -> None:
-        for attempt in range(1, _DOCGEN_RETRY_MAX_ATTEMPTS + 1):
+        for attempt in range(1, _ATTACH_RETRY_MAX_ATTEMPTS + 1):
             delay = min(
-                _DOCGEN_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)),
-                _DOCGEN_RETRY_MAX_DELAY_SECONDS,
+                _ATTACH_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)),
+                _ATTACH_RETRY_MAX_DELAY_SECONDS,
             )
             await asyncio.sleep(delay)
             try:
-                await docgen_results.subscribe(js, on_dlq=on_dlq)
+                await attach()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.debug("docgen results attach retry %d failed: %s", attempt, exc)
+                logger.debug("%s attach retry %d failed: %s", name, attempt, exc)
                 continue
-            logger.info("docgen results attached after %d background retr(y/ies)", attempt)
+            logger.info("%s attached after %d background retr(y/ies)", name, attempt)
             return
         logger.warning(
-            "docgen results still unavailable after %d retries; rendering will not complete",
-            _DOCGEN_RETRY_MAX_ATTEMPTS,
+            "%s still unavailable after %d retries; that consumer will not run",
+            name,
+            _ATTACH_RETRY_MAX_ATTEMPTS,
         )
 
-    task: asyncio.Task[None] = asyncio.create_task(_retry(), name="docgen-result-retry")
+    task: asyncio.Task[None] = asyncio.create_task(
+        _retry(), name=f"{name.replace(' ', '-')}-attach-retry"
+    )
     inflight.add(task)
     task.add_done_callback(inflight.discard)
 

@@ -350,6 +350,13 @@ SUBJECT_DOCUMENT_RENDERED = "optimce.administrative_document.document.rendered"
 SUBJECT_GENERATE_REQUESTED = "optimce.administrative_document.document.generate.requested"
 SUBJECT_DLQ_GENERATE = "optimce.administrative_document.dlq.generate"
 SUBJECT_DLQ_DOCGEN_RESULT = "optimce.administrative_document.dlq.docgen_result"
+SUBJECT_DLQ_CORE_EVENT = "optimce.administrative_document.dlq.core_event"
+
+# --- The core's domain events (owned by crm-backend's outbox relay) ---------
+# crm-backend/src/shared/outbox/core-events.ts. This service binds a durable to
+# the stream and never declares it.
+CORE_EVENTS_STREAM = "CORE_EVENTS"
+CORE_EVENTS_SUBJECT = "core.evt.>"
 
 # --- Event.type values carried in the envelope (spec R6) -------------------
 EVENT_DOCUMENT_STATUS_CHANGED = "admin.document.status_changed"

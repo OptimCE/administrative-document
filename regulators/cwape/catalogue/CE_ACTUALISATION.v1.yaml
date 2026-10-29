@@ -65,7 +65,7 @@ steps:
 transitions:
   - {from: draft, to: ready, automatic: true}
   - {from: ready, to: draft, automatic: true}
-  - {from: draft, to: cancelled}
+  - {from: draft, to: cancelled, automatic: true}   # a system draft emptied by compensation; or by hand
   - {from: ready, to: cancelled}
   - {from: ready, to: sent}
   - {from: sent, to: incomplete}

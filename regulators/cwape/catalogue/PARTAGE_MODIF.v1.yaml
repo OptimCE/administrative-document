@@ -137,7 +137,7 @@ steps:
 transitions:
   - {from: draft, to: ready, automatic: true}       # every required piece ready
   - {from: ready, to: draft, automatic: true}       # a new change arrived
-  - {from: draft, to: cancelled}
+  - {from: draft, to: cancelled, automatic: true}   # a system draft emptied by compensation; or by hand
   - {from: ready, to: cancelled}
   - {from: ready, to: sent}
   - {from: sent, to: incomplete}

@@ -129,8 +129,9 @@ class Step(_Model):
 class Transition(_Model):
     source: LowerCode = Field(alias="from")
     target: LowerCode = Field(alias="to")
-    # Applied by the engine itself (pieces complete, effect date reached). Any
-    # edge can still be taken by hand, with a reason.
+    # The engine may take it itself (pieces complete, a new change, the effect
+    # date reached, a system draft emptied by compensation). Any edge can still
+    # be taken by hand, with a reason.
     automatic: bool = False
     variants: Variants = None
 
@@ -374,10 +375,35 @@ class ProcedureDefinition(_Model):
                 return response
         raise KeyError(f"{self.code} v{self.version} has no response type {code!r}")
 
+    def edge(self, source: str, target: str, variant: str | None) -> Transition | None:
+        return next(
+            (
+                e
+                for e in self.transitions
+                if e.source == source and e.target == target and _applies(e.variants, variant)
+            ),
+            None,
+        )
+
     def allows(self, source: str, target: str, variant: str | None) -> bool:
-        return any(
-            e.source == source and e.target == target and _applies(e.variants, variant)
-            for e in self.transitions
+        return self.edge(source, target, variant) is not None
+
+    def automatic_edge_to(
+        self, source: str, status: ProcedureStatus, variant: str | None
+    ) -> Transition | None:
+        """The edge the engine may take itself from ``source`` to a step of
+        common status ``status``, if the catalogue declares one."""
+        steps = {s.code: s for s in self.steps}
+        return next(
+            (
+                e
+                for e in self.transitions
+                if e.source == source
+                and e.automatic
+                and _applies(e.variants, variant)
+                and steps[e.target].common_status == status
+            ),
+            None,
         )
 
     def steps_for(self, variant: str | None) -> tuple[Step, ...]:

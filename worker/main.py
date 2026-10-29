@@ -115,7 +115,7 @@ async def main() -> None:
     heartbeat_task: asyncio.Task | None = None
     scheduler_task: asyncio.Task | None = None
     try:
-        subs = await dispatcher.subscribe_all(js, inflight=inflight)
+        subs = await dispatcher.subscribe_all(js, inflight=inflight, registry=REGISTRY)
         heartbeat_task = asyncio.create_task(_heartbeat(shutdown_event), name="heartbeat")
         # The deadline sweep, which nothing invoked before. It lives here rather
         # than behind a cron container because it needs the service, its two

@@ -81,6 +81,21 @@ health_checks = _meter.create_counter(
     unit="1",
 )
 
+# Spec: admin_events_skipped_total{reason}. A core event acknowledged without
+# filing anything; reason is the EventOutcome name (module_disabled,
+# before_activation, already_reflected, regulator_not_supported, no_procedure).
+admin_events_skipped = _meter.create_counter(
+    name="admin.events.skipped.total",
+    description="Core events acknowledged without filing a change, labelled by reason",
+    unit="1",
+)
+
+admin_changes_filed = _meter.create_counter(
+    name="admin.changes.filed.total",
+    description="Changes filed into procedures from core events, labelled by regulator",
+    unit="1",
+)
+
 # Latest queue depth per subject. Reserved for the Phase-2 generation worker's
 # background poller; the observable gauge below reads from this dict on every
 # metric collection cycle.

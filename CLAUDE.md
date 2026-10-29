@@ -39,6 +39,18 @@ bundles through `document-generation`. Read `README.md` for the domain.
   changed — `content_sha256` excludes labels, so a typo fix is not a bump. A
   refusal stops the process on purpose. Runtime reads the in-memory catalogue
   and calendar; the tables are for FKs and SQL.
+- **Core events → procedures** (`engine/routing.py`): `worker/core_events.py`
+  binds ONE durable to the core's `CORE_EVENTS` stream (`core.evt.>`, owned by
+  crm-outbox-relay; never declared here), `max_ack_pending=1` so events file in
+  stream order across replicas. Every event lands in `processed_event` (the
+  idempotency key), even when nothing is filed. Activation is read from the
+  CRM on EVERY event (`ports/crm_engine.py`), no cache; `module_activation`
+  periods are reconciled from it (`engine/activation.py`). A removal is never
+  "already reflected": before the baseline the annexe cannot know the meter was
+  absent. A system draft emptied by compensation is cancelled (catalogue edge
+  `draft -> cancelled`, `automatic: true`). A converted July draft keeps its
+  variant. `engine/lifecycle.py` holds the step/deadline/piece operations the
+  router, the API and the jobs share; realtime hints go out after the commit.
 - Holidays are data now: `engine/calendar.py` raises `CalendarNotCoveredError`
   past the file's years instead of assuming none. `domain/calendar.py`
   (workalendar) serves the July code only, until the cleanup lot.
