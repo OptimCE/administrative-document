@@ -5,6 +5,7 @@ from fastapi import Depends, FastAPI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from starlette.middleware.cors import CORSMiddleware
 
+from api.admin.routes import admin_routes
 from api.administrative_document.routes import administrative_document_routes
 from api.health.routes import health_router
 from core.config import Environment, settings
@@ -80,6 +81,7 @@ app.include_router(
     tags=["Administrative document"],
     dependencies=protected_deps,
 )
+app.include_router(admin_routes, tags=["Procedures"], dependencies=protected_deps)
 app.include_router(health_router, prefix="/health", tags=["Health"])
 
 FastAPIInstrumentor.instrument_app(app)

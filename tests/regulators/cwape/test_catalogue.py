@@ -19,11 +19,12 @@ CATALOGUE = PLUGIN.catalogue()
 DEFINITIONS = {e.definition.code: e.definition for e in CATALOGUE.entries}
 
 
-def test_six_codes_one_version_each():
+def test_six_codes_one_version_each_and_the_baseline():
     assert sorted(DEFINITIONS) == [
         "CE_ACTUALISATION",
         "CE_NOTIFICATION",
         "CE_RAPPORT_ANNUEL",
+        "ETAT_DE_DEPART",
         "PARTAGE_AUTORISATION",
         "PARTAGE_FIN",
         "PARTAGE_MODIF",

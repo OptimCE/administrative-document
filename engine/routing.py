@@ -26,55 +26,23 @@ from __future__ import annotations
 
 import datetime
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.regions import region_for_regulator
 from engine.activation import reconcile_activation
-from engine.catalogue import CatalogueEntry
-from engine.contracts import (
-    ChangeFact,
-    PluginRegistry,
-    ProcedureFacts,
-    RegulatorPlugin,
-    plugin_for,
-)
-from engine.events import INVERSE, CoreEvent, DetectedChange, change_of
-from engine.lifecycle import (
-    LifecycleError,
-    ProcedureContext,
-    context_for,
-    mark_generated_stale,
-    open_procedure,
-    refresh_next_action,
-    sync_pieces,
-    take_automatic_edge,
-)
+from engine.baseline import ensure_baseline, photographed
+from engine.contracts import PluginRegistry, plugin_for
+from engine.events import CoreEvent, DetectedChange, change_of
+from engine.filing import RegionOf, file_change
 from ports.crm_engine import EngineCrmRead
-from shared.const import (
-    ChangeStatus,
-    ChangeSubjectType,
-    EventOutcome,
-    OpenedBy,
-    ProcedureScope,
-    ProcedureStatus,
-)
-from shared.models.local_models import (
-    ChangeModel,
-    DocumentModel,
-    DocumentVersionModel,
-    DossierModel,
-    ProcedureDefinitionModel,
-    ProcessedEventModel,
-)
+from shared.const import ChangeStatus, ChangeSubjectType, EventOutcome
+from shared.models.local_models import ChangeModel, ModuleActivationModel, ProcessedEventModel
 
 logger = logging.getLogger(__name__)
-
-_OPEN = (int(ProcedureStatus.DRAFT), int(ProcedureStatus.READY))
 
 # The changes whose subject the core tracks, and how they name it.
 _TRACKED_KINDS = {
@@ -99,9 +67,6 @@ class RoutingResult:
 class _Filing:
     dossiers: list[int] = field(default_factory=list)
     changes: list[int] = field(default_factory=list)
-
-
-RegionOf = Callable[[str], int | None]
 
 
 async def route_event(
@@ -151,6 +116,18 @@ async def _route(
     period = await reconcile_activation(local, event.id_community, state, now=now)
     if period is None:
         return EventOutcome.MODULE_DISABLED
+    plugin = plugin_for(registry, state.regulator)
+    if plugin is not None:
+        # The first event of a period may come before anyone opens the
+        # dashboard: the photo is taken here as well.
+        await ensure_baseline(
+            local,
+            crm,
+            plugin,
+            period,
+            now=now or datetime.datetime.now(datetime.UTC),
+            region_of=region_of,
+        )
     if event.occurred_at < period.enabled_at:
         return EventOutcome.BEFORE_ACTIVATION
 
@@ -158,25 +135,64 @@ async def _route(
     if change is None:
         logger.info("core event type %s files nothing here", event.event_type)
         return EventOutcome.NO_PROCEDURE
-    if await _already_reflected(crm, event, change):
+    if await _already_reflected(local, crm, period, event, change):
         return EventOutcome.ALREADY_REFLECTED
-
-    plugin = plugin_for(registry, state.regulator)
     if plugin is None:
         return EventOutcome.REGULATOR_NOT_SUPPORTED
     targets = plugin.catalogue().handling(change.kind, event.day)
     for entry in targets:
-        await _file(event, change, plugin, entry, local, region_of, filing)
+        filed = await file_change(
+            local,
+            plugin,
+            entry,
+            change,
+            id_community=event.id_community,
+            day=event.day,
+            at=event.occurred_at,
+            source_event_id=event.event_id,
+            region_of=region_of,
+            context={"event_id": str(event.event_id)},
+        )
+        if filed is not None:
+            filing.dossiers.append(filed[0])
+            filing.changes.append(filed[1])
     return EventOutcome.ROUTED if filing.changes else EventOutcome.NO_PROCEDURE
 
 
-async def _already_reflected(crm: EngineCrmRead, event: CoreEvent, change: DetectedChange) -> bool:
-    """Is this change already the authorised state? Only additions can be: a
+async def _already_reflected(
+    local: AsyncSession,
+    crm: EngineCrmRead,
+    period: ModuleActivationModel,
+    event: CoreEvent,
+    change: DetectedChange,
+) -> bool:
+    """Is this addition already known? Tracked by the core, on the baseline
+    still awaiting confirmation (spec: events in flight are "comparés à la
+    photo"), or already a change in a procedure. Only additions can be: a
     removal is never skipped, because before the baseline is confirmed the
     annexe cannot know the meter was absent (spec, "Rangement", step 2)."""
     subject_type = _TRACKED_KINDS.get(change.kind)
     if subject_type is None or change.id_sharing_operation is None:
         return False
+    operation = change.id_sharing_operation
+    if period.baseline_confirmed_at is None and photographed(
+        period.baseline_json or {}, int(subject_type), operation, change.subject_ref
+    ):
+        return True
+    filed = await local.scalar(
+        select(ChangeModel.id)
+        .where(
+            ChangeModel.id_community == event.id_community,
+            ChangeModel.id_sharing_operation == operation,
+            ChangeModel.subject_type == int(subject_type),
+            ChangeModel.subject_ref == change.subject_ref,
+            ChangeModel.kind == change.kind,
+            ChangeModel.status.in_((int(ChangeStatus.ATTACHED), int(ChangeStatus.APPLIED))),
+        )
+        .limit(1)
+    )
+    if filed is not None:
+        return True
     on = _effective_day(event)
     tracked = await crm.tracked_subjects(
         id_community=event.id_community,
@@ -197,241 +213,3 @@ def _effective_day(event: CoreEvent) -> datetime.date:
             except ValueError:
                 break
     return event.day
-
-
-async def _file(
-    event: CoreEvent,
-    change: DetectedChange,
-    plugin: RegulatorPlugin,
-    entry: CatalogueEntry,
-    local: AsyncSession,
-    region_of: RegionOf,
-    filing: _Filing,
-) -> None:
-    definition = entry.definition
-    operation_scope = definition.procedure_scope == ProcedureScope.OPERATION
-    if operation_scope and change.id_sharing_operation is None:
-        # A community event feeding a per-operation procedure means one per
-        # operation (a new representative). No such event has an emitter yet.
-        logger.warning(
-            "%s %s is per operation; community event %s not filed there",
-            plugin.code,
-            definition.code,
-            event.event_id,
-        )
-        return
-    operation = change.id_sharing_operation if operation_scope else None
-    period_key = str(event.day.year) if definition.opens_annually else None
-
-    row = ChangeModel(
-        id_community=event.id_community,
-        id_sharing_operation=operation,
-        kind=change.kind,
-        subject_type=int(change.subject_type),
-        subject_ref=change.subject_ref,
-        payload_json=dict(change.payload),
-        source_event_id=event.event_id,
-        procedure_code=definition.code,
-        status=int(ChangeStatus.PENDING),
-        detected_at=event.occurred_at,
-    )
-    local.add(row)
-
-    inverse = await _open_inverse(local, event.id_community, operation, change, definition.code)
-    if inverse is not None:
-        holding = await _dossier(local, inverse.id_dossier)
-        inverse.status = int(ChangeStatus.CANCELLED)
-        row.status = int(ChangeStatus.CANCELLED)
-        row.id_dossier = holding.id
-        await local.flush()
-        ctx = await _context_of(local, plugin, holding)
-        await _content_changed(local, ctx, holding, event.day)
-        if not await _cancel_if_emptied(local, ctx, holding, event.day):
-            await _recompute(local, ctx, holding, event.day)
-        filing.dossiers.append(holding.id)
-        filing.changes.append(row.id)
-        return
-
-    dossier = await _open_draft(local, event.id_community, operation, definition.family, period_key)
-    if dossier is None:
-        ctx = await context_for(local, plugin, definition.code, definition.version)
-        region = region_of(plugin.code)
-        if region is None:
-            raise LifecycleError(f"regulator {plugin.code} has no region in regulators.json")
-        dossier = await open_procedure(
-            local,
-            ctx,
-            id_community=event.id_community,
-            id_sharing_operation=operation,
-            region=int(region),
-            variant=plugin.variant(definition, [change.fact()]),
-            opened_by=OpenedBy.SYSTEM,
-            day=event.day,
-            period_key=period_key,
-            context={"event_id": str(event.event_id)},
-        )
-    else:
-        ctx = await _context_of(local, plugin, dossier)
-
-    row.status = int(ChangeStatus.ATTACHED)
-    row.id_dossier = dossier.id
-    await local.flush()
-    await _content_changed(local, ctx, dossier, event.day)
-    await _recompute(local, ctx, dossier, event.day)
-    filing.dossiers.append(dossier.id)
-    filing.changes.append(row.id)
-
-
-async def _dossier(local: AsyncSession, dossier_id: int | None) -> DossierModel:
-    dossier = await local.get(DossierModel, dossier_id) if dossier_id is not None else None
-    if dossier is None:
-        raise LifecycleError(f"change refers to missing procedure {dossier_id}")
-    return dossier
-
-
-async def _context_of(
-    local: AsyncSession, plugin: RegulatorPlugin, dossier: DossierModel
-) -> ProcedureContext:
-    """The context of the version the procedure was opened under, which may no
-    longer be the one in force."""
-    row = await local.get(ProcedureDefinitionModel, dossier.id_procedure_definition)
-    if row is None:
-        raise LifecycleError(f"procedure {dossier.id} has no definition")
-    return await context_for(local, plugin, row.code, row.version)
-
-
-async def _open_draft(
-    local: AsyncSession,
-    id_community: int,
-    operation: int | None,
-    family: str,
-    period_key: str | None,
-) -> DossierModel | None:
-    draft: DossierModel | None = await local.scalar(
-        select(DossierModel).where(
-            DossierModel.id_community == id_community,
-            DossierModel.family == family,
-            DossierModel.status.in_(_OPEN),
-            DossierModel.id_sharing_operation.is_not_distinct_from(operation),
-            DossierModel.period_key.is_not_distinct_from(period_key),
-        )
-    )
-    return draft
-
-
-async def _open_inverse(
-    local: AsyncSession,
-    id_community: int,
-    operation: int | None,
-    change: DetectedChange,
-    procedure_code: str,
-) -> ChangeModel | None:
-    inverse_kind = INVERSE.get(change.kind)
-    if inverse_kind is None:
-        return None
-    inverse: ChangeModel | None = await local.scalar(
-        select(ChangeModel)
-        .join(DossierModel, DossierModel.id == ChangeModel.id_dossier)
-        .where(
-            ChangeModel.id_community == id_community,
-            ChangeModel.kind == inverse_kind,
-            ChangeModel.subject_type == int(change.subject_type),
-            ChangeModel.subject_ref == change.subject_ref,
-            ChangeModel.procedure_code == procedure_code,
-            ChangeModel.status == int(ChangeStatus.ATTACHED),
-            ChangeModel.id_sharing_operation.is_not_distinct_from(operation),
-            DossierModel.status.in_(_OPEN),
-        )
-        .order_by(ChangeModel.id.desc())
-        .limit(1)
-    )
-    return inverse
-
-
-async def _active_changes(local: AsyncSession, dossier: DossierModel) -> list[ChangeModel]:
-    return list(
-        await local.scalars(
-            select(ChangeModel)
-            .where(
-                ChangeModel.id_community == dossier.id_community,
-                ChangeModel.id_dossier == dossier.id,
-                ChangeModel.status == int(ChangeStatus.ATTACHED),
-            )
-            .order_by(ChangeModel.id)
-        )
-    )
-
-
-async def _content_changed(
-    local: AsyncSession, ctx: ProcedureContext, dossier: DossierModel, day: datetime.date
-) -> None:
-    """What the draft holds changed: its generated pieces are outdated, and a
-    READY draft goes back to draft (spec, "retour en Brouillon si nouveau
-    changement")."""
-    await mark_generated_stale(local, dossier)
-    if dossier.status == int(ProcedureStatus.READY):
-        await take_automatic_edge(
-            local, ctx, dossier, ProcedureStatus.DRAFT, day=day, context={"reason": "new_change"}
-        )
-
-
-async def _cancel_if_emptied(
-    local: AsyncSession, ctx: ProcedureContext, dossier: DossierModel, day: datetime.date
-) -> bool:
-    """A draft the system opened, left with no change and no file, is cancelled
-    (if the catalogue lets the engine take that edge). One a person opened, or
-    worked on, stays."""
-    if dossier.opened_by != int(OpenedBy.SYSTEM) or dossier.status != int(ProcedureStatus.DRAFT):
-        return False
-    if await _active_changes(local, dossier):
-        return False
-    versions = await local.scalar(
-        select(func.count(DocumentVersionModel.id))
-        .join(DocumentModel, DocumentModel.id == DocumentVersionModel.id_document)
-        .where(DocumentModel.id_dossier == dossier.id)
-    )
-    if versions:
-        return False
-    return await take_automatic_edge(
-        local, ctx, dossier, ProcedureStatus.CANCELLED, day=day, context={"reason": "compensated"}
-    )
-
-
-async def _recompute(
-    local: AsyncSession, ctx: ProcedureContext, dossier: DossierModel, day: datetime.date
-) -> None:
-    changes = await _active_changes(local, dossier)
-    facts = tuple(
-        ChangeFact(
-            kind=c.kind,
-            subject_type=ChangeSubjectType(c.subject_type),
-            subject_ref=c.subject_ref,
-            payload=c.payload_json,
-        )
-        for c in changes
-    )
-    # A converted July draft keeps its variant: it has no change rows for what
-    # July held, and migration 0003 chose the route that cannot under-notify.
-    if dossier.opened_by != int(OpenedBy.MIGRATION):
-        variant = ctx.plugin.variant(ctx.definition, facts)
-        if variant is not None and variant not in ctx.definition.variants:
-            raise LifecycleError(f"{ctx.plugin.code} chose unknown variant {variant!r}")
-        dossier.variant = variant
-
-    grds = {str(c.payload_json["grd"]) for c in changes if c.payload_json.get("grd")}
-    if dossier.grd_ref is None and len(grds) == 1:
-        dossier.grd_ref = grds.pop()
-
-    requirements = ctx.plugin.required_documents(
-        ProcedureFacts(
-            definition=ctx.definition,
-            variant=dossier.variant,
-            id_community=dossier.id_community,
-            id_sharing_operation=dossier.id_sharing_operation,
-            changes=facts,
-            requested_effective_date=dossier.requested_effective_date,
-            effective_date=dossier.effective_date,
-        )
-    )
-    await sync_pieces(local, dossier, requirements)
-    await refresh_next_action(local, ctx, dossier)

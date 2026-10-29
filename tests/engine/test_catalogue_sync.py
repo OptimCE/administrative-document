@@ -27,7 +27,9 @@ from shared.models.local_models import (
 from tests.engine.catalogue_files import fake_catalogue_copy, fake_document
 
 D = datetime.date
-ALL_THREE = ["FAKE_CHANGE v1", "FAKE_COMMUNITY v1", "FAKE_YEARLY v1"]
+# The fake catalogue, in the order the sync handles it (by code).
+ALL = ["FAKE_BASELINE v1", "FAKE_CHANGE v1", "FAKE_COMMUNITY v1", "FAKE_YEARLY v1"]
+BUT_CHANGE = [name for name in ALL if name != "FAKE_CHANGE v1"]
 
 
 def _v2() -> dict:
@@ -82,7 +84,7 @@ class TestTheFirstSync:
     async def test_inserts_every_definition(self, db_session):
         plugin = FakeRegulator()
         report = await sync_plugin(db_session, plugin)
-        assert report.inserted == ALL_THREE
+        assert report.inserted == ALL
 
         change = await _definition(db_session, "FAKE_CHANGE")
         entry = plugin.catalogue().get("FAKE_CHANGE", 1)
@@ -163,7 +165,7 @@ class TestASecondSync:
         async with _rows_written(db_session) as writes:
             report = await sync_plugin(db_session, FakeRegulator())
         assert writes == []
-        assert report.unchanged == ALL_THREE
+        assert report.unchanged == ALL
         assert not report.wrote_anything
 
 
@@ -214,7 +216,13 @@ class TestAReleasedVersionIsEvidence:
 
     async def test_two_versions_at_once(self, db_session, tmp_path):
         report = await sync_plugin(db_session, _with_v2(tmp_path))
-        assert report.inserted == ["FAKE_CHANGE v1", "FAKE_CHANGE v2", *ALL_THREE[1:]]
+        assert report.inserted == [
+            "FAKE_BASELINE v1",
+            "FAKE_CHANGE v1",
+            "FAKE_CHANGE v2",
+            "FAKE_COMMUNITY v1",
+            "FAKE_YEARLY v1",
+        ]
         assert (await _definition(db_session, "FAKE_CHANGE", 1)).valid_to == D(2026, 6, 30)
 
     async def test_a_deleted_file_is_refused(self, db_session, tmp_path):
@@ -231,7 +239,7 @@ class TestAReleasedVersionIsEvidence:
         report = await sync_plugin(db_session, FakeRegulator())
 
         assert report.newer_in_database == ["FAKE_CHANGE v2"]
-        assert report.unchanged == ALL_THREE[1:]
+        assert report.unchanged == BUT_CHANGE
         # This image would make v1 open-ended again; it must not.
         assert (await _definition(db_session, "FAKE_CHANGE", 1)).valid_to == D(2026, 6, 30)
 
@@ -295,7 +303,7 @@ class TestReservedRows:
         report = await sync_plugin(db_session, FakeRegulator())
 
         assert report.filled == ["FAKE_CHANGE v1"]
-        assert report.inserted == ALL_THREE[1:]
+        assert report.inserted == BUT_CHANGE
         change = await _definition(db_session, "FAKE_CHANGE")
         assert change.id == reserved
         assert change.content_sha256 is not None

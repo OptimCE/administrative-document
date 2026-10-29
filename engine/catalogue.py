@@ -249,6 +249,10 @@ class ProcedureDefinition(_Model):
     code: UpperCode
     version: int = Field(ge=1)
     valid_from: datetime.date
+    # "baseline": the community's starting state (spec, "Première activation").
+    # The engine opens one when the module is first switched on; its steps
+    # are the confirmation, and the episodes it confirms point at it.
+    purpose: Literal["filing", "baseline"] = "filing"
     scope: Literal["community", "operation"]
     recipient: Literal["grd_ref", "regulator"]
     channel: Literal["email", "online_form", "post"]
@@ -331,6 +335,16 @@ class ProcedureDefinition(_Model):
             unreachable = sorted(set(steps) - self._reachable_from(self.initial_step))
             if unreachable:
                 problems.append(f"no transition reaches {', '.join(unreachable)}")
+
+        if self.purpose == "baseline":
+            if self.scope != "community":
+                problems.append("a baseline procedure is about the whole community")
+            if self.handles_change_kinds or self.opens_annually or self.variants:
+                problems.append("a baseline procedure takes no change, period or variant")
+            if self.automatic_edge_to(self.initial_step, ProcedureStatus.IN_FORCE, None) is None:
+                problems.append(
+                    "a baseline procedure is confirmed by an automatic edge to in_force"
+                )
 
         if problems:
             raise ValueError("; ".join(problems))
@@ -466,6 +480,13 @@ class Catalogue:
             if e.in_force_on(on) and change_kind in e.definition.handles_change_kinds
         )
 
+    def baseline(self, on: datetime.date) -> CatalogueEntry | None:
+        """The baseline procedure in force on ``on`` (one per catalogue)."""
+        return next(
+            (e for e in self.entries if e.definition.purpose == "baseline" and e.in_force_on(on)),
+            None,
+        )
+
 
 # -- hashing ---------------------------------------------------------------
 
@@ -533,6 +554,10 @@ def load_catalogue(directory: Path, *, regulator: str) -> Catalogue:
     loaded = [(path.name, *_load_file(path)) for path in sorted(directory.glob("*.yaml"))]
     if not loaded:
         raise CatalogueError(f"{directory}: no catalogue file")
+
+    baselines = sorted({d.code for _, d, _ in loaded if d.purpose == "baseline"})
+    if len(baselines) > 1:
+        raise CatalogueError(f"{directory}: one baseline procedure, not {', '.join(baselines)}")
 
     entries: list[CatalogueEntry] = []
     for code in sorted({definition.code for _, definition, _ in loaded}):

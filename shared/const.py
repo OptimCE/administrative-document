@@ -301,6 +301,7 @@ class NextActionCode(StrEnum):
     COMPLETE_DOCUMENTS = "complete_documents"
     SEND = "send"
     RECORD_RESPONSE = "record_response"
+    CONFIRM_BASELINE = "confirm_baseline"
     NONE = "none"
 
 

@@ -51,6 +51,16 @@ bundles through `document-generation`. Read `README.md` for the domain.
   `draft -> cancelled`, `automatic: true`). A converted July draft keeps its
   variant. `engine/lifecycle.py` holds the step/deadline/piece operations the
   router, the API and the jobs share; realtime hints go out after the commit.
+- **Baseline** (`engine/baseline.py`, `/admin/baseline`): a period opening
+  (worker or API, serialised by advisory xact lock `0x0AD30003` per community)
+  photographs operations/meters/keys into `module_activation.baseline_json` and
+  opens the plugin's `purpose: baseline` procedure (the one task). Confirming
+  is core FIRST (`ports/core_effects_sqlalchemy.py`: upsert by (origin,
+  subject), EXCLUDE pre-checked so a 409 lists every EAN, audit row written
+  there because `AuditLogService` swallows), then local, then the episodes'
+  `regulatory_ref`; each step idempotent. An "already sent" procedure is BORN
+  at its sent step (`open_procedure(step=...)`): passing through draft would
+  collide with the family's open draft.
 - Holidays are data now: `engine/calendar.py` raises `CalendarNotCoveredError`
   past the file's years instead of assuming none. `domain/calendar.py`
   (workalendar) serves the July code only, until the cleanup lot.

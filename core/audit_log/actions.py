@@ -42,4 +42,13 @@ class AuditActions:
 
     # ---- registries (reference data edited as data, not deployed) ----
     TEMPLATE_SAVED: Final[AuditAction] = "administrative_document.template.saved"
+
+    # ---- procedures engine ----
+    # The annexe wrote the effect columns of the core's regulatory_link_status.
+    # Written by ports/core_effects_sqlalchemy.py in the SAME CRM transaction as
+    # the effect, and never swallowed (unlike AuditLogService.log).
+    REGULATORY_EFFECT_APPLIED: Final[AuditAction] = (
+        "administrative_document.regulatory_effect.applied"
+    )
+    BASELINE_CONFIRMED: Final[AuditAction] = "administrative_document.baseline.confirmed"
     DEADLINE_RULE_SAVED: Final[AuditAction] = "administrative_document.deadline_rule.saved"

@@ -269,12 +269,16 @@ async def open_procedure(
     period_key: str | None = None,
     actor: str = ENGINE_ACTOR,
     context: dict[str, Any] | None = None,
+    step: str | None = None,
 ) -> DossierModel:
-    """A new procedure on the definition's initial step, born in the journal."""
+    """A new procedure, born in the journal on the definition's initial step,
+    or on ``step`` for one that enters OptimCE further along (already sent
+    when the baseline was confirmed): it is never a draft, even for a moment,
+    so it cannot collide with the family's open draft."""
     definition = ctx.definition
     if variant is not None and variant not in definition.variants:
         raise LifecycleError(f"{definition.code} has no variant {variant!r}")
-    initial = definition.step(definition.initial_step)
+    initial = definition.step(step or definition.initial_step)
     dossier = DossierModel(
         id_community=id_community,
         id_sharing_operation=id_sharing_operation,
@@ -349,6 +353,34 @@ async def move_to_step(
         )
     await refresh_next_action(session, ctx, dossier)
     return event
+
+
+def path_to(
+    definition: ProcedureDefinition, source: str, status: ProcedureStatus, variant: str | None
+) -> list[str]:
+    """The shortest run of steps from ``source`` to the first step of common
+    status ``status``, along the variant's edges (``source`` excluded). Empty
+    when none leads there."""
+    steps = {s.code: s for s in definition.steps}
+    previous: dict[str, str] = {}
+    queue = [source]
+    while queue:
+        current = queue.pop(0)
+        if current != source and steps[current].common_status == status:
+            path = [current]
+            while previous[path[0]] != source:
+                path.insert(0, previous[path[0]])
+            return path
+        for edge in definition.transitions:
+            if (
+                edge.source == current
+                and edge.target not in previous
+                and edge.target != source
+                and definition.allows(current, edge.target, variant)
+            ):
+                previous[edge.target] = current
+                queue.append(edge.target)
+    return []
 
 
 async def take_automatic_edge(

@@ -48,7 +48,11 @@
       "GENERATION_FAILED": "Failed to start the document generation (code: 2362)",
       "PREFILL_FAILED": "Failed to pre-fill the document from the CRM (code: 2363)",
       "RENDER_ALREADY_IN_FLIGHT": "A generation is already running for this document (code: 2364)",
-      "TOO_MANY_ROWS": "The official form does not have room for this many rows (code: 2365)"
+      "TOO_MANY_ROWS": "The official form does not have room for this many rows (code: 2365)",
+      "GET_BASELINE": "Failed to retrieve the starting state (code: 2370)",
+      "CONFIRM_BASELINE": "Failed to confirm the starting state (code: 2371)",
+      "BASELINE_INVALID": "These choices do not match the starting state (code: 2372)",
+      "BASELINE_CONFLICT": "Some meters are already tracked in another operation on these dates (code: 2373)"
     }
   }
 }

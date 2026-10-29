@@ -17,11 +17,16 @@ from __future__ import annotations
 
 import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ports.crm_engine import CommunityModuleState
 from shared.models.local_models import ModuleActivationModel
+
+# Serialises reconciliation per community, transaction-scoped: the worker and
+# the API may both notice an activation at once, and only one may open its
+# period and photograph its baseline. Namespaced like worker/sweeps.py's key.
+_ACTIVATION_LOCK = 0x0AD3_0003
 
 
 async def current_period(session: AsyncSession, id_community: int) -> ModuleActivationModel | None:
@@ -43,6 +48,7 @@ async def reconcile_activation(
 ) -> ModuleActivationModel | None:
     """Bring ``module_activation`` in line with ``state``; return the open
     period, or None when the module is inactive."""
+    await session.execute(select(func.pg_advisory_xact_lock(_ACTIVATION_LOCK, id_community)))
     now = now or datetime.datetime.now(datetime.UTC)
     changed_at = min(state.changed_at, now) if state.changed_at is not None else now
     period = await current_period(session, id_community)

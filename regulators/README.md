@@ -59,6 +59,14 @@ tests/regulators/<name>/       # its tests (not here: the images copy this tree)
      can be `per_member`, have a `condition` your plugin evaluates, or be
      `required: false` (it does not hold the draft back).
 
+   One file must be the **baseline** procedure (`purpose: baseline`, community
+   scope, no trigger, an automatic edge from its draft step to an `in_force`
+   one, a `confirm_baseline` next action). When the module is first switched on
+   for a community, the engine photographs its operations, meters and keys and
+   opens this procedure, the dashboard's one task until the admin confirms what
+   the GRD and the regulator already know; the confirmed episodes in the core
+   point at it. See `cwape/catalogue/ETAT_DE_DEPART.v1.yaml`.
+
    Every label comes in fr, en, nl and de. The frontend shows them as they are,
    so adding a regulator never touches it. Anything can be limited to some
    variants with `variants: [...]`.

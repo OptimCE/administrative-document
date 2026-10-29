@@ -145,13 +145,88 @@ async def dossier(world: World, dossier_id: int) -> DossierModel:
     return row
 
 
-async def procedures(world: World) -> list[DossierModel]:
-    rows = await world.session.scalars(
-        select(DossierModel)
-        .where(DossierModel.id_community == world.id_community)
-        .order_by(DossierModel.id)
+def baseline_family(world: World) -> str:
+    entry = world.plugin.catalogue().baseline(NOW.date())
+    assert entry is not None
+    return entry.definition.family
+
+
+async def procedures(world: World, *, with_baseline: bool = False) -> list[DossierModel]:
+    """The community's procedures; the baseline one (opened with every period)
+    only when asked."""
+    stmt = select(DossierModel).where(DossierModel.id_community == world.id_community)
+    if not with_baseline:
+        stmt = stmt.where(DossierModel.family != baseline_family(world))
+    return list(await world.session.scalars(stmt.order_by(DossierModel.id)))
+
+
+async def baseline_procedure(world: World) -> DossierModel | None:
+    row = await world.session.scalar(
+        select(DossierModel).where(
+            DossierModel.id_community == world.id_community,
+            DossierModel.family == baseline_family(world),
+        )
     )
-    return list(rows)
+    if row is not None:
+        await world.session.refresh(row)
+    return row
+
+
+async def add_meter(
+    world: World,
+    ean: str,
+    *,
+    member: int | None = 5,
+    grd: str = "ORES",
+    injection: int | None = None,
+    start: datetime.date = datetime.date(2025, 6, 1),
+    end: datetime.date | None = None,
+    operation: int | None = None,
+) -> None:
+    """A meter in the CRM, attributed to the world's operation."""
+    await world.session.execute(
+        text(
+            "INSERT INTO meter (ean, id_community) VALUES (:ean, :c) ON CONFLICT (ean) DO NOTHING"
+        ),
+        {"ean": ean, "c": world.id_community},
+    )
+    await world.session.execute(
+        text(
+            "INSERT INTO meter_data (ean, id_member, id_sharing_operation, status, "
+            " injection_status, grd, start_date, end_date, id_community) "
+            "VALUES (:ean, :member, :op, 1, :injection, :grd, :start, :end, :c)"
+        ),
+        {
+            "ean": ean,
+            "member": member,
+            "op": operation or world.operation,
+            "injection": injection,
+            "grd": grd,
+            "start": start,
+            "end": end,
+            "c": world.id_community,
+        },
+    )
+
+
+async def add_key(
+    world: World, name: str = "Égalitaire", *, start: datetime.date = datetime.date(2025, 6, 1)
+) -> int:
+    """An allocation key applied (approved) to the world's operation."""
+    key_id = (
+        await world.session.execute(
+            text("INSERT INTO allocation_key (name, id_community) VALUES (:n, :c) RETURNING id"),
+            {"n": name, "c": world.id_community},
+        )
+    ).scalar_one()
+    await world.session.execute(
+        text(
+            "INSERT INTO sharing_operation_key (id_sharing_operation, id_key, start_date, "
+            " status, id_community) VALUES (:op, :k, :start, 1, :c)"
+        ),
+        {"op": world.operation, "k": key_id, "start": start, "c": world.id_community},
+    )
+    return int(key_id)
 
 
 async def changes(world: World, dossier_id: int | None = None) -> list[ChangeModel]:

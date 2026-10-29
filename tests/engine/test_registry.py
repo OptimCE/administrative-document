@@ -84,7 +84,9 @@ class TestTheProductionRegistry:
 
 class TestTheFakeRegulator:
     plugin = FakeRegulator()
-    change = plugin.catalogue().entries[0].definition
+    change = next(
+        e.definition for e in plugin.catalogue().entries if e.definition.code == "FAKE_CHANGE"
+    )
 
     def test_an_added_meter_escalates_the_route(self):
         assert self.plugin.variant(self.change, [_meter("meter_removed")]) == "light"

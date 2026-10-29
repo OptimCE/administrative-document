@@ -735,7 +735,8 @@ def synced(test_db_ready) -> Iterator[Synced]:
 class TestTheCatalogueSyncsOntoIt:
     async def test_every_reserved_row_is_filled_and_none_refused(self, synced):
         assert sorted(synced.report.filled) == sorted(f"{code} v1" for code, _ in TYPES.values())
-        assert synced.report.inserted == []
+        # Not a July type: the engine's baseline procedure, new with the engine.
+        assert synced.report.inserted == ["ETAT_DE_DEPART v1"]
         async with _read(synced) as conn:
             assert (
                 await conn.fetchval(

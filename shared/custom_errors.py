@@ -90,6 +90,16 @@ class _AdminErrors:
     # data. → 422.
     TOO_MANY_ROWS = Error(code=2365, key="ERRORS.ADMIN.TOO_MANY_ROWS")
 
+    # ---- procedures engine: the baseline (2370 block) ----
+    GET_BASELINE = Error(code=2370, key="ERRORS.ADMIN.GET_BASELINE")
+    CONFIRM_BASELINE = Error(code=2371, key="ERRORS.ADMIN.CONFIRM_BASELINE")
+    # A choice names an item that is not on the baseline, or an option that item
+    # does not have, or "in progress" without its sending date. -> 422.
+    BASELINE_INVALID = Error(code=2372, key="ERRORS.ADMIN.BASELINE_INVALID")
+    # The core refused: an EAN would be pending, authorised or active in two
+    # operations at once. The response lists them. -> 409.
+    BASELINE_CONFLICT = Error(code=2373, key="ERRORS.ADMIN.BASELINE_CONFLICT")
+
 
 class _Errors:
     auth = _AuthErrors()

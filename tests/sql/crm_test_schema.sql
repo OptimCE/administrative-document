@@ -276,6 +276,27 @@ CREATE TABLE IF NOT EXISTS notification_preference (
     PRIMARY KEY (id_user, type_prefix, channel)
 );
 
+-- ---- allocation_key / sharing_operation_key ---------------------------------
+-- The key applied to each operation, which the procedures engine photographs
+-- for the baseline (status 1 = approved). Mirrors crm-backend
+-- database_script/init.sql; only what the photo reads.
+CREATE TABLE IF NOT EXISTS allocation_key (
+    id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name         VARCHAR(255) NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    id_community INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sharing_operation_key (
+    id                   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id_sharing_operation INTEGER NOT NULL REFERENCES sharing_operation (id) ON DELETE CASCADE,
+    id_key               INTEGER NOT NULL REFERENCES allocation_key (id) ON DELETE CASCADE,
+    start_date           DATE NOT NULL,
+    end_date             DATE,
+    status               INTEGER NOT NULL CHECK (status IN (1, 2, 3)),
+    id_community         INTEGER NOT NULL
+);
+
 -- ---- regulatory_link_status -------------------------------------------------
 -- The one CRM table this service WRITES beyond audit/notification: its effects
 -- port opens episodes and moves the four effect columns (the real role has

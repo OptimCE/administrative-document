@@ -35,13 +35,16 @@ class TestTheFakeCatalogue:
         catalogue = load_catalogue(CATALOGUE_DIR, regulator="TEST-FAKE")
         assert catalogue.regulator == "TEST-FAKE"
         assert [e.source for e in catalogue.entries] == [
+            "FAKE_BASELINE.v1.yaml",
             "FAKE_CHANGE.v1.yaml",
             "FAKE_COMMUNITY.v1.yaml",
             "FAKE_YEARLY.v1.yaml",
         ]
 
     def test_coded_values(self):
-        definition = load_catalogue(CATALOGUE_DIR, regulator="X").entries[0].definition
+        entry = load_catalogue(CATALOGUE_DIR, regulator="X").get("FAKE_CHANGE", 1)
+        assert entry is not None
+        definition = entry.definition
         assert definition.procedure_scope == ProcedureScope.OPERATION
         assert definition.step("in_force").common_status == ProcedureStatus.IN_FORCE
         assert definition.step("sent").bucket == Bucket.WAITING
@@ -50,6 +53,7 @@ class TestTheFakeCatalogue:
 
 class TestLookups:
     catalogue = load_catalogue(CATALOGUE_DIR, regulator="TEST-FAKE")
+    change = next(e.definition for e in catalogue.entries if e.definition.code == "FAKE_CHANGE")
 
     def test_a_version_by_number(self):
         assert self.catalogue.get("FAKE_CHANGE", 1) is not None
@@ -72,14 +76,14 @@ class TestLookups:
         assert [e.definition.code for e in found] == codes
 
     def test_edges_and_steps_follow_the_variant(self):
-        definition = self.catalogue.entries[0].definition
+        definition = self.change
         assert definition.allows("sent", "accepted", "light")
         assert not definition.allows("sent", "accepted", "full")
         assert "reviewed" not in [s.code for s in definition.steps_for("light")]
         assert "reviewed" in [s.code for s in definition.steps_for("full")]
 
     def test_rules_started_and_closed_by_an_event(self):
-        definition = self.catalogue.entries[0].definition
+        definition = self.change
         assert [r.code for r in definition.rules_started_by(step_event("sent"), "light")] == [
             "grd_answer"
         ]
@@ -94,7 +98,7 @@ class TestLookups:
         ]
 
     def test_pieces_follow_the_variant(self):
-        definition = self.catalogue.entries[0].definition
+        definition = self.change
         assert "member_declaration" not in [d.code for d in definition.documents_for("light")]
         assert "member_declaration" in [d.code for d in definition.documents_for("full")]
 

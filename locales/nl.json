@@ -48,7 +48,11 @@
       "GENERATION_FAILED": "Starten van de documentgeneratie mislukt (code: 2362)",
       "PREFILL_FAILED": "Vooraf invullen van het document vanuit de CRM mislukt (code: 2363)",
       "RENDER_ALREADY_IN_FLIGHT": "Er loopt al een generatie voor dit document (code: 2364)",
-      "TOO_MANY_ROWS": "Het officiële formulier biedt geen ruimte voor zoveel rijen (code: 2365)"
+      "TOO_MANY_ROWS": "Het officiële formulier biedt geen ruimte voor zoveel rijen (code: 2365)",
+      "GET_BASELINE": "De beginsituatie kon niet worden opgehaald (code: 2370)",
+      "CONFIRM_BASELINE": "De beginsituatie kon niet worden bevestigd (code: 2371)",
+      "BASELINE_INVALID": "Deze keuzes passen niet bij de beginsituatie (code: 2372)",
+      "BASELINE_CONFLICT": "Sommige meters worden op deze data al in een andere operatie gevolgd (code: 2373)"
     }
   }
 }

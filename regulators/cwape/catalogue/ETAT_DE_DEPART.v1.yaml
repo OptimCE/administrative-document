@@ -1,0 +1,32 @@
+# The community's starting state (spec, "Première activation : l'état de
+# départ"). Not something sent to the CWaPE: when the module is first switched
+# on, the engine photographs the operations, meters and keys, and this
+# procedure is the dashboard's one task until the admin confirms what the GRD
+# and the CWaPE already know. The confirmed episodes in the core point at it.
+code: ETAT_DE_DEPART
+version: 1
+valid_from: 2026-01-01
+purpose: baseline
+scope: community
+recipient: regulator
+channel: online_form
+family: ETAT_DE_DEPART
+labels: {fr: État de départ, en: Starting state, nl: Beginsituatie, de: Ausgangslage}
+
+initial_step: draft
+steps:
+  - code: draft
+    status: draft
+    bucket: todo
+    next_action:
+      code: confirm_baseline
+      labels: {fr: Confirmer l'état de départ, en: Confirm the starting state, nl: De beginsituatie bevestigen, de: Die Ausgangslage bestätigen}
+    labels: {fr: À confirmer, en: To confirm, nl: Te bevestigen, de: Zu bestätigen}
+  - code: in_force
+    status: in_force
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Confirmé, en: Confirmed, nl: Bevestigd, de: Bestätigt}
+
+transitions:
+  - {from: draft, to: in_force, automatic: true}   # the confirmation

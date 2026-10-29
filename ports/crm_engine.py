@@ -1,20 +1,22 @@
 """What the procedures engine reads from the CRM, and nothing else.
 
-Two reads, both raw SQL on the CRM session like ``crm_core_sqlalchemy.py``:
+Raw SQL on the CRM session, like ``crm_core_sqlalchemy.py``:
 
 - the community's regulator and whether this module is active for it. Read
   on EVERY event, never cached: a deactivation must stop the very next event
   (spec, "Activation du module"). ``require_feature`` cannot serve here: it is
   a FastAPI dependency reading request ContextVars, and a consumer has neither.
 - which subjects the core already tracks in ``regulatory_link_status`` (the
-  authorised state), so an event that changes nothing is recognised.
+  authorised state), so an event that changes nothing is recognised;
+- the photo the baseline is built from: each operation, its current meters,
+  its approved key.
 """
 
 from __future__ import annotations
 
 import datetime
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from sqlalchemy import bindparam, text
@@ -42,8 +44,55 @@ class CommunityModuleState:
     changed_at: datetime.datetime | None = None
 
 
+@dataclass(frozen=True)
+class PhotoMeter:
+    id_sharing_operation: int
+    ean: str
+    id_member: int | None
+    grd: str | None
+    injection_status: int | None
+    start_date: datetime.date | None
+
+
+@dataclass(frozen=True)
+class PhotoKey:
+    id_sharing_operation: int
+    id_key: int
+    name: str
+    start_date: datetime.date
+
+
+@dataclass(frozen=True)
+class CommunityPhoto:
+    operations: dict[int, str] = field(default_factory=dict)  # id -> name
+    meters: tuple[PhotoMeter, ...] = ()
+    keys: tuple[PhotoKey, ...] = ()
+
+
+@dataclass(frozen=True)
+class Episode:
+    """A ``regulatory_link_status`` row: what the core holds as authorised."""
+
+    id: int
+    id_sharing_operation: int
+    subject_type: int
+    subject_ref: str
+    id_dossier_origin: int
+    regulatory_status: int
+    valid_from: datetime.date | None
+    valid_to: datetime.date | None
+
+
 class EngineCrmRead(Protocol):
     async def module_state(self, id_community: int) -> CommunityModuleState: ...
+
+    async def community_photo(self, id_community: int, *, on: datetime.date) -> CommunityPhoto:
+        """The operations, their meters and approved keys on day ``on``."""
+        ...
+
+    async def episodes(self, id_community: int, *, statuses: Sequence[int]) -> list[Episode]:
+        """The community's episodes in one of ``statuses``."""
+        ...
 
     async def tracked_subjects(
         self,
@@ -74,6 +123,47 @@ _TRACKED_SQL = text(
     "  AND (valid_from IS NULL OR valid_from <= :on) "
     "  AND (valid_to IS NULL OR valid_to >= :on)"
 ).bindparams(bindparam("refs", expanding=True), bindparam("statuses", expanding=True))
+
+
+_OPERATIONS_SQL = text(
+    "SELECT id, name FROM sharing_operation WHERE id_community = :id_community ORDER BY id"
+)
+
+# One row per meter: its attribution on day `on`, to an operation of the same
+# community. meter_data is a dated history; the latest slice covering `on` wins.
+_PHOTO_METERS_SQL = text(
+    "SELECT DISTINCT ON (md.ean) md.id_sharing_operation, md.ean, md.id_member, md.grd, "
+    "       md.injection_status, md.start_date "
+    "FROM meter_data md "
+    "JOIN sharing_operation so "
+    "  ON so.id = md.id_sharing_operation AND so.id_community = md.id_community "
+    "WHERE md.id_community = :id_community AND md.status = :active "
+    "  AND (md.start_date IS NULL OR md.start_date <= :on) "
+    "  AND (md.end_date IS NULL OR md.end_date >= :on) "
+    "ORDER BY md.ean, md.start_date DESC NULLS LAST, md.id DESC"
+)
+
+# The approved key of each operation on day `on` (sharing_operation_key.status 1).
+_PHOTO_KEYS_SQL = text(
+    "SELECT DISTINCT ON (sok.id_sharing_operation) sok.id_sharing_operation, sok.id_key, "
+    "       ak.name, sok.start_date "
+    "FROM sharing_operation_key sok "
+    "JOIN allocation_key ak ON ak.id = sok.id_key "
+    "WHERE sok.id_community = :id_community AND sok.status = 1 "
+    "  AND sok.start_date <= :on AND (sok.end_date IS NULL OR sok.end_date >= :on) "
+    "ORDER BY sok.id_sharing_operation, sok.start_date DESC, sok.id DESC"
+)
+
+_EPISODES_SQL = text(
+    "SELECT id, id_sharing_operation, subject_type, subject_ref, id_dossier_origin, "
+    "       regulatory_status, valid_from, valid_to "
+    "FROM regulatory_link_status "
+    "WHERE id_community = :id_community AND regulatory_status IN :statuses "
+    "ORDER BY id"
+).bindparams(bindparam("statuses", expanding=True))
+
+# meter_data.status of an active attribution (MeterDataStatus.ACTIVE).
+_ACTIVE_METER_DATA = 1
 
 
 class SqlEngineCrmRead:
@@ -126,3 +216,56 @@ class SqlEngineCrmRead:
             },
         )
         return {str(ref) for ref in result.scalars()}
+
+    async def community_photo(self, id_community: int, *, on: datetime.date) -> CommunityPhoto:
+        operations = {
+            int(row.id): str(row.name)
+            for row in await self._session.execute(_OPERATIONS_SQL, {"id_community": id_community})
+        }
+        meters = tuple(
+            PhotoMeter(
+                id_sharing_operation=int(row.id_sharing_operation),
+                ean=str(row.ean),
+                id_member=row.id_member,
+                grd=row.grd,
+                injection_status=row.injection_status,
+                start_date=row.start_date,
+            )
+            for row in await self._session.execute(
+                _PHOTO_METERS_SQL,
+                {"id_community": id_community, "on": on, "active": _ACTIVE_METER_DATA},
+            )
+        )
+        keys = tuple(
+            PhotoKey(
+                id_sharing_operation=int(row.id_sharing_operation),
+                id_key=int(row.id_key),
+                name=str(row.name),
+                start_date=row.start_date,
+            )
+            for row in await self._session.execute(
+                _PHOTO_KEYS_SQL, {"id_community": id_community, "on": on}
+            )
+        )
+        return CommunityPhoto(operations=operations, meters=meters, keys=keys)
+
+    async def episodes(self, id_community: int, *, statuses: Sequence[int]) -> list[Episode]:
+        if not statuses:
+            return []
+        result = await self._session.execute(
+            _EPISODES_SQL,
+            {"id_community": id_community, "statuses": [int(s) for s in statuses]},
+        )
+        return [
+            Episode(
+                id=int(row.id),
+                id_sharing_operation=int(row.id_sharing_operation),
+                subject_type=int(row.subject_type),
+                subject_ref=str(row.subject_ref),
+                id_dossier_origin=int(row.id_dossier_origin),
+                regulatory_status=int(row.regulatory_status),
+                valid_from=row.valid_from,
+                valid_to=row.valid_to,
+            )
+            for row in result
+        ]
