@@ -232,6 +232,14 @@ class AdministrativeDocumentService:
         crm_data = await self._crm_read.get_operation_participants(
             document.id_community, dossier.id_sharing_operation
         )
+        key = (
+            await self._crm_read.get_operation_key(
+                document.id_community, dossier.id_sharing_operation
+            )
+            if dossier.id_sharing_operation is not None
+            and document.doc_type in prefill.DOC_TYPES_WITH_KEY
+            else None
+        )
         snapshot = prefill.build_snapshot(
             document.doc_type,
             community=context,
@@ -239,6 +247,10 @@ class AdministrativeDocumentService:
             participants=crm_data.participants,
             production=crm_data.production,
             storage=crm_data.storage,
+            id_member=document.id_member,
+            grd_ref=dossier.grd_ref,
+            requested_effective_date=dossier.requested_effective_date,
+            key=key,
         )
         # Warnings ride alongside the payload rather than inside it: they are for
         # the reviewer, not for the form. Four sources — the CRM read (a delivery

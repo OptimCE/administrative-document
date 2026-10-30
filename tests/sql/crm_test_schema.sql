@@ -297,6 +297,25 @@ CREATE TABLE IF NOT EXISTS sharing_operation_key (
     id_community         INTEGER NOT NULL
 );
 
+-- A key's iterations and each one's consumers, which the key description
+-- (piece key_description) lays out. Shares are fractions, as the CRM stores
+-- them. Mirrors crm-backend database_script/init.sql; only what the read uses.
+CREATE TABLE IF NOT EXISTS iteration (
+    id                          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    number                      INTEGER NOT NULL,
+    energy_allocated_percentage FLOAT NOT NULL,
+    id_key                      INTEGER NOT NULL REFERENCES allocation_key (id) ON DELETE CASCADE,
+    id_community                INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS consumer (
+    id                          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name                        VARCHAR(255) NOT NULL,
+    energy_allocated_percentage FLOAT NOT NULL,
+    id_iteration                INTEGER NOT NULL REFERENCES iteration (id) ON DELETE CASCADE,
+    id_community                INTEGER NOT NULL
+);
+
 -- ---- regulatory_link_status -------------------------------------------------
 -- The one CRM table this service WRITES beyond audit/notification: its effects
 -- port opens episodes and moves the four effect columns (the real role has

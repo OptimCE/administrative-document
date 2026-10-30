@@ -15,8 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domain.regions import region_for_regulator
 from ports.crm_core import (
     WARNING_METER_NO_MEMBER,
+    AllocationKey,
     CommunityContext,
     Installation,
+    KeyIteration,
+    KeyShare,
     MeterPoint,
     OperationParticipants,
     Participant,
@@ -67,6 +70,41 @@ _SHARING_OPERATIONS_SQL = text(
     """
 )
 
+
+# The operation's most recently approved key (status 1 = approved). The most
+# recent rather than the one in force today: a key change is notified before
+# it takes effect.
+_OPERATION_KEY_SQL = text(
+    """
+    SELECT k.id, k.name, k.description, sok.start_date
+      FROM sharing_operation_key sok
+      JOIN allocation_key k ON k.id = sok.id_key
+     WHERE sok.id_community = :id_community
+       AND sok.id_sharing_operation = :id_sharing_operation
+       AND sok.status = 1
+     ORDER BY sok.start_date DESC, sok.id DESC
+     LIMIT 1
+    """
+)
+
+_KEY_ITERATIONS_SQL = text(
+    """
+    SELECT id, number, energy_allocated_percentage AS share
+      FROM iteration
+     WHERE id_key = :id_key AND id_community = :id_community
+     ORDER BY number, id
+    """
+)
+
+_KEY_CONSUMERS_SQL = text(
+    """
+    SELECT c.id_iteration, c.name, c.energy_allocated_percentage AS share
+      FROM consumer c
+      JOIN iteration i ON i.id = c.id_iteration
+     WHERE i.id_key = :id_key AND c.id_community = :id_community
+     ORDER BY c.id_iteration, c.id
+    """
+)
 
 # One row per ACTIVE meter attribution in the operation, carrying the member's
 # identity and both the meter's own address and the member's home address. The
@@ -303,6 +341,57 @@ class SqlAlchemyCrmCoreRead:
             production=tuple(production),
             storage=(),
             warnings=tuple(warnings),
+        )
+
+    async def get_operation_key(
+        self, id_community: int, id_sharing_operation: int
+    ) -> AllocationKey | None:
+        key = (
+            (
+                await self._session.execute(
+                    _OPERATION_KEY_SQL,
+                    {"id_community": id_community, "id_sharing_operation": id_sharing_operation},
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if key is None:
+            return None
+        iterations = (
+            (
+                await self._session.execute(
+                    _KEY_ITERATIONS_SQL, {"id_community": id_community, "id_key": key["id"]}
+                )
+            )
+            .mappings()
+            .all()
+        )
+        shares: dict[int, list[KeyShare]] = {}
+        for row in (
+            (
+                await self._session.execute(
+                    _KEY_CONSUMERS_SQL, {"id_community": id_community, "id_key": key["id"]}
+                )
+            )
+            .mappings()
+            .all()
+        ):
+            shares.setdefault(row["id_iteration"], []).append(
+                KeyShare(name=row["name"], share=float(row["share"]))
+            )
+        return AllocationKey(
+            name=key["name"],
+            description=key["description"] or "",
+            since=key["start_date"],
+            iterations=tuple(
+                KeyIteration(
+                    number=int(row["number"]),
+                    share=float(row["share"]),
+                    consumers=tuple(shares.get(row["id"], ())),
+                )
+                for row in iterations
+            ),
         )
 
     async def member_ids_for_user(self, *, id_community: int, auth_user_id: str) -> list[int]:

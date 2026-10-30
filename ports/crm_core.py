@@ -153,6 +153,35 @@ WARNING_EAN_NOT_FORM_REPRESENTABLE = "meter.ean_not_form_representable"
 
 
 @dataclass(frozen=True)
+class KeyShare:
+    """One consumer's share of an iteration, as the CRM stores it (a fraction)."""
+
+    name: str
+    share: float
+
+
+@dataclass(frozen=True)
+class KeyIteration:
+    """One iteration of an allocation key: its share of the energy (a fraction)
+    and how that share is split between the consumers."""
+
+    number: int
+    share: float
+    consumers: tuple[KeyShare, ...] = ()
+
+
+@dataclass(frozen=True)
+class AllocationKey:
+    """The key an operation applies, for the description the regulator asks of a
+    non-standard key."""
+
+    name: str
+    description: str
+    since: datetime.date
+    iterations: tuple[KeyIteration, ...] = ()
+
+
+@dataclass(frozen=True)
 class OperationParticipants:
     """Everything one sharing operation contributes to an annexe."""
 
@@ -194,6 +223,14 @@ class CrmCoreReadPort(Protocol):
         scan and every annexe needs at least two of them; splitting it would mean
         three round trips over the same rows.
         """
+        ...
+
+    async def get_operation_key(
+        self, id_community: int, id_sharing_operation: int
+    ) -> AllocationKey | None:
+        """The operation's most recently approved key, with its iterations and
+        consumers; None when it has none. The most recent, not the one in force
+        today: a procedure notifies a key change before it takes effect."""
         ...
 
     async def member_ids_for_user(self, *, id_community: int, auth_user_id: str) -> list[int]:

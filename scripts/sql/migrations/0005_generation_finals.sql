@@ -234,6 +234,19 @@ CREATE TRIGGER trg_dossier_sent_guard
     BEFORE DELETE ON dossier
     FOR EACH ROW EXECUTE FUNCTION forbid_sent_procedure_delete();
 
+-- ---- the key description is registered ----------------------------------------
+-- Seed 0004 writes the same row on the dev stack; ON CONFLICT keeps either
+-- order harmless.
+INSERT INTO document_template (
+    id_community, region, doc_type, version, valid_from, valid_to,
+    file_ref, mapping_json, output_format, label
+) VALUES
+    (NULL, 1, 'key_description', 1, DATE '2026-10-30', NULL,
+     's3://optimce-templates/administrative-document/key_description/v1/',
+     '{"engine": "jinja-html"}'::jsonb, 'pdf',
+     'Description et formules de la cle de repartition (OptimCE)')
+ON CONFLICT DO NOTHING;
+
 INSERT INTO schema_version (version, description)
 VALUES (5, 'Draft and final pieces: stages, pinned templates, sent pieces final')
 ON CONFLICT DO NOTHING;

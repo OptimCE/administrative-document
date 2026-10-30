@@ -46,7 +46,10 @@ SEEDS_SQL = [
     (_ROOT / "tests" / "sql" / "released_seed_0001_wal_deadline_rules.sql").read_text(
         encoding="utf-8"
     ),
-    *(p.read_text(encoding="utf-8") for p in sorted((_ROOT / "scripts/sql/seeds").glob("*.sql"))),
+    *(
+        (_ROOT / "scripts" / "sql" / "seeds" / name).read_text(encoding="utf-8")
+        for name in ("0002_wal_templates.sql", "0003_wal_templates_phase2.sql")
+    ),
 ]
 
 SERVER = "postgresql://postgres:postgres@localhost:5433"

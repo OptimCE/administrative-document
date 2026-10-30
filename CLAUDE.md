@@ -167,6 +167,14 @@ bundles through `document-generation`. Read `README.md` for the domain.
   The result handler refuses a draft whose result does not echo the watermark
   (an older docgen ignores unknown options) and drops a result for a sent
   procedure.
+- **Pre-fill** (`domain/prefill.build_snapshot`): a per-member annex 8 is that
+  participant's (identity, their own EANs only); every AcroForm field is seeded,
+  in the form's order, a checkbox as False (`ACROFORM_FIELDS`, kept in step with
+  the manifests and PDFs by `tests/test_template_bundles.py`); the DSO
+  conventions take the procedure's DSO, requested date and key; the key
+  description reads the operation's latest approved key
+  (`get_operation_key`). `key_description/v1` is the one bundle that is
+  OptimCE's own layout (jinja-html), not a regulator file.
 - **A piece keeps its template**: pinned at birth (`engine/templates.py`,
   `sync_pieces`) or at first render; `upgrade_template` re-pins explicitly.
 - **One click** (`POST /admin/dossiers/{id}/regenerate`): a fresh pre-fill plus

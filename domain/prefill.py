@@ -32,6 +32,7 @@ from ports.crm_core import (
     WARNING_COMMUNITY_FIELD_MISSING,
     WARNING_EAN_NOT_FORM_REPRESENTABLE,
     WARNING_MEMBER_FIELD_MISSING,
+    AllocationKey,
     CommunityContext,
     Installation,
     Participant,
@@ -52,6 +53,125 @@ DOC_TYPE_SHARING_NOTIFICATION = "sharing_notification"
 DOC_TYPE_SHARING_MODIFICATION = "sharing_modification"
 DOC_TYPE_DSO_AGREEMENT_COMMUNITY = "dso_agreement_community"
 DOC_TYPE_DSO_AGREEMENT_BUILDING = "dso_agreement_building"
+DOC_TYPE_KEY_DESCRIPTION = "key_description"
+#: The pieces that describe the operation's allocation key, so the only ones
+#: the CRM key is read for.
+DOC_TYPES_WITH_KEY = (
+    DOC_TYPE_KEY_DESCRIPTION,
+    DOC_TYPE_DSO_AGREEMENT_COMMUNITY,
+    DOC_TYPE_DSO_AGREEMENT_BUILDING,
+)
+
+#: Every field of each AcroForm, in the form's own order, as (key, kind): kind
+#: "check" for a checkbox (seeded False), "text" otherwise (seeded None). Seeding
+#: them all is what puts them in the review form, so a reviewer fills the
+#: representative or the contact once, in the app, and a regeneration carries it
+#: over. The keys are the bundle manifests' ``fields``;
+#: ``tests/test_template_bundles.py`` re-reads the manifests and the PDFs to keep
+#: this in step. Annex 8's EAN combs are not here: they are projected from
+#: ``ean_delivery``/``ean_injection`` when the payload is frozen.
+_IDENTITY = (
+    "community_legal_name",
+    "community_vat_number",
+    "community_legal_form",
+    "community_street",
+    "community_number",
+    "community_box",
+    "community_postcode",
+    "community_city",
+)
+_REPRESENTATIVE = (
+    "representative_name",
+    "representative_vat_number",
+    "representative_street",
+    "representative_number",
+    "representative_box",
+    "representative_postcode",
+    "representative_city",
+)
+_CONTACT = (
+    "contact_last_name",
+    "contact_first_name",
+    "contact_street",
+    "contact_number",
+    "contact_box",
+    "contact_postcode",
+    "contact_city",
+)
+ACROFORM_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
+    DOC_TYPE_ANNEX7_LEGAL_ENTITY: (
+        ("entity_name", "text"),
+        ("entity_vat_digits", "text"),
+        ("controlling_entity_name", "text"),
+    ),
+    DOC_TYPE_ANNEX8_SWORN_DECLARATION: (
+        ("declarant_name", "text"),
+        ("declarant_representative", "text"),
+        ("declarant_company_name", "text"),
+        ("declarant_address", "text"),
+        ("declarant_phone", "text"),
+        ("declarant_email", "text"),
+        ("community_name", "text"),
+        ("signed_at", "text"),
+        ("signed_on", "text"),
+        ("ean_delivery", "text"),
+        ("ean_injection", "text"),
+        ("sharing_within_building", "check"),
+        ("sharing_within_community", "check"),
+        ("waives_residential_right", "check"),
+        ("will_request_metering_regime", "check"),
+        ("will_switch_to_injection_service", "check"),
+    ),
+    DOC_TYPE_COMMUNITY_MODIFICATION: (
+        # This form stops the contact's address at the box number.
+        *((key, "text") for key in (*_IDENTITY, *_REPRESENTATIVE, *_CONTACT[:5])),
+        ("cwape_reference_digits", "text"),
+    ),
+    DOC_TYPE_COMMUNITY_NOTIFICATION: tuple(
+        (key, "text")
+        for key in (
+            *_IDENTITY,
+            *_REPRESENTATIVE,
+            *_CONTACT,
+            "contact_phone",
+            "contact_mobile",
+        )
+    ),
+    DOC_TYPE_SHARING_MODIFICATION: (
+        *(
+            (key, "text")
+            for key in (
+                *_REPRESENTATIVE,
+                "representative_country",
+                *_CONTACT,
+                "contact_phone",
+                "contact_mobile",
+                "contact_email",
+                "building_reference",
+                "community_reference",
+            )
+        ),
+        ("sharing_within_building", "check"),
+    ),
+    DOC_TYPE_SHARING_NOTIFICATION: (
+        *(
+            (key, "text")
+            for key in (
+                *(k for k in _IDENTITY if k != "community_legal_form"),
+                *_REPRESENTATIVE,
+                "representative_country",
+                *_CONTACT,
+                "contact_phone",
+                "contact_mobile",
+                "contact_email",
+                "project_description",
+            )
+        ),
+        ("sharing_within_building", "check"),
+        ("sharing_within_community", "check"),
+        ("single_grid_operator", "check"),
+    ),
+}
 
 #: An EAN is exactly 18 digits. Mirrors crm-backend's
 #: `modules/meters/shared/ean.ts` and crm-frontend's
@@ -246,8 +366,17 @@ def build_snapshot(
     participants: Sequence[Participant] = (),
     production: Sequence[Installation] = (),
     storage: Sequence[Installation] = (),
+    id_member: int | None = None,
+    grd_ref: str | None = None,
+    requested_effective_date: datetime.date | None = None,
+    key: AllocationKey | None = None,
 ) -> dict[str, Any]:
     """Assemble the render payload for ``doc_type``.
+
+    ``id_member`` is the participant a per-member piece is for (annex 8 is
+    signed by one participant); ``grd_ref``, ``requested_effective_date`` and
+    ``key`` are the procedure's, for the DSO conventions and the key
+    description.
 
     An unknown doc_type still gets the community header — enough for a reviewer
     to work from, and better than refusing to open the form.
@@ -274,10 +403,31 @@ def build_snapshot(
         for field in _DSO_AGREEMENT_FIELDS:
             snapshot[field] = None
         snapshot["representative_name"] = community.legal_name or community.name
+        # What the procedure itself knows: the DSO it goes to, the effective
+        # date asked for, the key it applies. The terms stay the parties'.
+        snapshot["grid_operator_name"] = labels.grd_label(grd_ref) or grd_ref
+        snapshot["start_date"] = _french_date(requested_effective_date)
+        snapshot["distribution_key"] = key.name if key is not None else None
         if doc_type == DOC_TYPE_DSO_AGREEMENT_COMMUNITY:
             snapshot["community_address"] = format_address(community.address)
         else:
             snapshot["unmet_condition"] = None
+    elif doc_type == DOC_TYPE_KEY_DESCRIPTION:
+        # The description and formulas of the key the operation applies, for a
+        # key that is not in the regulator's standard list. Two flat sheets, so
+        # the review form can show (and correct) them as tables.
+        snapshot["key_name"] = key.name if key is not None else None
+        snapshot["key_description"] = (key.description or None) if key is not None else None
+        snapshot["key_since"] = _french_date(key.since) if key is not None else None
+        snapshot["iterations"] = [
+            {"iteration": it.number, "part": _percent(it.share)}
+            for it in (key.iterations if key is not None else ())
+        ]
+        snapshot["key_shares"] = [
+            {"iteration": it.number, "consommateur": share.name, "part": _percent(share.share)}
+            for it in (key.iterations if key is not None else ())
+            for share in it.consumers
+        ]
     elif doc_type in (
         DOC_TYPE_SHARING_NOTIFICATION,
         DOC_TYPE_SHARING_MODIFICATION,
@@ -292,17 +442,53 @@ def build_snapshot(
         snapshot["installation_count"] = len(production)
 
         if doc_type == DOC_TYPE_ANNEX8_SWORN_DECLARATION:
-            # Annex 8 is signed by ONE participant and the CRM cannot know
-            # which, so the EANs are seeded only when the operation leaves no
-            # choice and blank otherwise. A guessed EAN on a sworn declaration
-            # is worse than a blank the reviewer fills. Seeding the keys at all
-            # is what makes the fields appear in the review form.
-            delivery = [meter.ean for p in participants for meter in p.meters]
-            injection = [installation.ean for installation in production]
+            # Annex 8 is signed by ONE participant: the piece's own when it is a
+            # per-member piece, whose identity then comes from the CRM. The
+            # EANs are seeded only when that leaves no choice and blank
+            # otherwise: a guessed EAN on a sworn declaration is worse than a
+            # blank the reviewer fills.
+            declarant = next((p for p in participants if p.id_member == id_member), None)
+            if declarant is not None:
+                is_company = declarant.member_type == labels.MemberType.COMPANY
+                snapshot["declarant_name"] = (
+                    None
+                    if is_company
+                    else labels.display_name(
+                        declarant.name, declarant.first_name, declarant.member_type
+                    )
+                )
+                snapshot["declarant_company_name"] = declarant.name if is_company else None
+                snapshot["declarant_address"] = format_address(declarant.address) or None
+                snapshot["declarant_email"] = declarant.email
+                delivery = [meter.ean for meter in declarant.meters]
+                injection = [i.ean for i in production if i.id_member == id_member]
+            else:
+                delivery = [meter.ean for p in participants for meter in p.meters]
+                injection = [installation.ean for installation in production]
             snapshot["ean_delivery"] = delivery[0] if len(delivery) == 1 else None
             snapshot["ean_injection"] = injection[0] if len(injection) == 1 else None
 
+        # Every field of the form, in its order, then what it does not bind.
+        fields = ACROFORM_FIELDS.get(doc_type, ())
+        snapshot = {
+            **{
+                name: snapshot.get(name, False if kind == "check" else None)
+                for name, kind in fields
+            },
+            **{k: v for k, v in snapshot.items() if k not in dict(fields)},
+        }
+
     return snapshot
+
+
+def _french_date(value: datetime.date | None) -> str | None:
+    """A date as a CWaPE form or contract prints it."""
+    return value.strftime("%d/%m/%Y") if value is not None else None
+
+
+def _percent(share: float) -> float:
+    """A CRM fraction (0.7) as the percentage a form prints (70.0)."""
+    return round(share * 100, 2)
 
 
 def merge_overrides(

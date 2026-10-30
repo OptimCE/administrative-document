@@ -35,6 +35,10 @@
     "manifest.json": "697e5b01da00a2af18927c85683096b5702ed13edbd9b1813f9418c8657e0d7a",
     "template.docx": "b803bc5d01de76499b3aa95ce13c015b5778af1d9b0d0b2caf5d39213c6e6fcd"
   },
+  "key_description/v1": {
+    "manifest.json": "379b67c33dc0ba1278532add132de07e91693881a863bb4b161011670bc2b0b6",
+    "template.html": "a751227a6f1ff66e71675aae4b5f9d38d70167c60c46423b427b83082c820dcb"
+  },
   "sharing_modification/v1": {
     "manifest.json": "7e28675b2f4790170347b15ae919fd03a0086384fa9321ba81e083461a30ff34",
     "template.pdf": "1fbe424acceffa721744a4ec0447bfec4d3b4845eeaa6b5a62d63e6f4195e07f"

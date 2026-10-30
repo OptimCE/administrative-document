@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime
 
 import pytest
+from sqlalchemy import text
 
 from ports.crm_core import WARNING_METER_NO_MEMBER, PrefillWarning
 from ports.crm_core_sqlalchemy import SqlAlchemyCrmCoreRead
@@ -275,4 +276,104 @@ class TestScopingAndWarnings:
                 subject_type="meter",
                 subject_id="541448000000000005",
             ),
+        )
+
+
+class TestTheOperationsKey:
+    """The key the key description lays out: the latest approved one, its
+    iterations in order, each with its consumers."""
+
+    async def _key(self, db_session, community, name: str) -> int:
+        return int(
+            (
+                await db_session.execute(
+                    text(
+                        "INSERT INTO allocation_key (name, description, id_community) "
+                        "VALUES (:name, 'Par itérations', :c) RETURNING id"
+                    ),
+                    {"name": name, "c": community.id},
+                )
+            ).scalar_one()
+        )
+
+    async def _apply(self, db_session, community, operation, key, start, status=1) -> None:
+        await db_session.execute(
+            text(
+                "INSERT INTO sharing_operation_key "
+                "(id_sharing_operation, id_key, start_date, status, id_community) "
+                "VALUES (:op, :key, :start, :status, :c)"
+            ),
+            {
+                "op": operation,
+                "key": key,
+                "start": datetime.date.fromisoformat(start),
+                "status": status,
+                "c": community.id,
+            },
+        )
+
+    async def _iteration(self, db_session, community, key, number, share, consumers) -> None:
+        iteration = (
+            await db_session.execute(
+                text(
+                    "INSERT INTO iteration (number, energy_allocated_percentage, id_key, "
+                    " id_community) VALUES (:n, :share, :key, :c) RETURNING id"
+                ),
+                {"n": number, "share": share, "key": key, "c": community.id},
+            )
+        ).scalar_one()
+        for name, part in consumers:
+            await db_session.execute(
+                text(
+                    "INSERT INTO consumer (name, energy_allocated_percentage, id_iteration, "
+                    " id_community) VALUES (:name, :part, :it, :c)"
+                ),
+                {"name": name, "part": part, "it": iteration, "c": community.id},
+            )
+
+    async def test_the_latest_approved_key_comes_with_its_iterations(
+        self, db_session, community, sharing_operation
+    ):
+        old = await self._key(db_session, community, "Ancienne clé")
+        new = await self._key(db_session, community, "Nouvelle clé")
+        draft = await self._key(db_session, community, "Simulation")
+        await self._apply(db_session, community, sharing_operation, old, "2026-01-01")
+        await self._apply(db_session, community, sharing_operation, new, "2027-01-01")
+        await self._apply(db_session, community, sharing_operation, draft, "2028-01-01", status=2)
+        await self._iteration(db_session, community, new, 2, 0.3, [("Ménages", 1.0)])
+        await self._iteration(db_session, community, new, 1, 0.7, [("Mairie", 0.4), ("École", 0.6)])
+
+        key = await SqlAlchemyCrmCoreRead(db_session).get_operation_key(
+            community.id, sharing_operation
+        )
+
+        assert key is not None
+        assert (key.name, key.since) == ("Nouvelle clé", datetime.date(2027, 1, 1))
+        assert [(it.number, it.share) for it in key.iterations] == [(1, 0.7), (2, 0.3)]
+        assert [(c.name, c.share) for c in key.iterations[0].consumers] == [
+            ("Mairie", 0.4),
+            ("École", 0.6),
+        ]
+
+    async def test_an_operation_without_an_approved_key_has_none(
+        self, db_session, community, sharing_operation
+    ):
+        assert (
+            await SqlAlchemyCrmCoreRead(db_session).get_operation_key(
+                community.id, sharing_operation
+            )
+            is None
+        )
+
+    async def test_another_communitys_key_is_not_read(
+        self, db_session, community, other_community, sharing_operation
+    ):
+        key = await self._key(db_session, community, "Clé")
+        await self._apply(db_session, community, sharing_operation, key, "2026-01-01")
+
+        assert (
+            await SqlAlchemyCrmCoreRead(db_session).get_operation_key(
+                other_community.id, sharing_operation
+            )
+            is None
         )

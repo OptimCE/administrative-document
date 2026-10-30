@@ -14,8 +14,11 @@ import pytest
 from domain import cwape_labels as labels
 from domain import prefill
 from ports.crm_core import (
+    AllocationKey,
     CommunityContext,
     Installation,
+    KeyIteration,
+    KeyShare,
     MeterPoint,
     Participant,
     PostalAddress,
@@ -776,3 +779,110 @@ class TestCarryOver:
         carried["participants"][0]["nom"] = "changed"
 
         assert [before, snapshot, fresh] == copies
+
+
+class TestASwornDeclarationIsTheParticipants:
+    """Annex 8 is signed by one participant: a per-member piece is filled with
+    that participant's identity and EANs, never someone else's."""
+
+    def _declaration(self, id_member):
+        return prefill.build_snapshot(
+            prefill.DOC_TYPE_ANNEX8_SWORN_DECLARATION,
+            community=_COMMUNITY,
+            participants=(_ALICE, _ACME),
+            production=(_PV,),
+            id_member=id_member,
+        )
+
+    def test_an_individual_signs_in_their_own_name(self):
+        snapshot = self._declaration(_ALICE.id_member)
+
+        assert snapshot["declarant_name"] == "Alice Dupont"
+        assert snapshot["declarant_company_name"] is None
+        assert snapshot["declarant_address"] == "Rue Basse 3, 5000 Namur"
+        assert snapshot["declarant_email"] == "alice@example.be"
+        assert snapshot["community_name"] == _COMMUNITY.name
+
+    def test_a_company_is_named_and_its_signatory_left_to_the_reviewer(self):
+        snapshot = self._declaration(_ACME.id_member)
+
+        assert snapshot["declarant_company_name"] == "ACME SRL"
+        assert snapshot["declarant_name"] is None
+
+    def test_only_the_participants_own_eans_are_offered(self):
+        acme = self._declaration(_ACME.id_member)
+        alice = self._declaration(_ALICE.id_member)
+
+        assert (acme["ean_delivery"], acme["ean_injection"]) == (
+            "541448000000000003",
+            "541448000000000009",
+        )
+        # Two delivery points: which one is declared is the reviewer's call.
+        assert (alice["ean_delivery"], alice["ean_injection"]) == (None, None)
+
+    def test_the_checkboxes_start_unticked(self):
+        snapshot = self._declaration(_ALICE.id_member)
+        assert snapshot["sharing_within_community"] is False
+
+
+class TestTheDsoConventionKnowsTheProcedure:
+    _KEY = AllocationKey(name="Clé 70/30", description="", since=datetime.date(2026, 11, 1))
+
+    def test_the_operator_the_date_and_the_key_come_from_the_procedure(self):
+        snapshot = prefill.build_snapshot(
+            prefill.DOC_TYPE_DSO_AGREEMENT_COMMUNITY,
+            community=_COMMUNITY,
+            grd_ref="ores",
+            requested_effective_date=datetime.date(2027, 1, 1),
+            key=self._KEY,
+        )
+
+        assert snapshot["grid_operator_name"] == "ORES"
+        assert snapshot["start_date"] == "01/01/2027"
+        assert snapshot["distribution_key"] == "Clé 70/30"
+        assert snapshot["suspensive_condition"] is None  # the parties' terms
+
+    def test_an_unknown_operator_is_kept_as_written(self):
+        snapshot = prefill.build_snapshot(
+            prefill.DOC_TYPE_DSO_AGREEMENT_BUILDING, community=_COMMUNITY, grd_ref="Gaselwest"
+        )
+        assert snapshot["grid_operator_name"] == "Gaselwest"
+
+
+class TestTheKeyDescription:
+    def test_iterations_and_shares_are_laid_out_as_percentages(self):
+        key = AllocationKey(
+            name="Clé quartier",
+            description="Deux itérations.",
+            since=datetime.date(2026, 11, 1),
+            iterations=(
+                KeyIteration(
+                    number=1,
+                    share=0.7,
+                    consumers=(KeyShare("École", 0.6), KeyShare("Mairie", 0.4)),
+                ),
+                KeyIteration(number=2, share=0.3, consumers=(KeyShare("Ménages", 1.0),)),
+            ),
+        )
+
+        snapshot = prefill.build_snapshot(
+            prefill.DOC_TYPE_KEY_DESCRIPTION, community=_COMMUNITY, key=key
+        )
+
+        assert snapshot["key_name"] == "Clé quartier"
+        assert snapshot["key_since"] == "01/11/2026"
+        assert snapshot["iterations"] == [
+            {"iteration": 1, "part": 70.0},
+            {"iteration": 2, "part": 30.0},
+        ]
+        assert snapshot["key_shares"] == [
+            {"iteration": 1, "consommateur": "École", "part": 60.0},
+            {"iteration": 1, "consommateur": "Mairie", "part": 40.0},
+            {"iteration": 2, "consommateur": "Ménages", "part": 100.0},
+        ]
+
+    def test_without_a_key_the_sheets_are_empty_for_the_reviewer(self):
+        snapshot = prefill.build_snapshot(prefill.DOC_TYPE_KEY_DESCRIPTION, community=_COMMUNITY)
+
+        assert snapshot["key_name"] is None
+        assert (snapshot["iterations"], snapshot["key_shares"]) == ([], [])

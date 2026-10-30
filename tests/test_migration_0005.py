@@ -234,3 +234,46 @@ class TestTheRows:
                 await conn.execute(
                     "UPDATE document SET current_version_id = NULL WHERE id = $1", sent_piece
                 )
+
+
+class TestTheKeyDescriptionIsRegistered:
+    async def test_on_an_upgraded_database(self, test_db_ready):
+        async with _scratch() as conn:
+            await _upgraded(conn)
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM document_template WHERE doc_type = 'key_description'"
+                )
+                == 0
+            )
+            await conn.execute(M0005)
+
+            row = await conn.fetchrow(
+                "SELECT region, version, output_format, file_ref, valid_to "
+                "FROM document_template WHERE doc_type = 'key_description'"
+            )
+            assert dict(row) == {
+                "region": 1,
+                "version": 1,
+                "output_format": "pdf",
+                "file_ref": "s3://optimce-templates/administrative-document/key_description/v1/",
+                "valid_to": None,
+            }
+
+    async def test_once_whatever_ran_first(self, test_db_ready):
+        """The dev stack's seed 0004 writes the same row; either order is one row."""
+        seed = (_ROOT / "scripts" / "sql" / "seeds" / "0004_wal_key_description.sql").read_text(
+            encoding="utf-8"
+        )
+        async with _scratch() as conn:
+            await _upgraded(conn)
+            await conn.execute(seed)
+            await conn.execute(M0005)
+            await conn.execute(seed)
+
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM document_template WHERE doc_type = 'key_description'"
+                )
+                == 1
+            )
