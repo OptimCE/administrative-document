@@ -7,7 +7,9 @@ Data first: the seven procedure types are ``catalogue/*.yaml`` (six codes,
 - ``variant``: which route a sharing modification takes, from its changes;
 - ``required_documents``: which pieces a procedure needs, from its changes and
   the facts the engine read for it;
-- ``render_context`` and ``effects``: phases 2 and 3 (skeletons for now).
+- ``render_context``: the payload a bundle binds (the snapshot, as built);
+- ``episode_status``: what the core shows of a meter or key while a sharing
+  procedure waits: at the GRD, at the CWaPE, or authorised.
 
 The facts it reads in ``ProcedureFacts.context`` (an absent key is unknown,
 never false):
@@ -37,8 +39,9 @@ from typing import Any
 
 from engine.calendar import CalendarData, load_calendar
 from engine.catalogue import Catalogue, DocumentSpec, ProcedureDefinition, load_catalogue
-from engine.contracts import ChangeFact, DocumentRequirement, Effect, ProcedureFacts
+from engine.contracts import ChangeFact, DocumentRequirement, ProcedureFacts
 from engine.entry_sheets import EntrySheet, load_entry_sheets
+from shared.const import RegulatoryStatus
 
 CODE = "BE-WAL-CWAPE"
 HERE = Path(__file__).resolve().parent
@@ -47,6 +50,23 @@ HERE = Path(__file__).resolve().parent
 _MEMBER_LISTS = {
     "annex8_sworn_declaration": "members",
     "annex7_legal_entity": "legal_entity_members",
+}
+
+# The "sent" steps of PARTAGE_MODIF, the one procedure filing tracked changes:
+# with the GRD (sent, supplements, its completeness check), with the CWaPE (its
+# instruction, a non-conformity), then authorised (the decision, the GRD's
+# amendment, signed). PARTAGE_AUTORISATION's own steps, for when it files
+# changes (phase 4).
+_EPISODE_STATUS = {
+    "sent": RegulatoryStatus.PENDING_GRD,
+    "incomplete": RegulatoryStatus.PENDING_GRD,
+    "in_review": RegulatoryStatus.PENDING_GRD,
+    "at_regulator": RegulatoryStatus.PENDING_REGULATOR,
+    "non_conformity": RegulatoryStatus.PENDING_REGULATOR,
+    "granted": RegulatoryStatus.AUTHORIZED,
+    "accepted": RegulatoryStatus.AUTHORIZED,
+    "amendment_signed": RegulatoryStatus.AUTHORIZED,
+    "agreement_signed": RegulatoryStatus.AUTHORIZED,
 }
 
 
@@ -177,10 +197,10 @@ class CwapePlugin:
         payload each CWaPE bundle binds, so the snapshot passes through."""
         return dict(snapshot)
 
-    def effects(self, procedure: ProcedureFacts) -> list[Effect]:
-        """Phase 3: what a procedure in force writes to the core. Nothing yet;
-        in phase 1 only the baseline confirmation writes effects."""
-        return []
+    def episode_status(self, definition: ProcedureDefinition, step: str) -> RegulatoryStatus | None:
+        """The GRD holds it until its technical opinion goes to the CWaPE; the
+        CWaPE until its decision; then it is authorised, the amendment aside."""
+        return _EPISODE_STATUS.get(step)
 
     def entry_sheet(self, code: str) -> EntrySheet | None:
         """The CWaPE takes its community forms as files a representative fills in

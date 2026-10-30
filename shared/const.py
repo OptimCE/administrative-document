@@ -278,7 +278,7 @@ class RegulatoryStatus(IntEnum):
 
     A mirror of crm-backend's ``RegulatoryStatus``
     (src/modules/regulatory/domain/regulatory-link-status.models.ts); the core
-    owns the codes and its CHECK accepts 1 to 8.
+    owns the codes and its CHECK accepts 1 to 9.
     """
 
     TO_NOTIFY = 1
@@ -289,6 +289,9 @@ class RegulatoryStatus(IntEnum):
     LEAVING = 6
     ENDED = 7
     REFUSED = 8
+    #: Filed, then cancelled, excluded or compensated before it was
+    #: authorised: the row stays (no DELETE grant), the CRM shows nothing.
+    WITHDRAWN = 9
 
 
 class FeatureName(StrEnum):

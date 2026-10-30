@@ -33,12 +33,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from engine.contracts import RegulatorPlugin
 from engine.events import BRUSSELS, DetectedChange
-from engine.filing import RegionOf, file_change, recompute
+from engine.filing import LIVE_STATUSES, RegionOf, file_change, recompute
 from engine.lifecycle import (
     ENGINE_ACTOR,
     LifecycleError,
@@ -230,13 +230,21 @@ def _difference(
 
 
 async def _filed_subjects(local: AsyncSession, id_community: int) -> set[tuple[int, int, str]]:
-    """Subjects whose addition is already a change in a procedure."""
+    """Subjects whose addition a live procedure carries (deferred included).
+    One applied is in the core's episodes; one refused, lapsed or cancelled
+    carries nothing, so it is listed again."""
     rows = await local.execute(
-        select(
-            ChangeModel.subject_type, ChangeModel.id_sharing_operation, ChangeModel.subject_ref
-        ).where(
+        select(ChangeModel.subject_type, ChangeModel.id_sharing_operation, ChangeModel.subject_ref)
+        .outerjoin(DossierModel, DossierModel.id == ChangeModel.id_dossier)
+        .where(
             ChangeModel.id_community == id_community,
-            ChangeModel.status.in_((int(ChangeStatus.ATTACHED), int(ChangeStatus.APPLIED))),
+            or_(
+                and_(
+                    ChangeModel.status == int(ChangeStatus.ATTACHED),
+                    DossierModel.status.in_(LIVE_STATUSES),
+                ),
+                ChangeModel.status == int(ChangeStatus.DEFERRED),
+            ),
             ChangeModel.kind.in_(_ADD_KINDS),
             ChangeModel.id_sharing_operation.is_not(None),
         )

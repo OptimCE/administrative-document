@@ -13,6 +13,16 @@ A deadline the community let pass is MISSED (``engine.jobs``) but not resolved:
 it still counts for the next action's due date, so the dashboard keeps showing
 it overdue, and the event that meets it still meets it, late. A new clock for
 the same rule supersedes it.
+
+The procedure's effect date is its EFFECT deadline: when a rule of that kind
+starts, its due date (never before the date the community asked for) becomes
+``dossier.effective_date``.
+
+Entering a step settles the procedure's changes: refused with it, excluded
+when it is cancelled, applied when it goes in force. Going in force writes the
+core first (``engine.effects``), so ``move_to_step`` refuses to put a
+procedure carrying a tracked change in force unless the caller says the core
+already has it (``effects_written``).
 """
 
 from __future__ import annotations
@@ -26,10 +36,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from engine.calendar import WorkingCalendar
 from engine.catalogue import ProcedureDefinition, step_event
-from engine.contracts import DocumentRequirement, RegulatorPlugin
+from engine.contracts import TRACKED_CHANGE_KINDS, DocumentRequirement, RegulatorPlugin
 from engine.deadlines import due_date
 from engine.templates import template_in_force
 from shared.const import (
+    ChangeStatus,
+    DeadlineKind,
     DeadlineStatus,
     DocOrigin,
     DocumentKind,
@@ -39,6 +51,7 @@ from shared.const import (
     SubjectType,
 )
 from shared.models.local_models import (
+    ChangeModel,
     DeadlineModel,
     DeadlineRuleModel,
     DocumentModel,
@@ -176,11 +189,15 @@ async def start_rules(
         if previous is not None:  # missed: the new clock supersedes it
             previous.status = int(DeadlineStatus.CANCELLED)
             previous.resolved_at = datetime.datetime.now(datetime.UTC)
+        due = due_date(rule, ctx.calendar, anchor=anchor)
+        if rule.kind_of_deadline == DeadlineKind.EFFECT:
+            due = effect_date(due, dossier.requested_effective_date)
+            dossier.effective_date = due
         deadline = DeadlineModel(
             id_community=dossier.id_community,
             id_dossier=dossier.id,
             deadline_type=rule.code,
-            due_date=due_date(rule, ctx.calendar, anchor=anchor),
+            due_date=due,
             status=int(DeadlineStatus.OPEN),
             recurring=False,
             derived_from_event_id=journal_event_id,
@@ -193,6 +210,12 @@ async def start_rules(
         started.append(deadline)
     await session.flush()
     return started
+
+
+def effect_date(computed: datetime.date, requested: datetime.date | None) -> datetime.date:
+    """The effect date: the one the catalogue's rule counts, or the later date
+    the community asked for."""
+    return max(computed, requested) if requested is not None else computed
 
 
 async def start_annual_rules(
@@ -343,8 +366,10 @@ async def move_to_step(
     day: datetime.date,
     actor: str = ENGINE_ACTOR,
     context: dict[str, Any] | None = None,
+    effects_written: bool = False,
 ) -> StatusEventModel:
-    """Take one edge of the catalogue, journaled, with its deadlines."""
+    """Take one edge of the catalogue, journaled, with its deadlines, and
+    settle the procedure's changes on the way."""
     definition = ctx.definition
     if not definition.allows(str(dossier.step), to_step, dossier.variant):
         raise LifecycleError(
@@ -352,6 +377,7 @@ async def move_to_step(
             f"{dossier.step} -> {to_step}"
         )
     target = definition.step(to_step)
+    await _settle_changes(session, dossier, target.common_status, effects_written=effects_written)
     event = await _journal(
         session,
         dossier,
@@ -407,14 +433,83 @@ async def take_automatic_edge(
     *,
     day: datetime.date,
     context: dict[str, Any] | None = None,
+    effects_written: bool = False,
 ) -> bool:
     """Move to a step of common status ``status`` if the catalogue lets the
     engine do it from here. False when it does not."""
     edge = ctx.definition.automatic_edge_to(str(dossier.step), status, dossier.variant)
     if edge is None:
         return False
-    await move_to_step(session, ctx, dossier, edge.target, day=day, context=context)
+    await move_to_step(
+        session,
+        ctx,
+        dossier,
+        edge.target,
+        day=day,
+        context=context,
+        effects_written=effects_written,
+    )
     return True
+
+
+class EffectsNotWrittenError(LifecycleError):
+    """A procedure carrying tracked changes was put in force without its
+    effects in the core: they go first (``engine.effects``)."""
+
+
+# What entering a step of this common status does to the procedure's changes.
+_SETTLES: dict[ProcedureStatus, tuple[tuple[int, ...], ChangeStatus]] = {
+    ProcedureStatus.REFUSED: (
+        (int(ChangeStatus.ATTACHED), int(ChangeStatus.APPLIED)),
+        ChangeStatus.REFUSED,
+    ),
+    ProcedureStatus.CANCELLED: ((int(ChangeStatus.ATTACHED),), ChangeStatus.EXCLUDED),
+    ProcedureStatus.IN_FORCE: ((int(ChangeStatus.ATTACHED),), ChangeStatus.APPLIED),
+}
+
+
+async def _settle_changes(
+    session: AsyncSession,
+    dossier: DossierModel,
+    status: ProcedureStatus,
+    *,
+    effects_written: bool,
+) -> None:
+    """Refused with the procedure; excluded when it is cancelled (nothing will
+    carry them); applied when it goes in force. APPLIED is refused too: the
+    correction of a converted July procedure closed with no outcome."""
+    settles = _SETTLES.get(status)
+    if settles is None:
+        return
+    statuses, to = settles
+    changes = list(
+        await session.scalars(
+            select(ChangeModel).where(
+                ChangeModel.id_community == dossier.id_community,
+                ChangeModel.id_dossier == dossier.id,
+                ChangeModel.status.in_(statuses),
+            )
+        )
+    )
+    if (
+        status == ProcedureStatus.IN_FORCE
+        and not effects_written
+        and any(
+            c.kind in TRACKED_CHANGE_KINDS and c.id_sharing_operation is not None for c in changes
+        )
+    ):
+        raise EffectsNotWrittenError(
+            f"procedure {dossier.id} carries tracked changes: its effects go to the core first"
+        )
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    for change in changes:
+        change.status = int(to)
+        if to == ChangeStatus.EXCLUDED:
+            change.payload_json = {
+                **(change.payload_json or {}),
+                "excluded": {"reason": "procedure_cancelled", "by": ENGINE_ACTOR, "at": now},
+            }
+    await session.flush()
 
 
 # -- pieces -----------------------------------------------------------------

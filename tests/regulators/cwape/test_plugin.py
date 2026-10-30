@@ -9,7 +9,7 @@ import pytest
 from engine.contracts import ChangeFact, ProcedureFacts, RegulatorPlugin
 from regulators.cwape.plugin import CwapePlugin
 from regulators.registry import REGISTRY
-from shared.const import ChangeSubjectType, DocumentKind
+from shared.const import ChangeSubjectType, DocumentKind, ProcedureStatus, RegulatoryStatus
 
 PLUGIN = CwapePlugin()
 DEFINITIONS = {e.definition.code: e.definition for e in PLUGIN.catalogue().entries}
@@ -187,10 +187,30 @@ class TestPiecesOfTheCommunity:
         ]
 
 
-class TestNotYet:
-    def test_effects_are_phase_3(self):
-        assert PLUGIN.effects(_facts("PARTAGE_MODIF", _meter("meter_added", member=5))) == []
+class TestWhatTheCoreShows:
+    def test_each_sent_step_of_a_sharing_modification(self):
+        definition = PLUGIN.catalogue().get("PARTAGE_MODIF", 1).definition
+        statuses = {
+            step.code: PLUGIN.episode_status(definition, step.code)
+            for step in definition.steps
+            if step.common_status == ProcedureStatus.SENT
+        }
+        assert statuses == {
+            # with the GRD
+            "sent": RegulatoryStatus.PENDING_GRD,
+            "incomplete": RegulatoryStatus.PENDING_GRD,
+            "in_review": RegulatoryStatus.PENDING_GRD,
+            # with the CWaPE
+            "at_regulator": RegulatoryStatus.PENDING_REGULATOR,
+            "non_conformity": RegulatoryStatus.PENDING_REGULATOR,
+            # authorised: the amendment remains
+            "granted": RegulatoryStatus.AUTHORIZED,
+            "accepted": RegulatoryStatus.AUTHORIZED,
+            "amendment_signed": RegulatoryStatus.AUTHORIZED,
+        }
 
+
+class TestTheRest:
     def test_the_render_context_passes_the_snapshot_through(self):
         snapshot = {"community": {"name": "CER"}}
         assert PLUGIN.render_context("annex6_sharing_form", snapshot) == snapshot

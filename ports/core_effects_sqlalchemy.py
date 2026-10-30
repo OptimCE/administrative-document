@@ -4,10 +4,12 @@
   ``(id_dossier_origin, subject_type, subject_ref)`` with absolute values; an
   existing one is updated by id. Writing the same thing twice changes nothing.
 - **The constraint is the core's.** "One EAN pending, authorised or active in a
-  single operation per date" is the EXCLUDE constraint on the table. Every
-  write is checked against it first, so the refusal names all the EANs at once
+  single operation per date" is the EXCLUDE constraint on the table. The
+  writes that leave those statuses go first (a meter moving between two
+  operations leaves the first before it is pending in the second); every other
+  write is then checked against it, so the refusal names all the EANs at once
   (the database would name the first); a race that still trips it is caught
-  and reported the same way.
+  and reported the same way. The caller rolls back on a refusal.
 - **Audited, not swallowed.** ``AuditLogService.log`` swallows its failures by
   design, which is wrong for an effect: the audit row is written here, in the
   same transaction, and a failure fails the effect.
@@ -106,16 +108,18 @@ class SqlCoreEffects:
     async def apply(
         self, id_community: int, writes: Sequence[EpisodeWrite], *, audit_payload: dict
     ) -> int:
-        conflicts = await self._conflicts(id_community, writes)
-        if conflicts:
-            raise EffectConflictError(conflicts)
+        if not writes:
+            return 0
+        guarded = [
+            w for w in writes if w.subject_type == _METER and int(w.regulatory_status) in _TRACKED
+        ]
+        freed = [w for w in writes if w not in guarded]
         try:
-            for write in writes:
-                values = _values(id_community, write)
-                if write.episode_id is not None:
-                    await self._session.execute(_UPDATE_SQL, values)
-                else:
-                    await self._session.execute(_UPSERT_SQL, values)
+            await self._write(id_community, freed)
+            conflicts = await self._conflicts(id_community, guarded)
+            if conflicts:
+                raise EffectConflictError(conflicts)
+            await self._write(id_community, guarded)
         except IntegrityError as exc:
             if _EXCLUDE_CONSTRAINT not in str(exc.orig):
                 raise
@@ -123,6 +127,14 @@ class SqlCoreEffects:
             raise EffectConflictError([match.group(1)] if match else ["?"]) from exc
         await self._audit(id_community, writes, audit_payload)
         return len(writes)
+
+    async def _write(self, id_community: int, writes: Sequence[EpisodeWrite]) -> None:
+        for write in writes:
+            values = _values(id_community, write)
+            if write.episode_id is not None:
+                await self._session.execute(_UPDATE_SQL, values)
+            else:
+                await self._session.execute(_UPSERT_SQL, values)
 
     async def _audit(
         self, id_community: int, writes: Sequence[EpisodeWrite], payload: dict

@@ -18,7 +18,7 @@ from engine.contracts import (
 )
 from regulators.registry import REGISTRY
 from regulators.testing.fake import FakeRegulator
-from shared.const import ChangeSubjectType, DocumentKind, RegulatoryStatus
+from shared.const import ChangeSubjectType, DocumentKind, ProcedureStatus, RegulatoryStatus
 
 D = datetime.date
 REGULATORS_JSON = Path(__file__).resolve().parents[1] / "fixtures" / "regulators.json"
@@ -121,23 +121,48 @@ class TestTheFakeRegulator:
         ]
         assert full[1].kind == DocumentKind.COLLECTED
 
-    def test_effects_follow_the_changes(self):
-        facts = ProcedureFacts(
-            definition=self.change,
-            variant="full",
-            id_community=1,
-            id_sharing_operation=7,
-            changes=(
-                _meter("meter_added", "A"),
-                _meter("meter_removed", "B"),
-                ChangeFact("note_added", ChangeSubjectType.OPERATION, "7"),
-            ),
-            effective_date=D(2026, 9, 1),
-        )
-        effects = self.plugin.effects(facts)
-        assert [
-            (e.subject_ref, e.regulatory_status, e.valid_from, e.valid_to) for e in effects
-        ] == [
-            ("A", RegulatoryStatus.ACTIVE, D(2026, 9, 1), None),
-            ("B", RegulatoryStatus.ENDED, None, D(2026, 9, 1)),
-        ]
+    def test_its_sent_steps_mean_a_status_for_the_core(self):
+        statuses = {
+            step.code: self.plugin.episode_status(self.change, step.code)
+            for step in self.change.steps
+            if step.common_status == ProcedureStatus.SENT
+        }
+        assert statuses == {
+            "sent": RegulatoryStatus.PENDING_GRD,
+            "missing_info": RegulatoryStatus.PENDING_GRD,
+            "reviewed": RegulatoryStatus.PENDING_REGULATOR,
+            "accepted": RegulatoryStatus.AUTHORIZED,
+            "signed": RegulatoryStatus.AUTHORIZED,
+        }
+
+
+class TestTheEpisodeStatuses:
+    def test_a_sent_step_the_plugin_does_not_map_is_refused(self):
+        class Forgetful(FakeRegulator):
+            def episode_status(self, definition, step):
+                return None if step == "reviewed" else super().episode_status(definition, step)
+
+        with pytest.raises(RegistryError, match="step reviewed means None"):
+            build_registry([Forgetful()])
+
+    def test_a_sent_step_cannot_mean_active(self):
+        class Hasty(FakeRegulator):
+            def episode_status(self, definition, step):
+                return RegulatoryStatus.ACTIVE
+
+        with pytest.raises(RegistryError, match="not one of"):
+            build_registry([Hasty()])
+
+    def test_a_procedure_filing_no_tracked_change_is_not_asked(self):
+        asked = []
+
+        class Recording(FakeRegulator):
+            def episode_status(self, definition, step):
+                asked.append(definition.code)
+                return super().episode_status(definition, step)
+
+        build_registry([Recording()])
+        assert set(asked) == {"FAKE_CHANGE"}
+
+    def test_every_cwape_sent_step_of_a_sharing_procedure_is_mapped(self):
+        build_registry(REGISTRY.values())  # raises if one is not

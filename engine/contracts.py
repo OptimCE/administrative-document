@@ -7,7 +7,9 @@ points build the registry from ``regulators.registry`` and hand it in.
 Data first. A plugin's catalogue and calendar are files the engine reads
 (``catalogue()``, ``calendar()``); its methods cover only what data cannot say:
 switching the variant, the conditions on pieces, the mapping to templates, and
-the effects on the core.
+what each of its "sent" steps means for the core's regulatory status. Which
+rows of the core a procedure touches, and with which dates, is the engine's
+(``engine.effects``): the same for every regulator.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from typing import Any, Protocol, runtime_checkable
 from engine.calendar import CalendarData
 from engine.catalogue import Catalogue, ProcedureDefinition
 from engine.entry_sheets import EntrySheet
-from shared.const import ChangeSubjectType, DocumentKind, RegulatoryStatus
+from shared.const import ChangeSubjectType, DocumentKind, ProcedureStatus, RegulatoryStatus
 
 
 @dataclass(frozen=True)
@@ -61,16 +63,12 @@ class DocumentRequirement:
     condition: Mapping[str, Any] | None = None  # why it is required, for display
 
 
-@dataclass(frozen=True)
-class Effect:
-    """What a procedure in force writes to the core's ``regulatory_link_status``."""
-
-    subject_type: ChangeSubjectType  # METER or KEY: the only subjects the core tracks
-    subject_ref: str
-    id_sharing_operation: int
-    regulatory_status: RegulatoryStatus
-    valid_from: datetime.date | None = None
-    valid_to: datetime.date | None = None
+# What a step of common status "sent" may mean for a subject it carries.
+SENT_STATUSES = (
+    RegulatoryStatus.PENDING_GRD,
+    RegulatoryStatus.PENDING_REGULATOR,
+    RegulatoryStatus.AUTHORIZED,
+)
 
 
 @runtime_checkable
@@ -95,7 +93,13 @@ class RegulatorPlugin(Protocol):
         self, requirement_code: str, snapshot: Mapping[str, Any]
     ) -> dict[str, Any]: ...
 
-    def effects(self, procedure: ProcedureFacts) -> list[Effect]: ...
+    def episode_status(self, definition: ProcedureDefinition, step: str) -> RegulatoryStatus | None:
+        """What the core shows of a subject while its procedure is on ``step``,
+        a step of common status "sent": waiting for the GRD, waiting for the
+        regulator, or authorised (one of ``SENT_STATUSES``; None for a step it
+        does not know, which ``build_registry`` refuses). The engine maps the
+        other common statuses itself."""
+        ...
 
     def entry_sheet(self, code: str) -> EntrySheet | None:
         """The entry sheet of the form piece ``code`` (its values in the order of
@@ -113,8 +117,10 @@ class RegistryError(Exception):
 def build_registry(plugins: Iterable[RegulatorPlugin]) -> PluginRegistry:
     """A read-only ``{community.regulator: plugin}``, checked.
 
-    Each plugin must own its catalogue and its calendar, and no two plugins may
-    share a code or a region (the region's calendar has one writer).
+    Each plugin must own its catalogue and its calendar, no two plugins may
+    share a code or a region (the region's calendar has one writer), and every
+    "sent" step of a procedure that files a tracked change must mean one of
+    ``SENT_STATUSES`` (``episode_status``).
     """
     registry: dict[str, RegulatorPlugin] = {}
     regions: dict[str, str] = {}
@@ -136,9 +142,44 @@ def build_registry(plugins: Iterable[RegulatorPlugin]) -> PluginRegistry:
                 f"{plugin.code} counts on region {plugin.region} "
                 f"but returns the calendar of {calendar_region}"
             )
+        _check_episode_statuses(plugin)
         registry[plugin.code] = plugin
         regions[plugin.region] = plugin.code
     return MappingProxyType(registry)
+
+
+# The change kinds whose subject the core tracks (``engine.effects``), and how
+# the core names that subject: an addition owns its episode, a removal moves one.
+ADDITION_KINDS: Mapping[str, ChangeSubjectType] = MappingProxyType(
+    {
+        "meter_added": ChangeSubjectType.METER,
+        "installation_added": ChangeSubjectType.METER,
+        "key_changed": ChangeSubjectType.KEY,
+    }
+)
+REMOVAL_KINDS: Mapping[str, ChangeSubjectType] = MappingProxyType(
+    {
+        "meter_removed": ChangeSubjectType.METER,
+        "installation_removed": ChangeSubjectType.METER,
+    }
+)
+TRACKED_CHANGE_KINDS = frozenset({*ADDITION_KINDS, *REMOVAL_KINDS})
+
+
+def _check_episode_statuses(plugin: RegulatorPlugin) -> None:
+    for entry in plugin.catalogue().entries:
+        definition = entry.definition
+        if not TRACKED_CHANGE_KINDS & set(definition.handles_change_kinds):
+            continue
+        for step in definition.steps:
+            if step.common_status != ProcedureStatus.SENT:
+                continue
+            status = plugin.episode_status(definition, step.code)
+            if status not in SENT_STATUSES:
+                raise RegistryError(
+                    f"{plugin.code} {definition.code}: step {step.code} means {status!r} "
+                    f"for the core, not one of {[s.name for s in SENT_STATUSES]}"
+                )
 
 
 def plugin_for(registry: PluginRegistry, regulator: str | None) -> RegulatorPlugin | None:

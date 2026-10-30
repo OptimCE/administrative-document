@@ -62,6 +62,8 @@ from shared.models.local_models import (
 logger = logging.getLogger(__name__)
 
 OPEN = (int(ProcedureStatus.DRAFT), int(ProcedureStatus.READY))
+# A procedure still carrying its changes: open, or sent and not yet decided.
+LIVE_STATUSES = (*OPEN, int(ProcedureStatus.SENT))
 
 RegionOf = Callable[[str], int | None]
 
@@ -148,9 +150,28 @@ async def file_change(
     row.status = int(ChangeStatus.ATTACHED)
     row.id_dossier = dossier.id
     await local.flush()
+    if change.kind == "key_changed":
+        await _supersede_keys(local, dossier, row)
     await content_changed(local, ctx, dossier, day)
     await recompute(local, ctx, dossier)
     return dossier.id, row.id
+
+
+async def _supersede_keys(local: AsyncSession, dossier: DossierModel, latest: ChangeModel) -> None:
+    """An operation has one key: a new key in the draft replaces the one the
+    draft already held, which is notified to nobody."""
+    for older in await local.scalars(
+        select(ChangeModel).where(
+            ChangeModel.id_community == dossier.id_community,
+            ChangeModel.id_dossier == dossier.id,
+            ChangeModel.kind == "key_changed",
+            ChangeModel.status == int(ChangeStatus.ATTACHED),
+            ChangeModel.id != latest.id,
+        )
+    ):
+        older.status = int(ChangeStatus.CANCELLED)
+        older.payload_json = {**(older.payload_json or {}), "superseded_by": latest.id}
+    await local.flush()
 
 
 async def _dossier(local: AsyncSession, dossier_id: int | None) -> DossierModel:

@@ -28,19 +28,24 @@ import datetime
 import logging
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.regions import region_for_regulator
 from engine.activation import reconcile_activation
 from engine.baseline import ensure_baseline, photographed
-from engine.contracts import PluginRegistry, plugin_for
+from engine.contracts import REMOVAL_KINDS, PluginRegistry, plugin_for
 from engine.events import CoreEvent, DetectedChange, change_of
-from engine.filing import RegionOf, file_change
+from engine.filing import LIVE_STATUSES, RegionOf, file_change
 from ports.crm_engine import EngineCrmRead
-from shared.const import ChangeStatus, ChangeSubjectType, EventOutcome
-from shared.models.local_models import ChangeModel, ModuleActivationModel, ProcessedEventModel
+from shared.const import ChangeStatus, ChangeSubjectType, EventOutcome, ProcedureStatus
+from shared.models.local_models import (
+    ChangeModel,
+    DossierModel,
+    ModuleActivationModel,
+    ProcessedEventModel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +55,7 @@ _TRACKED_KINDS = {
     "installation_added": ChangeSubjectType.METER,
     "key_changed": ChangeSubjectType.KEY,
 }
+_METER_ADDITIONS = ("meter_added", "installation_added")
 
 
 class DuplicateEventError(Exception):
@@ -166,11 +172,18 @@ async def _already_reflected(
     event: CoreEvent,
     change: DetectedChange,
 ) -> bool:
-    """Is this addition already known? Tracked by the core, on the baseline
-    still awaiting confirmation (spec: events in flight are "comparés à la
-    photo"), or already a change in a procedure. Only additions can be: a
-    removal is never skipped, because before the baseline is confirmed the
-    annexe cannot know the meter was absent (spec, "Rangement", step 2)."""
+    """Is this change already known? An addition is when the core tracks it,
+    when it is on the baseline still awaiting confirmation (spec: events in
+    flight are "comparés à la photo"), or when a live procedure already
+    carries it (a refused, lapsed or cancelled one carries nothing).
+
+    A removal is skipped only on positive evidence that nothing was ever
+    authorised to leave: the meter's latest addition was refused (or its
+    procedure lapsed) and the core holds no live episode of it. Short of that
+    it is filed, because before the baseline is confirmed the annexe cannot
+    know the meter was absent (spec, "Rangement", step 2)."""
+    if change.kind in REMOVAL_KINDS and change.id_sharing_operation is not None:
+        return await _removal_reflected(local, crm, event, change)
     subject_type = _TRACKED_KINDS.get(change.kind)
     if subject_type is None or change.id_sharing_operation is None:
         return False
@@ -181,13 +194,20 @@ async def _already_reflected(
         return True
     filed = await local.scalar(
         select(ChangeModel.id)
+        .outerjoin(DossierModel, DossierModel.id == ChangeModel.id_dossier)
         .where(
             ChangeModel.id_community == event.id_community,
             ChangeModel.id_sharing_operation == operation,
             ChangeModel.subject_type == int(subject_type),
             ChangeModel.subject_ref == change.subject_ref,
             ChangeModel.kind == change.kind,
-            ChangeModel.status.in_((int(ChangeStatus.ATTACHED), int(ChangeStatus.APPLIED))),
+            or_(
+                and_(
+                    ChangeModel.status == int(ChangeStatus.ATTACHED),
+                    DossierModel.status.in_(LIVE_STATUSES),
+                ),
+                ChangeModel.status == int(ChangeStatus.DEFERRED),
+            ),
         )
         .limit(1)
     )
@@ -202,6 +222,43 @@ async def _already_reflected(
         on=on,
     )
     return change.subject_ref in tracked
+
+
+async def _removal_reflected(
+    local: AsyncSession, crm: EngineCrmRead, event: CoreEvent, change: DetectedChange
+) -> bool:
+    operation = int(change.id_sharing_operation or 0)
+    latest = (
+        await local.execute(
+            select(ChangeModel.status, DossierModel.status)
+            .outerjoin(DossierModel, DossierModel.id == ChangeModel.id_dossier)
+            .where(
+                ChangeModel.id_community == event.id_community,
+                ChangeModel.id_sharing_operation == operation,
+                ChangeModel.subject_type == int(ChangeSubjectType.METER),
+                ChangeModel.subject_ref == change.subject_ref,
+                ChangeModel.kind.in_(_METER_ADDITIONS),
+            )
+            .order_by(ChangeModel.id.desc())
+            .limit(1)
+        )
+    ).first()
+    if latest is None:
+        return False
+    change_status, procedure_status = latest
+    never_authorised = change_status == int(ChangeStatus.REFUSED) or (
+        change_status == int(ChangeStatus.ATTACHED)
+        and procedure_status == int(ProcedureStatus.LAPSED)
+    )
+    if not never_authorised:
+        return False
+    live = await crm.live_episode(
+        event.id_community,
+        id_sharing_operation=operation,
+        subject_type=int(ChangeSubjectType.METER),
+        subject_ref=change.subject_ref,
+    )
+    return live is None
 
 
 def _effective_day(event: CoreEvent) -> datetime.date:

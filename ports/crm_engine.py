@@ -7,7 +7,8 @@ Raw SQL on the CRM session, like ``crm_core_sqlalchemy.py``:
   (spec, "Activation du module"). ``require_feature`` cannot serve here: it is
   a FastAPI dependency reading request ContextVars, and a consumer has neither.
 - which subjects the core already tracks in ``regulatory_link_status`` (the
-  authorised state), so an event that changes nothing is recognised;
+  authorised state), so an event that changes nothing is recognised, and the
+  episodes themselves, which ``engine.effects`` compares its plan with;
 - the photo the baseline is built from: each operation, its current meters,
   its approved key.
 """
@@ -17,7 +18,7 @@ from __future__ import annotations
 import datetime
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,6 +82,12 @@ class Episode:
     regulatory_status: int
     valid_from: datetime.date | None
     valid_to: datetime.date | None
+    regulatory_ref: str | None = None
+
+    @property
+    def key(self) -> tuple[int, int, str]:
+        """(origin, subject type, subject ref): the row's identity, UNIQUE."""
+        return (self.id_dossier_origin, self.subject_type, self.subject_ref)
 
 
 class EngineCrmRead(Protocol):
@@ -109,6 +116,24 @@ class EngineCrmRead(Protocol):
         on: datetime.date,
     ) -> set[str]:
         """The ``refs`` the core tracks in this operation on day ``on``."""
+        ...
+
+    async def episode_rows(
+        self, id_community: int, keys: Sequence[tuple[int, int, str]]
+    ) -> dict[tuple[int, int, str], Episode]:
+        """The episodes of these (origin, subject type, subject ref) identities
+        that exist, by identity."""
+        ...
+
+    async def live_episode(
+        self, id_community: int, *, id_sharing_operation: int, subject_type: int, subject_ref: str
+    ) -> Episode | None:
+        """The newest episode of a subject in an operation still to notify,
+        pending, authorised, active or leaving: what a removal moves."""
+        ...
+
+    async def active_keys(self, id_community: int, id_sharing_operation: int) -> list[Episode]:
+        """The operation's key episodes that are active: what a new key ends."""
         ...
 
 
@@ -165,13 +190,38 @@ _ACTIVE_COMMUNITIES_SQL = text(
     "WHERE s.feature = :feature AND s.is_active ORDER BY s.id_community"
 )
 
+_EPISODE_COLUMNS = (
+    "id, id_sharing_operation, subject_type, subject_ref, id_dossier_origin, "
+    "regulatory_status, valid_from, valid_to, regulatory_ref "
+)
+
 _EPISODES_SQL = text(
-    "SELECT id, id_sharing_operation, subject_type, subject_ref, id_dossier_origin, "
-    "       regulatory_status, valid_from, valid_to "
-    "FROM regulatory_link_status "
+    f"SELECT {_EPISODE_COLUMNS}FROM regulatory_link_status "
     "WHERE id_community = :id_community AND regulatory_status IN :statuses "
     "ORDER BY id"
 ).bindparams(bindparam("statuses", expanding=True))
+
+# Narrowed by origin and ref in SQL, matched on the full identity in Python.
+_EPISODE_ROWS_SQL = text(
+    f"SELECT {_EPISODE_COLUMNS}FROM regulatory_link_status "
+    "WHERE id_community = :id_community AND id_dossier_origin IN :origins "
+    "  AND subject_ref IN :refs"
+).bindparams(bindparam("origins", expanding=True), bindparam("refs", expanding=True))
+
+_LIVE_EPISODE_SQL = text(
+    f"SELECT {_EPISODE_COLUMNS}FROM regulatory_link_status "
+    "WHERE id_community = :id_community AND id_sharing_operation = :id_sharing_operation "
+    "  AND subject_type = :subject_type AND subject_ref = :subject_ref "
+    "  AND regulatory_status IN :statuses "
+    "ORDER BY id DESC LIMIT 1"
+).bindparams(bindparam("statuses", expanding=True))
+
+_ACTIVE_KEYS_SQL = text(
+    f"SELECT {_EPISODE_COLUMNS}FROM regulatory_link_status "
+    "WHERE id_community = :id_community AND id_sharing_operation = :id_sharing_operation "
+    "  AND subject_type = 2 AND regulatory_status = :active "
+    "ORDER BY id"
+)
 
 # meter_data.status of an active attribution (MeterDataStatus.ACTIVE).
 _ACTIVE_METER_DATA = 1
@@ -267,22 +317,69 @@ class SqlEngineCrmRead:
             _EPISODES_SQL,
             {"id_community": id_community, "statuses": [int(s) for s in statuses]},
         )
-        return [
-            Episode(
-                id=int(row.id),
-                id_sharing_operation=int(row.id_sharing_operation),
-                subject_type=int(row.subject_type),
-                subject_ref=str(row.subject_ref),
-                id_dossier_origin=int(row.id_dossier_origin),
-                regulatory_status=int(row.regulatory_status),
-                valid_from=row.valid_from,
-                valid_to=row.valid_to,
+        return [_episode(row) for row in result]
+
+    async def episode_rows(
+        self, id_community: int, keys: Sequence[tuple[int, int, str]]
+    ) -> dict[tuple[int, int, str], Episode]:
+        if not keys:
+            return {}
+        wanted = set(keys)
+        result = await self._session.execute(
+            _EPISODE_ROWS_SQL,
+            {
+                "id_community": id_community,
+                "origins": sorted({k[0] for k in wanted}),
+                "refs": sorted({k[2] for k in wanted}),
+            },
+        )
+        rows = (_episode(row) for row in result)
+        return {e.key: e for e in rows if e.key in wanted}
+
+    async def live_episode(
+        self, id_community: int, *, id_sharing_operation: int, subject_type: int, subject_ref: str
+    ) -> Episode | None:
+        row = (
+            await self._session.execute(
+                _LIVE_EPISODE_SQL,
+                {
+                    "id_community": id_community,
+                    "id_sharing_operation": id_sharing_operation,
+                    "subject_type": subject_type,
+                    "subject_ref": subject_ref,
+                    "statuses": list(range(1, 7)),
+                },
             )
-            for row in result
-        ]
+        ).first()
+        return _episode(row) if row is not None else None
+
+    async def active_keys(self, id_community: int, id_sharing_operation: int) -> list[Episode]:
+        result = await self._session.execute(
+            _ACTIVE_KEYS_SQL,
+            {
+                "id_community": id_community,
+                "id_sharing_operation": id_sharing_operation,
+                "active": int(RegulatoryStatus.ACTIVE),
+            },
+        )
+        return [_episode(row) for row in result]
 
     async def communities_with_module(self) -> list[int]:
         result = await self._session.execute(
             _ACTIVE_COMMUNITIES_SQL, {"feature": str(FeatureName.ADMINISTRATIVE_DOCUMENT)}
         )
         return [int(row) for row in result.scalars()]
+
+
+def _episode(row: Any) -> Episode:
+    return Episode(
+        id=int(row.id),
+        id_sharing_operation=int(row.id_sharing_operation),
+        subject_type=int(row.subject_type),
+        subject_ref=str(row.subject_ref),
+        id_dossier_origin=int(row.id_dossier_origin),
+        regulatory_status=int(row.regulatory_status),
+        valid_from=row.valid_from,
+        valid_to=row.valid_to,
+        regulatory_ref=row.regulatory_ref,
+    )

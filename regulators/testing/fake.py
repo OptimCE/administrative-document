@@ -20,9 +20,9 @@ from typing import Any
 
 from engine.calendar import CalendarData, load_calendar
 from engine.catalogue import Catalogue, ProcedureDefinition, load_catalogue
-from engine.contracts import ChangeFact, DocumentRequirement, Effect, ProcedureFacts
+from engine.contracts import ChangeFact, DocumentRequirement, ProcedureFacts
 from engine.entry_sheets import EntrySheet
-from shared.const import ChangeSubjectType, RegulatoryStatus
+from shared.const import RegulatoryStatus
 
 HERE = Path(__file__).resolve().parent
 CATALOGUE_DIR = HERE / "catalogue"
@@ -88,31 +88,13 @@ class FakeRegulator:
     def entry_sheet(self, code: str) -> EntrySheet | None:
         return None
 
-    def effects(self, procedure: ProcedureFacts) -> list[Effect]:
-        """An added meter becomes active and a removed one ended, on the
-        effective date; a changed key becomes active."""
-        if procedure.id_sharing_operation is None:
-            return []
-        on = procedure.effective_date
-        statuses = {
-            "meter_added": (ChangeSubjectType.METER, RegulatoryStatus.ACTIVE),
-            "meter_removed": (ChangeSubjectType.METER, RegulatoryStatus.ENDED),
-            "key_changed": (ChangeSubjectType.KEY, RegulatoryStatus.ACTIVE),
-        }
-        effects: list[Effect] = []
-        for change in procedure.changes:
-            if change.kind not in statuses:
-                continue
-            subject_type, status = statuses[change.kind]
-            ended = status == RegulatoryStatus.ENDED
-            effects.append(
-                Effect(
-                    subject_type=subject_type,
-                    subject_ref=change.subject_ref,
-                    id_sharing_operation=procedure.id_sharing_operation,
-                    regulatory_status=status,
-                    valid_from=None if ended else on,
-                    valid_to=on if ended else None,
-                )
-            )
-        return effects
+    def episode_status(self, definition: ProcedureDefinition, step: str) -> RegulatoryStatus | None:
+        """``sent`` and ``missing_info`` wait for the first party, ``reviewed``
+        for the second; ``accepted`` and ``signed`` are authorised."""
+        return {
+            "sent": RegulatoryStatus.PENDING_GRD,
+            "missing_info": RegulatoryStatus.PENDING_GRD,
+            "reviewed": RegulatoryStatus.PENDING_REGULATOR,
+            "accepted": RegulatoryStatus.AUTHORIZED,
+            "signed": RegulatoryStatus.AUTHORIZED,
+        }.get(step)
