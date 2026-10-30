@@ -243,6 +243,13 @@ async def _attach(
         data_snapshot_json=render.data_snapshot_json,
         generated_by=render.requested_by or "system",
         docgen_request_id=render.docgen_request_id,
+        stage=render.stage,
+        watermark=render.watermark,
+        prefill_json=render.prefill_json,
+        # What docgen says produced the bytes: with the snapshot and the pinned
+        # template, everything a later regeneration needs to compare against.
+        template_version=body.get("template_version"),
+        renderer_json=body.get("renderer"),
     )
     local.add(version)
     await local.flush()

@@ -127,6 +127,16 @@ bundles through `document-generation`. Read `README.md` for the domain.
 - **A version is evidence.** `document_version` and `correspondence` are
   append-only; `file_ref` is content-addressed. There is no update path; never
   add one.
+- **A sent piece is final** (migration 0005, `tests/test_db_final_pieces.py`).
+  Once its procedure is frozen, a piece takes no new version (a RECEIVED piece
+  excepted), is never deleted (nor is its procedure: `trg_dossier_sent_guard`,
+  since a cascade reaches the piece after the procedure row is gone), and
+  changes nothing but its journaled status. A version's `stage` (draft, final,
+  to sign) and `watermark` agree by CHECK. A template a version or a render in
+  flight used keeps its bundle (file_ref, version, region, doc_type, format,
+  scope) and is never deleted; `valid_to` and `label` stay editable. The
+  released bundle bytes are pinned by `tests/test_released_bundles.py`: a
+  revised form is a new `v<n>` folder plus a new row, and the lock gains it.
 - **A CHECK that evaluates to NULL passes.** `kind IN (1, 2)` on a NULL kind
   lets the row through. The multi-branch CHECKs are wrapped in
   `COALESCE(…, FALSE)`; keep doing that.

@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.context_vars import current_internal_community_id
 from core.database.with_community import with_community_scope
 from core.errors.errors import ErrorException
-from shared.const import RenderState
+from shared.const import RenderPurpose, RenderState, VersionStage
 from shared.custom_errors import errors
 from shared.models.local_models import (
     DocumentModel,
@@ -160,6 +160,11 @@ class AdministrativeDocumentRepository:
         data_snapshot: dict[str, Any],
         requested_by: str | None,
         stale_after_seconds: int,
+        stage: VersionStage = VersionStage.FINAL,
+        watermark: str | None = None,
+        prefill: dict[str, Any] | None = None,
+        purpose: RenderPurpose = RenderPurpose.RENDER,
+        id_document_version: int | None = None,
     ) -> bool:
         """Take the single in-flight render slot for a document.
 
@@ -183,6 +188,11 @@ class AdministrativeDocumentRepository:
             "data_snapshot_json": data_snapshot,
             "requested_by": requested_by,
             "requested_at": now,
+            "purpose": int(purpose),
+            "stage": int(stage),
+            "watermark": watermark,
+            "prefill_json": prefill,
+            "id_document_version": id_document_version,
         }
         stmt = (
             pg_insert(DocumentRenderModel)

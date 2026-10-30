@@ -216,8 +216,9 @@ class TestTheDraftFollowsItsChanges:
         form = (await pieces(world, first.dossiers[0]))[0]
         version = await db_session.execute(
             text(
-                "INSERT INTO document_version (id_community, id_document, version_no, file_ref) "
-                "VALUES (:c, :d, 1, 'x/1') RETURNING id"
+                "INSERT INTO document_version "
+                "(id_community, id_document, version_no, file_ref, stage) "
+                "VALUES (:c, :d, 1, 'x/1', 2) RETURNING id"
             ),
             {"c": world.id_community, "d": form.id},
         )

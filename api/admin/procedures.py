@@ -74,6 +74,7 @@ from shared.const import (
     ProcedureDocumentStatus,
     ProcedureStatus,
     SubjectType,
+    VersionStage,
 )
 from shared.custom_errors import errors
 from shared.models.local_models import (
@@ -740,6 +741,9 @@ class ProcedureService:
             byte_size=len(content),
             original_filename=file.filename,
             generated_by=actor,
+            # A file a person supplies is what they mean to send: there is no
+            # such thing as an uploaded draft.
+            stage=int(VersionStage.FINAL),
         )
         self._local.add(version)
         await self._local.flush()

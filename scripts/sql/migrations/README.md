@@ -27,6 +27,7 @@ Migrations are applied manually; they are never run automatically at boot.
 | 2 | `seeds/0001`–`0003` (0003 inserts the row) | CWaPE deadline rules + template catalogue |
 | 3 | `0003_procedures_engine.sql` | procedures engine; July dossiers converted |
 | 4 | `0004_july_lifecycle_removed.sql` | every dossier a procedure: NOT NULLs, strict CHECKs |
+| 5 | `0005_generation_finals.sql` | draft and final versions, pinned templates, a sent piece final in the DB |
 
 `seeds/0001` (the July deadline rules) left this repository with the July code;
 the migrator's released 002 still carries it, so on a fresh install 0003 and
@@ -42,4 +43,4 @@ written to be a no-op for the schema on top of a fresh install.
 (`tests/sql/schema_before_0003.sql`, never edited), so a migration is tested on
 the shape it actually upgrades; `tests/test_migration_0004.py` applies 0004 on
 both paths (upgraded, and fresh install + 0003) and compares the result with
-what `schema.sql` declares. Do the same for the next one.
+what `schema.sql` declares; `tests/test_migration_0005.py` does the same for 0005. Do the same for the next one.

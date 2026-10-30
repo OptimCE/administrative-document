@@ -338,6 +338,11 @@ class DocumentModel(_TimestampMixin, LocalBase):
     condition_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # Cross-DB reference to the participant who supplies or signs the piece.
     id_member: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The template the piece renders with, pinned at birth (or first render):
+    # the procedure keeps its creation's form version unless a render upgrades.
+    id_template: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("document_template.id"), nullable=True
+    )
 
 
 class DocumentVersionModel(LocalBase):
@@ -376,6 +381,13 @@ class DocumentVersionModel(LocalBase):
     # lets the result handler distinguish an already-handled redelivery from a
     # stale result rather than guessing.
     docgen_request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stage: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # VersionStage
+    # The stamp docgen applied; drafts only (a CHECK ties it to the stage).
+    watermark: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # The CRM's pre-fill before the reviewer's edits (see schema.sql).
+    prefill_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    template_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    renderer_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, default=_utcnow
     )
@@ -418,6 +430,47 @@ class DocumentRenderModel(_TimestampMixin, LocalBase):
     data_snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     requested_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, default=_utcnow
+    )
+    purpose: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # RenderPurpose
+    stage: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # VersionStage
+    watermark: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    prefill_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # The version a VERIFY render regenerates; NULL for a RENDER.
+    id_document_version: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("document_version.id"), nullable=True
+    )
+
+
+class VersionCheckModel(LocalBase):
+    """One regeneration of a version from its own snapshot. APPEND-ONLY.
+
+    ``outcome`` (CheckOutcome) says whether docgen produced the same bytes; a
+    different sha256 comes with the renderer that produced it, which is what
+    tells a reproducibility bug from an upgraded library.
+    """
+
+    __tablename__ = "version_check"
+    __table_args__ = (
+        UniqueConstraint("docgen_request_id", name="uq_version_check_request"),
+        Index("ix_version_check_version", "id_community", "id_document_version", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id_community: Mapped[int] = mapped_column(Integer, nullable=False)
+    id_document_version: Mapped[int] = mapped_column(
+        Integer, ForeignKey("document_version.id"), nullable=False
+    )
+    docgen_request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    outcome: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # CheckOutcome
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    renderer_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    error_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    requested_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    checked_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, default=_utcnow
     )
 

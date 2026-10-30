@@ -53,13 +53,13 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Only version 1 is self-inserted, although this file also embodies version 3
--- (migrations/0003_procedures_engine.sql). Version 2 is reference DATA (the
--- seeds), not schema, so a database created from this file has not received
--- it yet: self-inserting 3 would make optimce-migrator see MAX(version) = 3 and
--- skip 2, leaving a fresh install with no template catalogue. 0003 is
--- idempotent against this file, so applying it on top of a fresh install is a
--- no-op for the schema.
+-- Only version 1 is self-inserted, although this file also embodies versions 3
+-- to 5 (migrations/0003_procedures_engine.sql onwards). Version 2 is reference
+-- DATA (the seeds), not schema, so a database created from this file has not
+-- received it yet: self-inserting 3 would make optimce-migrator see
+-- MAX(version) = 3 and skip 2, leaving a fresh install with no template
+-- catalogue. The migrations are idempotent against this file, so applying them
+-- on top of a fresh install is a no-op for the schema.
 INSERT INTO schema_version (version, description) VALUES
     (1, 'Administrative-document initial schema')
 ON CONFLICT DO NOTHING;
@@ -109,6 +109,40 @@ CREATE INDEX IF NOT EXISTS ix_document_template_lookup
 DROP TRIGGER IF EXISTS trg_document_template_updated_at ON document_template;
 CREATE TRIGGER trg_document_template_updated_at BEFORE UPDATE ON document_template
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- A template a render has used is part of that render's evidence: regenerating a
+-- version from its snapshot must reach the same bundle. So once a version (or a
+-- render in flight) points at a row, what selects the bundle is frozen and the
+-- row cannot be deleted. Its validity window and label stay editable: closing a
+-- template (valid_to) when a revision arrives is how a new one comes into force.
+-- A revised form is a new row with the next version, never an edit of this one.
+CREATE OR REPLACE FUNCTION forbid_used_template_rewrite()
+RETURNS trigger AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM document_version WHERE id_template = OLD.id)
+       AND NOT EXISTS (SELECT 1 FROM document_render WHERE id_template = OLD.id) THEN
+        RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+    END IF;
+    IF TG_OP = 'DELETE'
+       OR NEW.file_ref IS DISTINCT FROM OLD.file_ref
+       OR NEW.version <> OLD.version
+       OR NEW.region <> OLD.region
+       OR NEW.doc_type <> OLD.doc_type
+       OR NEW.output_format <> OLD.output_format
+       OR NEW.id_community IS DISTINCT FROM OLD.id_community THEN
+        RAISE EXCEPTION
+            'document_template %: a render used it, so its bundle cannot change (% refused); register the next version instead',
+            OLD.id, TG_OP
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_document_template_in_use ON document_template;
+CREATE TRIGGER trg_document_template_in_use
+    BEFORE UPDATE OR DELETE ON document_template
+    FOR EACH ROW EXECUTE FUNCTION forbid_used_template_rewrite();
 
 -- ---- procedure_definition --------------------------------------------------
 -- One versioned entry of a regulator's catalogue (a "type de démarche"). The
@@ -336,6 +370,10 @@ CREATE TABLE IF NOT EXISTS document (
     requirement_code   VARCHAR(64)  NOT NULL,   -- plugin piece code
     condition_json     JSONB,                   -- why a conditional piece is required
     id_member          INTEGER,                 -- cross-DB ref: who supplies or signs it
+    -- The template this piece renders with, pinned when the piece is born (or
+    -- at its first render, when none was registered then): a procedure keeps
+    -- the form version of its creation unless a render explicitly upgrades it.
+    id_template        INTEGER      REFERENCES document_template (id),
     created_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     CONSTRAINT ck_document_kind CHECK (kind IN (1, 2, 3))
@@ -371,9 +409,27 @@ CREATE TABLE IF NOT EXISTS document_version (
     -- lets the result handler tell "already handled" from "stale/superseded"
     -- instead of guessing.
     docgen_request_id  VARCHAR(64),             -- NULL when uploaded
+    -- VersionStage: 1=draft (watermarked), 2=final (sent as is), 3=to sign
+    -- (a pre-filled collected piece). An upload is always final.
+    stage              SMALLINT     NOT NULL,
+    watermark          VARCHAR(40),             -- the text docgen stamped; drafts only
+    -- What the CRM pre-filled, before the reviewer's edits: the difference with
+    -- data_snapshot_json is the reviewer's own input, which a one-click
+    -- regeneration carries onto a fresh pre-fill.
+    prefill_json       JSONB,
+    -- What produced the bytes, as docgen reported it: the bundle's manifest
+    -- version and the renderer (libraries, zlib). With the snapshot and the
+    -- pinned template they are everything a regeneration needs to compare.
+    template_version   VARCHAR(64),
+    renderer_json      JSONB,
     created_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     immutable_from     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_document_version_no UNIQUE (id_document, version_no)
+    CONSTRAINT uq_document_version_no UNIQUE (id_document, version_no),
+    CONSTRAINT ck_document_version_stage CHECK (COALESCE(
+        (stage = 1 AND watermark IS NOT NULL AND docgen_request_id IS NOT NULL)
+        OR (stage = 2 AND watermark IS NULL)
+        OR (stage = 3 AND watermark IS NULL AND docgen_request_id IS NOT NULL),
+        FALSE))
 );
 
 -- CREATE TABLE IF NOT EXISTS is a no-op on an existing table, so a column added
@@ -402,6 +458,87 @@ CREATE TRIGGER trg_document_version_immutable
 ALTER TABLE document DROP CONSTRAINT IF EXISTS fk_document_current_version;
 ALTER TABLE document ADD CONSTRAINT fk_document_current_version
     FOREIGN KEY (current_version_id) REFERENCES document_version (id);
+
+-- ---- a sent piece is final -------------------------------------------------
+-- Once its procedure is frozen (sent), a piece is what was sent: it takes no
+-- new version, it cannot be deleted, and nothing about it changes but its
+-- status (which the journal writes, e.g. a piece the GRD rejects). A RECEIVED
+-- piece is the exception for versions: the recipient's answer arrives after
+-- the sending, by definition. The service refuses all of this first; these
+-- triggers make it true for any client.
+CREATE OR REPLACE FUNCTION forbid_version_after_freeze()
+RETURNS trigger AS $$
+DECLARE
+    v_kind   SMALLINT;
+    v_frozen TIMESTAMPTZ;
+BEGIN
+    SELECT d.kind, p.frozen_at INTO v_kind, v_frozen
+      FROM document d JOIN dossier p ON p.id = d.id_dossier
+     WHERE d.id = NEW.id_document;
+    IF v_frozen IS NOT NULL AND v_kind IS DISTINCT FROM 3 THEN
+        RAISE EXCEPTION
+            'document %: its procedure was sent at %, so it takes no new version',
+            NEW.id_document, v_frozen
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_document_version_after_freeze ON document_version;
+CREATE TRIGGER trg_document_version_after_freeze
+    BEFORE INSERT ON document_version
+    FOR EACH ROW EXECUTE FUNCTION forbid_version_after_freeze();
+
+CREATE OR REPLACE FUNCTION forbid_sent_piece_rewrite()
+RETURNS trigger AS $$
+DECLARE
+    v_frozen TIMESTAMPTZ;
+BEGIN
+    SELECT frozen_at INTO v_frozen FROM dossier WHERE id = OLD.id_dossier;
+    IF v_frozen IS NOT NULL THEN
+        IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'document %: its procedure was sent at %, so it cannot be deleted',
+                OLD.id, v_frozen
+                USING ERRCODE = 'integrity_constraint_violation';
+        END IF;
+        IF OLD.kind <> 3
+           AND (to_jsonb(NEW) - 'status' - 'updated_at')
+               IS DISTINCT FROM (to_jsonb(OLD) - 'status' - 'updated_at') THEN
+            RAISE EXCEPTION
+                'document %: its procedure was sent at %, so only its status can change',
+                OLD.id, v_frozen
+                USING ERRCODE = 'integrity_constraint_violation';
+        END IF;
+    END IF;
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_document_sent_guard ON document;
+CREATE TRIGGER trg_document_sent_guard
+    BEFORE UPDATE OR DELETE ON document
+    FOR EACH ROW EXECUTE FUNCTION forbid_sent_piece_rewrite();
+
+-- The procedure itself, too: its pieces cascade from it, and by the time a
+-- cascaded delete reaches a piece the procedure row (and with it frozen_at) is
+-- already gone, so the piece guard alone would let a sent procedure go.
+CREATE OR REPLACE FUNCTION forbid_sent_procedure_delete()
+RETURNS trigger AS $$
+BEGIN
+    IF OLD.frozen_at IS NOT NULL THEN
+        RAISE EXCEPTION 'dossier %: it was sent at %, so it cannot be deleted',
+            OLD.id, OLD.frozen_at
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_dossier_sent_guard ON dossier;
+CREATE TRIGGER trg_dossier_sent_guard
+    BEFORE DELETE ON dossier
+    FOR EACH ROW EXECUTE FUNCTION forbid_sent_procedure_delete();
 
 -- ---- document_render -------------------------------------------------------
 -- The IN-FLIGHT state of a generation (Phase 2). A row exists only while a
@@ -433,8 +570,22 @@ CREATE TABLE IF NOT EXISTS document_render (
     data_snapshot_json JSONB        NOT NULL,   -- exactly what was sent to render
     requested_by       VARCHAR(255),            -- x-user-id
     requested_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    -- RenderPurpose: 1=render (a new version lands), 2=verify (regenerate
+    -- id_document_version from its own snapshot and compare; no version).
+    purpose            SMALLINT     NOT NULL,
+    stage              SMALLINT     NOT NULL,   -- VersionStage of what is rendered
+    watermark          VARCHAR(40),             -- the stamp asked of docgen; drafts only
+    prefill_json       JSONB,                   -- carried onto the version (see there)
+    id_document_version INTEGER     REFERENCES document_version (id),  -- verify only
     created_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    updated_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_document_render_purpose CHECK (COALESCE(
+        (purpose = 1 AND id_document_version IS NULL)
+        OR (purpose = 2 AND id_document_version IS NOT NULL),
+        FALSE)),
+    CONSTRAINT ck_document_render_stage CHECK (COALESCE(
+        (stage = 1 AND watermark IS NOT NULL) OR (stage IN (2, 3) AND watermark IS NULL),
+        FALSE))
 );
 
 -- The ONLY index here not led by id_community, and deliberately so: the docgen
@@ -448,6 +599,38 @@ DROP TRIGGER IF EXISTS trg_document_render_updated_at ON document_render;
 CREATE TRIGGER trg_document_render_updated_at
     BEFORE UPDATE ON document_render
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ---- version_check ---------------------------------------------------------
+-- APPEND-ONLY. One row per regeneration of a version from its own snapshot,
+-- pinned template and watermark: did docgen produce the same bytes? A
+-- different sha256 is recorded with the renderer that produced it, so "the
+-- render is not reproducible" can be told from "the renderer was upgraded".
+CREATE TABLE IF NOT EXISTS version_check (
+    id                  SERIAL       PRIMARY KEY,
+    id_community        INTEGER      NOT NULL,
+    id_document_version INTEGER      NOT NULL REFERENCES document_version (id),
+    docgen_request_id   VARCHAR(64)  NOT NULL,
+    outcome             SMALLINT     NOT NULL,  -- CheckOutcome: 1=identical, 2=different, 3=failed
+    content_sha256      VARCHAR(64),            -- what the regeneration produced
+    renderer_json       JSONB,                  -- the renderer that produced it
+    error_json          JSONB,                  -- {code, message} when it failed
+    requested_by        VARCHAR(255),
+    requested_at        TIMESTAMPTZ  NOT NULL,
+    checked_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_version_check_request UNIQUE (docgen_request_id),
+    CONSTRAINT ck_version_check_outcome CHECK (COALESCE(
+        (outcome IN (1, 2) AND content_sha256 IS NOT NULL)
+        OR (outcome = 3 AND error_json IS NOT NULL),
+        FALSE))
+);
+
+CREATE INDEX IF NOT EXISTS ix_version_check_version
+    ON version_check (id_community, id_document_version, id DESC);
+
+DROP TRIGGER IF EXISTS trg_version_check_immutable ON version_check;
+CREATE TRIGGER trg_version_check_immutable
+    BEFORE UPDATE OR DELETE ON version_check
+    FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
 
 -- ---- status_event ----------------------------------------------------------
 -- THE JOURNAL (spec R1). Append-only and the source of truth for status.

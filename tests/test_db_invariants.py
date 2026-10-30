@@ -234,8 +234,8 @@ class TestVersionsAreAppendOnly:
         result = await session.execute(
             text(
                 "INSERT INTO document_version "
-                "(id_community, id_document, version_no, file_ref) "
-                "VALUES (1, :id_document, 1, 's3://bucket/key') RETURNING id"
+                "(id_community, id_document, version_no, file_ref, stage) "
+                "VALUES (1, :id_document, 1, 's3://bucket/key', 2) RETURNING id"
             ),
             {"id_document": document_id},
         )
@@ -271,8 +271,8 @@ class TestVersionsAreAppendOnly:
             await db_session.execute(
                 text(
                     "INSERT INTO document_version "
-                    "(id_community, id_document, version_no, file_ref) "
-                    "VALUES (1, :id_document, 1, 's3://bucket/dup')"
+                    "(id_community, id_document, version_no, file_ref, stage) "
+                    "VALUES (1, :id_document, 1, 's3://bucket/dup', 2)"
                 ),
                 {"id_document": document_id},
             )
@@ -311,8 +311,8 @@ class TestRenderStateIsSeparateFromTheJournal:
             text(
                 "INSERT INTO document_render "
                 "(id_community, id_document, docgen_request_id, render_state, "
-                " id_template, data_snapshot_json) "
-                "VALUES (1, :doc, :rid, 1, :tpl, '{}'::jsonb) RETURNING id"
+                " id_template, data_snapshot_json, purpose, stage) "
+                "VALUES (1, :doc, :rid, 1, :tpl, '{}'::jsonb, 1, 2) RETURNING id"
             ),
             {"doc": document_id, "rid": request_id, "tpl": await self._template_id(session)},
         )

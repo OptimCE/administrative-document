@@ -45,8 +45,9 @@ async def freeze_version(db_session, *, document_id: int, id_community: int, sna
                     """
                     INSERT INTO document_version
                         (id_community, id_document, version_no, file_ref, data_snapshot_json,
-                         generated_by)
-                    VALUES (:cid, :doc, 1, 's3://bucket/key', CAST(:snap AS jsonb), 'auth-manager')
+                         generated_by, stage)
+                    VALUES (:cid, :doc, 1, 's3://bucket/key', CAST(:snap AS jsonb),
+                            'auth-manager', 2)
                     RETURNING id
                     """
                 ),
@@ -221,8 +222,8 @@ class TestReachability:
                     text(
                         """
                         INSERT INTO document_version
-                            (id_community, id_document, version_no, file_ref)
-                        VALUES (:cid, :doc, 1, 's3://bucket/uploaded') RETURNING id
+                            (id_community, id_document, version_no, file_ref, stage)
+                        VALUES (:cid, :doc, 1, 's3://bucket/uploaded', 2) RETURNING id
                         """
                     ),
                     {"cid": community.id, "doc": document_id},

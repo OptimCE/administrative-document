@@ -43,6 +43,33 @@ class RenderState(IntEnum):
     FAILED = 2
 
 
+class RenderPurpose(IntEnum):
+    """Why a render occupies a piece's ``document_render`` slot."""
+
+    RENDER = 1  # produce a new version
+    VERIFY = 2  # regenerate an existing version and compare its sha256; no version
+
+
+class VersionStage(IntEnum):
+    """What a ``document_version`` is for, held in ``document_version.stage``.
+
+    A DB CHECK keeps it consistent with the watermark: a draft carries one, the
+    other two never do.
+    """
+
+    DRAFT = 1  # a working render, stamped with the plugin's watermark
+    FINAL = 2  # what is sent: an unstamped render of a reviewed snapshot, or an upload
+    TO_SIGN = 3  # a pre-filled collected piece; its signed upload is the FINAL
+
+
+class CheckOutcome(IntEnum):
+    """What regenerating a version from its snapshot gave, in ``version_check``."""
+
+    IDENTICAL = 1  # same sha256
+    DIFFERENT = 2  # another sha256: renderer_json says whether the renderer changed
+    FAILED = 3  # the render itself failed
+
+
 class SubjectType(IntEnum):
     """What a ``status_event`` row is about."""
 

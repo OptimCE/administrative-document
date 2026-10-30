@@ -1,0 +1,46 @@
+{
+  "annex6_notification/v1": {
+    "manifest.json": "21cb0b853b4cb37ca8174d562eac8020389c3b6b7bd8e26bc54c1c2244ebb849",
+    "template.xlsx": "60b5608ba8e9fbb0a8e414e0d58e3faf7a32ce827eb572cf1b2033a7038f1113"
+  },
+  "annex6_sharing_form/v1": {
+    "manifest.json": "2c709fb7322138e2fcd71f93d02c5b4c0d6a7602a4638812d44dcc3e67a2565b",
+    "template.xlsx": "d1a02dbb3e4944173b9ad6d2f273f7da966222b2d8794d6497594a74b850769e"
+  },
+  "annex7_legal_entity/v1": {
+    "manifest.json": "c33f485b87120d003271c6b4750c24e15f2d9903de9485a99b4f7889e67a603c",
+    "template.pdf": "d1ffb63e47da60125b6e8bde09277e1ae95ac6ca2c3f50582f3a5d5b18b76d41"
+  },
+  "annex8_sworn_declaration/v1": {
+    "manifest.json": "3438029388115b49f35405c53aed9e26fb94ee2557290f637a952e72447f289f",
+    "template.pdf": "e56921ff76cb0e6f161bce4c6b5c2858c338dac47dbfe1d74a749492894efe6e"
+  },
+  "annual_participant_list/v1": {
+    "manifest.json": "bd420cd9b86a390a7add944d68e75fbc09772e643fb3e0ee856ba56fe984e79a",
+    "template.xlsx": "b31de01b38fc606e1d8881e3861355d54937fa778dbcda56eeacd4433574f685"
+  },
+  "community_modification/v1": {
+    "manifest.json": "c96a507f760f93f89a73a271f72d4a26c25db891687c73636d2000972f16b810",
+    "template.pdf": "fb3d503a90f3a9669f9113901f6626f3654f2cf035fe9f76fc91ef29b4e7f60f"
+  },
+  "community_notification/v1": {
+    "manifest.json": "48b2a50fa61eee36b938981e2043efd721def1174ddc74adb64641b774874466",
+    "template.pdf": "7b26561b462c7c24991e7f4825d85447ebe170482e30abb09c545862217cf1b1"
+  },
+  "dso_agreement_building/v1": {
+    "manifest.json": "38a8bd18986fe021db7847f44f13543188f10c110c00f1b7849c56f0365cfef4",
+    "template.docx": "fe89acec18b0a81f9aeda19b12b402c046ec0a192e56a762d3a0942686e81d68"
+  },
+  "dso_agreement_community/v1": {
+    "manifest.json": "697e5b01da00a2af18927c85683096b5702ed13edbd9b1813f9418c8657e0d7a",
+    "template.docx": "b803bc5d01de76499b3aa95ce13c015b5778af1d9b0d0b2caf5d39213c6e6fcd"
+  },
+  "sharing_modification/v1": {
+    "manifest.json": "7e28675b2f4790170347b15ae919fd03a0086384fa9321ba81e083461a30ff34",
+    "template.pdf": "1fbe424acceffa721744a4ec0447bfec4d3b4845eeaa6b5a62d63e6f4195e07f"
+  },
+  "sharing_notification/v1": {
+    "manifest.json": "71005a1545e3a22b90c9aec3bec57fae6c330f498033777634dad83f9ba85f16",
+    "template.pdf": "d9aee9740d7271653bdc0d837e8a68ff5df2abc00e52393b3bbac04bf33ef3d2"
+  }
+}
