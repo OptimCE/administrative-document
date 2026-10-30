@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -190,6 +190,36 @@ class ChangeOut(BaseModel):
     excluded_reason: str | None = None
 
 
+class PieceVersionOut(BaseModel):
+    """A piece's current version: what is downloaded, and what would be sent."""
+
+    id: int
+    version_no: int
+    stage: int = Field(description="VersionStage: 1 draft (stamped), 2 final, 3 to sign")
+    created_at: datetime.datetime
+    content_sha256: str | None = None
+    original_filename: str | None = None
+    generated: bool = Field(description="Rendered by OptimCE (so it can be verified)")
+
+
+class PieceRenderOut(BaseModel):
+    """A render of the piece in flight, or failed (the slot it holds)."""
+
+    state: int = Field(description="RenderState: 1 pending, 2 failed")
+    purpose: int = Field(description="RenderPurpose: 1 render, 2 verify")
+    stage: int = Field(description="VersionStage it renders")
+    requested_at: datetime.datetime
+    error: dict | None = None
+
+
+class PieceCheckOut(BaseModel):
+    """The last regeneration of the current version from its snapshot."""
+
+    outcome: int = Field(description="CheckOutcome: 1 identical, 2 different, 3 failed")
+    checked_at: datetime.datetime
+    content_sha256: str | None = None
+
+
 class PieceOut(BaseModel):
     id: int
     code: str
@@ -200,10 +230,22 @@ class PieceOut(BaseModel):
     required: bool
     status: int = Field(description="ProcedureDocumentStatus")
     id_member: int | None = None
+    member_name: str | None = Field(default=None, description="Who a per-member piece is for")
     condition: dict | None = None
     current_version_id: int | None = None
     versions: int = 0
-    template: str | None = None
+    template: str | None = Field(
+        default=None,
+        description="The registered template the piece renders with (pinned, or in "
+        "force); None when nothing can render it",
+    )
+    template_version: int | None = None
+    template_superseded: bool = Field(
+        default=False, description="A newer version of the form is in force"
+    )
+    current_version: PieceVersionOut | None = None
+    render: PieceRenderOut | None = None
+    last_check: PieceCheckOut | None = None
 
 
 class ThreadEntryOut(BaseModel):
@@ -251,6 +293,32 @@ class ProcedureDetailOut(ProcedureItemOut):
     deadlines: list[DeadlineItemOut]
     thread: list[ThreadEntryOut]
     send_preview: SendPreviewOut
+    finals_ready: bool = Field(
+        description="Every supplied piece is final and nothing renders: it can be sent"
+    )
+    has_entry_sheet: bool = Field(description="A piece has a fiche de saisie (GET .../entry-sheet)")
+
+
+class EntryFieldOut(BaseModel):
+    key: str
+    labels: Labels
+    value: Any = None
+
+
+class EntrySectionOut(BaseModel):
+    labels: Labels
+    fields: list[EntryFieldOut]
+
+
+class EntrySheetOut(BaseModel):
+    """A form piece's values in the order of the regulator's form, from its
+    current version (what was reviewed; once sent, what was filed)."""
+
+    piece_id: int
+    code: str
+    labels: Labels
+    version: PieceVersionOut | None = None
+    sections: list[EntrySectionOut]
 
 
 class ProcedureDefinitionOut(BaseModel):

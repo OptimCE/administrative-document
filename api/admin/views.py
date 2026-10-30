@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from engine.calendar import CalendarNotCoveredError, WorkingCalendar
@@ -20,14 +21,19 @@ from shared.const import (
     DocumentKind,
     ProcedureDocumentStatus,
     ProcedureStatus,
+    VersionStage,
 )
 from shared.models.local_models import (
     ChangeModel,
     CorrespondenceModel,
     DeadlineModel,
     DocumentModel,
+    DocumentRenderModel,
+    DocumentTemplateModel,
+    DocumentVersionModel,
     DossierModel,
     StatusEventModel,
+    VersionCheckModel,
 )
 
 # A procedure in one of these is finished; it stays on the dashboard, under
@@ -42,6 +48,89 @@ RECENT_DAYS = 30
 BUCKETS = ("todo", "waiting", "planned", "done")
 
 _PIECE_THERE = (int(ProcedureDocumentStatus.READY), int(ProcedureDocumentStatus.SIGNED))
+
+
+@dataclass
+class PieceFacts:
+    """What a procedure's pieces stand on, beyond their own rows: the current
+    versions, the renders holding a slot, the last check of each current
+    version, the template each renders with (and whether a newer one is in
+    force), and who a per-member piece is for."""
+
+    current: dict[int, DocumentVersionModel] = field(default_factory=dict)  # by piece
+    renders: dict[int, DocumentRenderModel] = field(default_factory=dict)  # by piece
+    checks: dict[int, VersionCheckModel] = field(default_factory=dict)  # by version
+    templates: dict[int, tuple[DocumentTemplateModel, bool]] = field(default_factory=dict)
+    member_names: dict[int, str] = field(default_factory=dict)
+
+    def finals_ready(self, pieces: Sequence[DocumentModel]) -> bool:
+        """What sending asks: every supplied piece final, nothing rendering."""
+        if self.renders:
+            return False
+        return all(
+            self.current[p.id].stage == int(VersionStage.FINAL)
+            for p in pieces
+            if p.kind != int(DocumentKind.RECEIVED)
+            and p.status in _PIECE_THERE
+            and p.id in self.current
+        )
+
+
+def version_out(version: DocumentVersionModel) -> dict[str, Any]:
+    return {
+        "id": version.id,
+        "version_no": version.version_no,
+        "stage": version.stage,
+        "created_at": version.created_at,
+        "content_sha256": version.content_sha256,
+        "original_filename": version.original_filename,
+        "generated": version.docgen_request_id is not None,
+    }
+
+
+def piece_out(
+    piece: DocumentModel, definition: ProcedureDefinition, facts: PieceFacts, versions: int
+) -> dict[str, Any]:
+    docs = {d.code: d for d in definition.documents}
+    template, superseded = facts.templates.get(piece.id, (None, False))
+    current = facts.current.get(piece.id)
+    render = facts.renders.get(piece.id)
+    check = facts.checks.get(current.id) if current is not None else None
+    return {
+        "id": piece.id,
+        "code": piece.requirement_code or piece.doc_type,
+        "labels": docs[piece.requirement_code].labels if piece.requirement_code in docs else None,
+        "kind": piece.kind,
+        "required": piece.required,
+        "status": piece.status,
+        "id_member": piece.id_member,
+        "member_name": facts.member_names.get(piece.id_member) if piece.id_member else None,
+        "condition": piece.condition_json,
+        "current_version_id": piece.current_version_id,
+        "versions": versions,
+        # What can render it, from the registry: a form registered without a
+        # bundle renders nothing.
+        "template": template.doc_type if template is not None and template.file_ref else None,
+        "template_version": template.version if template is not None else None,
+        "template_superseded": superseded,
+        "current_version": version_out(current) if current is not None else None,
+        "render": {
+            "state": render.render_state,
+            "purpose": render.purpose,
+            "stage": render.stage,
+            "requested_at": render.requested_at,
+            "error": render.render_error_json,
+        }
+        if render is not None
+        else None,
+        "last_check": {
+            "outcome": check.outcome,
+            "checked_at": check.checked_at,
+            "content_sha256": check.content_sha256,
+        }
+        if check is not None
+        else None,
+    }
 
 
 def due_in(calendar: WorkingCalendar, today: datetime.date, due: datetime.date) -> int | None:
@@ -152,7 +241,10 @@ def detail(
     journal: Sequence[StatusEventModel],
     correspondence: Sequence[CorrespondenceModel],
     version_rows: Sequence[tuple[int, int, datetime.datetime, str | None]],
+    facts: PieceFacts | None = None,
+    has_entry_sheet: bool = False,
 ) -> dict[str, Any]:
+    facts = facts or PieceFacts()
     active = [c for c in changes if c.status == int(ChangeStatus.ATTACHED)]
     view = item(
         dossier,
@@ -165,7 +257,6 @@ def detail(
     )
     step = str(dossier.step)
     visited = {e.to_step for e in journal if e.to_step}
-    docs = {d.code: d for d in definition.documents}
 
     thread: list[dict[str, Any]] = []
     for event in journal:
@@ -265,24 +356,9 @@ def detail(
             }
             for c in changes
         ],
-        "pieces": [
-            {
-                "id": p.id,
-                "code": p.requirement_code or p.doc_type,
-                "labels": docs[p.requirement_code].labels if p.requirement_code in docs else None,
-                "kind": p.kind,
-                "required": p.required,
-                "status": p.status,
-                "id_member": p.id_member,
-                "condition": p.condition_json,
-                "current_version_id": p.current_version_id,
-                "versions": versions.get(p.id, 0),
-                "template": docs[p.requirement_code].template
-                if p.requirement_code in docs
-                else None,
-            }
-            for p in pieces
-        ],
+        "pieces": [piece_out(p, definition, facts, versions.get(p.id, 0)) for p in pieces],
+        "finals_ready": facts.finals_ready(pieces),
+        "has_entry_sheet": has_entry_sheet,
         "deadlines": [
             deadline_item(
                 d, dossier, definition, calendar, today=today, operation_names=operation_names

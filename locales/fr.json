@@ -52,7 +52,8 @@
       "FINALIZE_NOT_ALLOWED": "Les versions finales se génèrent quand toutes les pièces sont prêtes et avant l'envoi (code: 2386)",
       "VERSION_NOT_REGENERABLE": "Cette version n'a pas été générée par OptimCE : elle ne peut pas être régénérée (code: 2387)",
       "REVIEW_REQUIRED": "Cette pièce doit être relue avant d'être régénérée (code: 2388)",
-      "TEMPLATE_IN_USE": "Ce modèle a déjà servi à générer des pièces : enregistrez une nouvelle version plutôt que de le modifier (code: 2389)"
+      "TEMPLATE_IN_USE": "Ce modèle a déjà servi à générer des pièces : enregistrez une nouvelle version plutôt que de le modifier (code: 2389)",
+      "STORED_FILE_ALTERED": "Le fichier enregistré ne correspond plus à son empreinte : il n'est pas transmis (code: 2390)"
     }
   }
 }

@@ -38,6 +38,7 @@ from typing import Any
 from engine.calendar import CalendarData, load_calendar
 from engine.catalogue import Catalogue, DocumentSpec, ProcedureDefinition, load_catalogue
 from engine.contracts import ChangeFact, DocumentRequirement, Effect, ProcedureFacts
+from engine.entry_sheets import EntrySheet, load_entry_sheets
 
 CODE = "BE-WAL-CWAPE"
 HERE = Path(__file__).resolve().parent
@@ -115,6 +116,7 @@ class CwapePlugin:
     def __init__(self) -> None:
         self._catalogue = load_catalogue(HERE / "catalogue", regulator=CODE)
         self._calendar = load_calendar(HERE / "calendar" / "WAL.yaml")
+        self._sheets = load_entry_sheets(HERE / "entry_sheets")
 
     def catalogue(self) -> Catalogue:
         return self._catalogue
@@ -179,3 +181,8 @@ class CwapePlugin:
         """Phase 3: what a procedure in force writes to the core. Nothing yet;
         in phase 1 only the baseline confirmation writes effects."""
         return []
+
+    def entry_sheet(self, code: str) -> EntrySheet | None:
+        """The CWaPE takes its community forms as files a representative fills in
+        (or online): their fiche de saisie, in the forms' own order."""
+        return self._sheets.get(code)

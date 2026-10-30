@@ -99,6 +99,8 @@ class _AdminErrors:
     REVIEW_REQUIRED = Error(code=2388, key="ERRORS.ADMIN.REVIEW_REQUIRED")
     # trg_document_template_in_use: the bundle of a used template is evidence.
     TEMPLATE_IN_USE = Error(code=2389, key="ERRORS.ADMIN.TEMPLATE_IN_USE")
+    # The bytes behind a version no longer match its recorded sha256.
+    STORED_FILE_ALTERED = Error(code=2390, key="ERRORS.ADMIN.STORED_FILE_ALTERED")
 
 
 class _Errors:

@@ -23,6 +23,7 @@ from api.admin.schemas import (
     ChangeExcludeIn,
     CorrespondenceProposalOut,
     DeadlineItemOut,
+    EntrySheetOut,
     FinalizeOut,
     InboxOut,
     ProcedureCreateIn,
@@ -285,6 +286,34 @@ async def upload_piece(
     the procedure was sent, except for a piece that is received after it."""
     view = await service.upload_piece(_community(), dossier_id, document_id, file, actor=_actor())
     return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.get(
+    "/dossiers/{dossier_id}/entry-sheet", response_model=ApiResponse[list[EntrySheetOut]]
+)
+@with_default_error(errors.admin.GET_PROCEDURES)
+async def get_entry_sheets(dossier_id: int, service: ProceduresDep):
+    """The fiches de saisie of the procedure's form pieces: each value in the
+    order of the regulator's form, from the piece's current version. Empty
+    when no piece has one."""
+    sheets = await service.entry_sheets(_community(), dossier_id)
+    return ApiResponse(data=[EntrySheetOut.model_validate(s) for s in sheets])
+
+
+@admin_routes.get(
+    "/dossiers/{dossier_id}/finals.zip",
+    responses={200: {"content": {"application/zip": {}}}},
+)
+@with_default_error(errors.admin.STORAGE_DOWNLOAD_FAILED)
+async def download_finals(dossier_id: int, service: ProceduresDep):
+    """Every supplied piece's final in one archive, with ``SHA256SUMS.txt``.
+    409 while a piece is still a draft or rendering."""
+    name, content = await service.finals_zip(_community(), dossier_id)
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
 
 
 @admin_routes.post(

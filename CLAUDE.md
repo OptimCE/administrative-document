@@ -181,6 +181,22 @@ bundles through `document-generation`. Read `README.md` for the domain.
   the reviewer's own edits, i.e. what the current version's snapshot holds and
   its `prefill_json` did not (`domain/prefill.carry_over`). No `prefill_json`
   (an upload, an older render) answers `needs_review`.
+- **What the detail says of a piece**: its current version (stage, sha256,
+  generated or not), the render holding its slot (rebuilt from the server, so
+  it survives a reload), the last check of its current version, the template
+  it renders with from the REGISTRY (pinned or in force, `template_superseded`)
+  and a per-member piece's participant; the procedure says `finals_ready` and
+  `has_entry_sheet`.
+- **Fiche de saisie** (`GET /admin/dossiers/{id}/entry-sheet`): a plugin's
+  `entry_sheets/<piece>.yaml` (`engine/entry_sheets.py`, contract
+  `entry_sheet(code)`), filled from the piece's current version. CWaPE has the
+  two community forms; `tests/regulators/cwape/test_entry_sheets.py` keeps each
+  key one its bundle binds.
+- **Finals archive** (`GET /admin/dossiers/{id}/finals.zip`, binary, so KrakenD
+  no-op): every supplied piece's final, named `NN-<file>[-<member>]`, each
+  checked against its sha256 on the way out (2390 when the stored bytes
+  changed), plus `SHA256SUMS.txt`; a deterministic zip. 409 (2385) while a
+  piece is a draft or rendering.
 - **Verify** (`…/versions/{vid}/verify`, criterion 2.1): the render slot with
   `purpose=VERIFY` re-sends exactly what the version froze; the result lands in
   `version_check` (identical, different with the renderer, failed), never as a

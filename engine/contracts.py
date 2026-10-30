@@ -20,6 +20,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from engine.calendar import CalendarData
 from engine.catalogue import Catalogue, ProcedureDefinition
+from engine.entry_sheets import EntrySheet
 from shared.const import ChangeSubjectType, DocumentKind, RegulatoryStatus
 
 
@@ -95,6 +96,11 @@ class RegulatorPlugin(Protocol):
     ) -> dict[str, Any]: ...
 
     def effects(self, procedure: ProcedureFacts) -> list[Effect]: ...
+
+    def entry_sheet(self, code: str) -> EntrySheet | None:
+        """The entry sheet of the form piece ``code`` (its values in the order of
+        the regulator's form), or None when the piece has none."""
+        ...
 
 
 PluginRegistry = Mapping[str, RegulatorPlugin]

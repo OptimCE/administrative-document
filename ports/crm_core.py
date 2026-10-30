@@ -19,7 +19,7 @@ not the form.
 from __future__ import annotations
 
 import datetime
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -231,6 +231,11 @@ class CrmCoreReadPort(Protocol):
         """The operation's most recently approved key, with its iterations and
         consumers; None when it has none. The most recent, not the one in force
         today: a procedure notifies a key change before it takes effect."""
+        ...
+
+    async def member_names(self, id_community: int, ids: Sequence[int]) -> dict[int, str]:
+        """Display names of these members of the community (first name, then name;
+        a company's name alone). A member of another community is not named."""
         ...
 
     async def member_ids_for_user(self, *, id_community: int, auth_user_id: str) -> list[int]:

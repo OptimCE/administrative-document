@@ -52,7 +52,8 @@
       "FINALIZE_NOT_ALLOWED": "Definitieve versies worden gegenereerd zodra alle stukken gereed zijn en vóór het verzenden (code: 2386)",
       "VERSION_NOT_REGENERABLE": "Deze versie is niet door OptimCE gegenereerd en kan dus niet opnieuw worden gegenereerd (code: 2387)",
       "REVIEW_REQUIRED": "Dit stuk moet worden nagekeken voordat het opnieuw wordt gegenereerd (code: 2388)",
-      "TEMPLATE_IN_USE": "Dit sjabloon is al gebruikt om stukken te genereren: registreer een nieuwe versie in plaats van het te wijzigen (code: 2389)"
+      "TEMPLATE_IN_USE": "Dit sjabloon is al gebruikt om stukken te genereren: registreer een nieuwe versie in plaats van het te wijzigen (code: 2389)",
+      "STORED_FILE_ALTERED": "Het opgeslagen bestand komt niet meer overeen met zijn vingerafdruk en wordt niet vrijgegeven (code: 2390)"
     }
   }
 }

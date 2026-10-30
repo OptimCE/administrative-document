@@ -21,6 +21,7 @@ from typing import Any
 from engine.calendar import CalendarData, load_calendar
 from engine.catalogue import Catalogue, ProcedureDefinition, load_catalogue
 from engine.contracts import ChangeFact, DocumentRequirement, Effect, ProcedureFacts
+from engine.entry_sheets import EntrySheet
 from shared.const import ChangeSubjectType, RegulatoryStatus
 
 HERE = Path(__file__).resolve().parent
@@ -83,6 +84,9 @@ class FakeRegulator:
 
     def render_context(self, requirement_code: str, snapshot: Mapping[str, Any]) -> dict[str, Any]:
         return {"requirement": requirement_code, **snapshot}
+
+    def entry_sheet(self, code: str) -> EntrySheet | None:
+        return None
 
     def effects(self, procedure: ProcedureFacts) -> list[Effect]:
         """An added meter becomes active and a removed one ended, on the

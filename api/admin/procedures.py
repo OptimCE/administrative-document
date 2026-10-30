@@ -19,6 +19,10 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import io
+import re
+import unicodedata
+import zipfile
 from collections import defaultdict
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
@@ -61,6 +65,7 @@ from engine.lifecycle import (
     start_rules,
     supply_piece,
 )
+from engine.templates import template_in_force
 from ports.crm_core_sqlalchemy import SqlAlchemyCrmCoreRead
 from ports.crm_engine import EngineCrmRead
 from shared.const import (
@@ -85,10 +90,12 @@ from shared.models.local_models import (
     DeadlineModel,
     DocumentModel,
     DocumentRenderModel,
+    DocumentTemplateModel,
     DocumentVersionModel,
     DossierModel,
     ProcedureDefinitionModel,
     StatusEventModel,
+    VersionCheckModel,
 )
 
 if TYPE_CHECKING:  # the worker image has no starlette; this module is API-only anyway
@@ -99,6 +106,43 @@ _READ_CHUNK_BYTES = 1024 * 1024
 _RELEASES_DEFERRED = (int(ProcedureStatus.SENT), int(ProcedureStatus.CANCELLED))
 # A piece the community has supplied: what goes out with the sending.
 _SUPPLIED = (int(ProcedureDocumentStatus.READY), int(ProcedureDocumentStatus.SIGNED))
+
+
+# Fixed, not wall-clock: the same finals make the same archive.
+_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
+_ZIP_UNIX = 3
+
+
+def archive_name(position: int, filename: str, member: str | None) -> str:
+    """``03-annexe8-declaration-sur-lhonneur-alice-dupont.pdf``: the piece's
+    place in the procedure first, so the names sort as the pieces do and two
+    participants' declarations (same file name) do not collide."""
+    stem, dot, extension = filename.rpartition(".")
+    if not dot:
+        stem, extension = filename, ""
+    if member:
+        slug = re.sub(
+            r"[^a-z0-9]+",
+            "-",
+            unicodedata.normalize("NFKD", member).encode("ascii", "ignore").decode().lower(),
+        ).strip("-")
+        stem = f"{stem}-{slug}" if slug else stem
+    return f"{position:02d}-{stem}" + (f".{extension}" if extension else "")
+
+
+def deterministic_zip(files: Sequence[tuple[str, bytes, str]]) -> bytes:
+    """``(name, content, sha256)`` entries, then ``SHA256SUMS.txt``, with fixed
+    dates and system: the same finals always zip to the same bytes."""
+    buffer = io.BytesIO()
+    sums = "".join(f"{digest}  {name}\n" for name, _content, digest in files)
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, content in [*((n, c) for n, c, _ in files), ("SHA256SUMS.txt", sums.encode())]:
+            info = zipfile.ZipInfo(name, date_time=_ZIP_DATE)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = _ZIP_UNIX
+            info.external_attr = 0o644 << 16
+            archive.writestr(info, content)
+    return buffer.getvalue()
 
 
 def _not_found(error=errors.admin.PROCEDURE_NOT_FOUND) -> ErrorException:
@@ -509,7 +553,127 @@ class ProcedureService:
             journal=journal,
             correspondence=correspondence,
             version_rows=version_rows,
+            facts=await self._piece_facts(dossier, pieces),
+            has_entry_sheet=any(plugin.entry_sheet(p.requirement_code) for p in pieces),
         )
+
+    async def _piece_facts(
+        self, dossier: DossierModel, pieces: Sequence[DocumentModel]
+    ) -> views.PieceFacts:
+        facts = views.PieceFacts()
+        current_ids = [p.current_version_id for p in pieces if p.current_version_id is not None]
+        if current_ids:
+            by_id = {
+                v.id: v
+                for v in await self._local.scalars(
+                    select(DocumentVersionModel).where(DocumentVersionModel.id.in_(current_ids))
+                )
+            }
+            facts.current = {
+                p.id: by_id[p.current_version_id] for p in pieces if p.current_version_id in by_id
+            }
+            for check in await self._local.scalars(
+                select(VersionCheckModel)
+                .where(VersionCheckModel.id_document_version.in_(current_ids))
+                .order_by(VersionCheckModel.id)
+            ):
+                facts.checks[check.id_document_version] = check  # the last one wins
+        if pieces:
+            facts.renders = {
+                r.id_document: r
+                for r in await self._local.scalars(
+                    select(DocumentRenderModel).where(
+                        DocumentRenderModel.id_document.in_([p.id for p in pieces])
+                    )
+                )
+            }
+        for piece in pieces:
+            if piece.kind == int(DocumentKind.RECEIVED):
+                continue
+            in_force = await template_in_force(
+                self._local,
+                id_community=dossier.id_community,
+                region=dossier.region,
+                doc_type=piece.doc_type,
+            )
+            pinned = (
+                await self._local.get(DocumentTemplateModel, piece.id_template)
+                if piece.id_template is not None
+                else in_force
+            )
+            if pinned is not None:
+                superseded = in_force is not None and in_force.id != pinned.id
+                facts.templates[piece.id] = (pinned, superseded)
+        members = sorted({p.id_member for p in pieces if p.id_member is not None})
+        if members:
+            facts.member_names = await SqlAlchemyCrmCoreRead(self._crm).member_names(
+                dossier.id_community, members
+            )
+        return facts
+
+    async def entry_sheets(self, id_community: int, dossier_id: int) -> list[dict[str, Any]]:
+        """The fiches de saisie of the procedure's form pieces, filled from each
+        piece's current version: what was reviewed (and, once sent, filed)."""
+        dossier, plugin, _ctx = await self._load(id_community, dossier_id)
+        pieces = await pieces_of(self._local, dossier)
+        facts = await self._piece_facts(dossier, pieces)
+        sheets = []
+        for piece in pieces:
+            sheet = plugin.entry_sheet(piece.requirement_code)
+            if sheet is None:
+                continue
+            version = facts.current.get(piece.id)
+            sheets.append(
+                {
+                    "piece_id": piece.id,
+                    "code": piece.requirement_code,
+                    "labels": sheet.labels,
+                    "version": views.version_out(version) if version is not None else None,
+                    "sections": sheet.filled(
+                        version.data_snapshot_json if version is not None else None
+                    ),
+                }
+            )
+        return sheets
+
+    async def finals_zip(self, id_community: int, dossier_id: int) -> tuple[str, bytes]:
+        """Every supplied piece's final, in one archive to attach: the files as
+        stored (each checked against its sha256 on the way out), a
+        ``SHA256SUMS.txt`` beside them. Refused while one is still a draft."""
+        dossier, _plugin, _ctx = await self._load(id_community, dossier_id)
+        pieces = await pieces_of(self._local, dossier)
+        facts = await self._piece_facts(dossier, pieces)
+        if not facts.finals_ready(pieces):
+            raise _conflict(errors.admin.FINAL_VERSIONS_REQUIRED)
+        files: list[tuple[str, bytes, str]] = []
+        for position, piece in enumerate(pieces, start=1):
+            version = facts.current.get(piece.id)
+            if (
+                version is None
+                or piece.kind == int(DocumentKind.RECEIVED)
+                or piece.status not in _SUPPLIED
+            ):
+                continue
+            content = await self._stored(version)
+            name = archive_name(
+                position,
+                version.original_filename or f"{piece.requirement_code}-v{version.version_no}",
+                facts.member_names.get(piece.id_member) if piece.id_member else None,
+            )
+            files.append((name, content, hashlib.sha256(content).hexdigest()))
+        return f"OPT-{dossier.id}-pieces.zip", deterministic_zip(files)
+
+    async def _stored(self, version: DocumentVersionModel) -> bytes:
+        try:
+            bucket, key = parse_s3_uri(version.file_ref)
+            content = await download(key, bucket=bucket)
+        except Exception as exc:
+            raise ErrorException(errors.admin.STORAGE_DOWNLOAD_FAILED, status_code=502) from exc
+        if version.content_sha256 and hashlib.sha256(content).hexdigest() != version.content_sha256:
+            # The bytes behind a version are evidence: never hand over a file
+            # that is not the one recorded.
+            raise ErrorException(errors.admin.STORED_FILE_ALTERED, status_code=502)
+        return content
 
     # -- creating -----------------------------------------------------------------
 

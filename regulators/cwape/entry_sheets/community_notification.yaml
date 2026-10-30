@@ -1,0 +1,77 @@
+# Fiche de saisie of the CWaPE's "Formulaire de notification d'une communauté
+# d'énergie" (version of 27 June 2024, bundle community_notification/v1): its
+# section 1, "Coordonnées", in the form's order. French labels are the form's
+# own. Every key is one the bundle binds (tests/regulators/cwape check it).
+piece: community_notification
+labels:
+  fr: Notification d'une communauté d'énergie
+  en: Notification of an energy community
+  nl: Kennisgeving van een energiegemeenschap
+  de: Meldung einer Energiegemeinschaft
+sections:
+  - labels:
+      fr: "1.1. Coordonnées de la communauté d'énergie"
+      en: "1.1. Energy community details"
+      nl: "1.1. Gegevens van de energiegemeenschap"
+      de: "1.1. Angaben zur Energiegemeinschaft"
+    fields:
+      - key: community_legal_name
+        labels: {fr: "Dénomination de la communauté d'énergie", en: Name of the energy community, nl: Naam van de energiegemeenschap, de: Bezeichnung der Energiegemeinschaft}
+      - key: community_vat_number
+        labels: {fr: N° BCE, en: Company number (BCE), nl: Ondernemingsnummer (KBO), de: Unternehmensnummer (ZDU)}
+      - key: community_legal_form
+        labels: {fr: Forme juridique, en: Legal form, nl: Rechtsvorm, de: Rechtsform}
+      - key: community_street
+        labels: {fr: Rue (adresse du siège), en: Street (registered office), nl: Straat (maatschappelijke zetel), de: Straße (Sitz)}
+      - key: community_number
+        labels: {fr: N°, en: Number, nl: Nr., de: Nr.}
+      - key: community_box
+        labels: {fr: Boîte, en: Box, nl: Bus, de: Briefkasten}
+      - key: community_postcode
+        labels: {fr: Code postal, en: Postcode, nl: Postcode, de: Postleitzahl}
+      - key: community_city
+        labels: {fr: Commune, en: Municipality, nl: Gemeente, de: Gemeinde}
+  - labels:
+      fr: "1.2. Coordonnées du représentant de la communauté d'énergie"
+      en: "1.2. Representative of the energy community"
+      nl: "1.2. Gegevens van de vertegenwoordiger van de energiegemeenschap"
+      de: "1.2. Angaben zum Vertreter der Energiegemeinschaft"
+    fields:
+      - key: representative_name
+        labels: {fr: Nom et prénom du représentant ou dénomination, en: Representative's full name or company name, nl: Naam en voornaam of benaming van de vertegenwoordiger, de: Name und Vorname oder Bezeichnung des Vertreters}
+      - key: representative_vat_number
+        labels: {fr: "N° BCE (si d'application)", en: Company number (if any), nl: Ondernemingsnummer (indien van toepassing), de: Unternehmensnummer (falls zutreffend)}
+      - key: representative_street
+        labels: {fr: Rue, en: Street, nl: Straat, de: Straße}
+      - key: representative_number
+        labels: {fr: N°, en: Number, nl: Nr., de: Nr.}
+      - key: representative_box
+        labels: {fr: Boîte, en: Box, nl: Bus, de: Briefkasten}
+      - key: representative_postcode
+        labels: {fr: Code postal, en: Postcode, nl: Postcode, de: Postleitzahl}
+      - key: representative_city
+        labels: {fr: Commune, en: Municipality, nl: Gemeente, de: Gemeinde}
+  - labels:
+      fr: Personne de contact
+      en: Contact person
+      nl: Contactpersoon
+      de: Ansprechperson
+    fields:
+      - key: contact_last_name
+        labels: {fr: Nom, en: Last name, nl: Naam, de: Name}
+      - key: contact_first_name
+        labels: {fr: Prénom, en: First name, nl: Voornaam, de: Vorname}
+      - key: contact_street
+        labels: {fr: Rue, en: Street, nl: Straat, de: Straße}
+      - key: contact_number
+        labels: {fr: N°, en: Number, nl: Nr., de: Nr.}
+      - key: contact_box
+        labels: {fr: Boîte, en: Box, nl: Bus, de: Briefkasten}
+      - key: contact_postcode
+        labels: {fr: Code postal, en: Postcode, nl: Postcode, de: Postleitzahl}
+      - key: contact_city
+        labels: {fr: Commune, en: Municipality, nl: Gemeente, de: Gemeinde}
+      - key: contact_mobile
+        labels: {fr: GSM, en: Mobile, nl: Gsm, de: Mobiltelefon}
+      - key: contact_phone
+        labels: {fr: Tél, en: Phone, nl: Tel., de: Tel.}

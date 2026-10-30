@@ -52,7 +52,8 @@
       "FINALIZE_NOT_ALLOWED": "Endgültige Fassungen werden erzeugt, sobald alle Unterlagen bereit sind, und vor dem Versand (Code: 2386)",
       "VERSION_NOT_REGENERABLE": "Diese Fassung wurde nicht von OptimCE erzeugt und kann daher nicht neu erzeugt werden (Code: 2387)",
       "REVIEW_REQUIRED": "Diese Unterlage muss geprüft werden, bevor sie neu erzeugt wird (Code: 2388)",
-      "TEMPLATE_IN_USE": "Diese Vorlage wurde bereits zur Erzeugung von Unterlagen verwendet: registrieren Sie eine neue Version, statt sie zu ändern (Code: 2389)"
+      "TEMPLATE_IN_USE": "Diese Vorlage wurde bereits zur Erzeugung von Unterlagen verwendet: registrieren Sie eine neue Version, statt sie zu ändern (Code: 2389)",
+      "STORED_FILE_ALTERED": "Die gespeicherte Datei stimmt nicht mehr mit ihrem Fingerabdruck überein und wird nicht herausgegeben (Code: 2390)"
     }
   }
 }

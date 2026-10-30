@@ -7,6 +7,7 @@ breaks one file with an obvious diff, rather than leaking through the codebase.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import text
@@ -393,6 +394,22 @@ class SqlAlchemyCrmCoreRead:
                 for row in iterations
             ),
         )
+
+    async def member_names(self, id_community: int, ids: Sequence[int]) -> dict[int, str]:
+        if not ids:
+            return {}
+        result = await self._session.execute(
+            text(
+                "SELECT m.id, m.name, i.first_name FROM member m "
+                "LEFT JOIN individual i ON i.id = m.id "
+                "WHERE m.id_community = :cid AND m.id = ANY(:ids)"
+            ),
+            {"cid": id_community, "ids": list(ids)},
+        )
+        return {
+            int(row["id"]): " ".join(part for part in (row["first_name"], row["name"]) if part)
+            for row in result.mappings()
+        }
 
     async def member_ids_for_user(self, *, id_community: int, auth_user_id: str) -> list[int]:
         """The member id(s) the authenticated user represents in this community."""
