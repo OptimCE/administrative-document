@@ -322,6 +322,91 @@ def merge_overrides(
     return merged
 
 
+def carry_over(
+    fresh: Mapping[str, Any], previous: Mapping[str, Any], previous_prefill: Mapping[str, Any]
+) -> dict[str, Any]:
+    """A fresh pre-fill with the reviewer's own edits of the previous version on top.
+
+    What a one-click regeneration renders. The reviewer's edits are what the
+    previous snapshot holds and its pre-fill did not (both are on the version),
+    so a value the CRM changed since comes through fresh, and a value the
+    reviewer typed (a fixed share, a signature date, a representative the CRM
+    does not know) is not lost:
+
+    * a scalar the reviewer set wins over the fresh one; the others are fresh;
+    * a row is matched on ``(_id_member, ean)``, column by column: a cell the
+      reviewer edited keeps its edit, the rest is fresh. A row the CRM added
+      since comes in as is, one it dropped goes. A row the reviewer removed
+      stays removed, and one they added (a storage unit the CRM does not model)
+      stays, after the CRM's rows.
+
+    The comb-box keys of annex 8 are recomputed from the EANs when the payload
+    is frozen (``project_comb_fields``), so carrying them is harmless.
+    """
+    result = copy.deepcopy(dict(fresh))
+    for key, value in previous.items():
+        if isinstance(value, list) or isinstance(previous_prefill.get(key), list):
+            continue
+        if key not in previous_prefill or previous_prefill[key] != value:
+            result[key] = copy.deepcopy(value)
+    for key in {*previous, *fresh}:
+        rows, prefilled = previous.get(key), previous_prefill.get(key)
+        if not isinstance(rows, list) or rows == prefilled:
+            continue
+        fresh_rows = fresh.get(key)
+        result[key] = _carry_rows(
+            fresh_rows if isinstance(fresh_rows, list) else [],
+            rows,
+            prefilled if isinstance(prefilled, list) else [],
+        )
+    return result
+
+
+def _row_identity(row: Any) -> tuple[Any, Any] | None:
+    if not isinstance(row, Mapping):
+        return None
+    identity = (row.get(ROW_MEMBER_ID), row.get("ean"))
+    return identity if identity != (None, None) else None
+
+
+def _carry_rows(
+    fresh: list[Any], previous: list[Any], prefilled: list[Any]
+) -> list[dict[str, Any]]:
+    before = {k: row for row in prefilled if (k := _row_identity(row)) is not None}
+    after = {k: row for row in previous if (k := _row_identity(row)) is not None}
+    carried: list[dict[str, Any]] = []
+    for row in fresh:
+        identity = _row_identity(row)
+        if identity is None or identity not in after:
+            if identity is None or identity not in before:
+                carried.append(copy.deepcopy(row))  # new in the CRM since
+            continue  # in the previous pre-fill, removed by the reviewer
+        edited, original = after[identity], before.get(identity, {})
+        carried.append(
+            {
+                **copy.deepcopy(row),
+                **{
+                    column: copy.deepcopy(value)
+                    for column, value in edited.items()
+                    if original.get(column) != value
+                },
+            }
+        )
+    in_fresh = {k for row in fresh if (k := _row_identity(row)) is not None}
+    # A CRM row with neither member nor EAN cannot be matched: it came back in
+    # the fresh pre-fill already, so only an unidentified row the pre-fill did
+    # not have is the reviewer's.
+    unmatched_prefill = [row for row in prefilled if _row_identity(row) is None]
+    for row in previous:
+        identity = _row_identity(row)
+        if identity is None:
+            if row not in unmatched_prefill:
+                carried.append(copy.deepcopy(row))
+        elif identity not in before and identity not in in_fresh:
+            carried.append(copy.deepcopy(row))
+    return carried
+
+
 def _restore_row_identity(derived: Mapping[str, Any], merged: dict[str, Any]) -> None:
     """Re-attach `ROW_MEMBER_ID` to rows the reviewer sent back without it.
 

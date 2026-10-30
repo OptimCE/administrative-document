@@ -91,6 +91,14 @@ class _AdminErrors:
     PIECE_NOT_FOUND = Error(code=2382, key="ERRORS.ADMIN.PIECE_NOT_FOUND")
     CORRESPONDENCE_NOT_FOUND = Error(code=2383, key="ERRORS.ADMIN.CORRESPONDENCE_NOT_FOUND")
     PROCEDURE_ACTION_FAILED = Error(code=2384, key="ERRORS.ADMIN.PROCEDURE_ACTION_FAILED")
+    # Phase 2: draft and final pieces. Sending wants every supplied piece final.
+    FINAL_VERSIONS_REQUIRED = Error(code=2385, key="ERRORS.ADMIN.FINAL_VERSIONS_REQUIRED")
+    FINALIZE_NOT_ALLOWED = Error(code=2386, key="ERRORS.ADMIN.FINALIZE_NOT_ALLOWED")
+    # An upload (or a render older than phase 2) has nothing to regenerate from.
+    VERSION_NOT_REGENERABLE = Error(code=2387, key="ERRORS.ADMIN.VERSION_NOT_REGENERABLE")
+    REVIEW_REQUIRED = Error(code=2388, key="ERRORS.ADMIN.REVIEW_REQUIRED")
+    # trg_document_template_in_use: the bundle of a used template is evidence.
+    TEMPLATE_IN_USE = Error(code=2389, key="ERRORS.ADMIN.TEMPLATE_IN_USE")
 
 
 class _Errors:

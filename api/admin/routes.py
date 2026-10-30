@@ -23,13 +23,17 @@ from api.admin.schemas import (
     ChangeExcludeIn,
     CorrespondenceProposalOut,
     DeadlineItemOut,
+    FinalizeOut,
     InboxOut,
     ProcedureCreateIn,
     ProcedureDefinitionOut,
     ProcedureDetailOut,
     ProcedureItemOut,
+    RegenerateIn,
+    RegenerateOut,
     StatusOut,
     TransitionIn,
+    VerifyAccepted,
 )
 from api.admin.service import AdminService, ModuleInactiveError
 from core.api_response import ApiResponse, ApiResponsePaginated, Pagination
@@ -281,6 +285,48 @@ async def upload_piece(
     the procedure was sent, except for a piece that is received after it."""
     view = await service.upload_piece(_community(), dossier_id, document_id, file, actor=_actor())
     return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.post(
+    "/dossiers/{dossier_id}/finalize", status_code=202, response_model=ApiResponse[FinalizeOut]
+)
+@with_default_error(errors.admin.GENERATION_FAILED)
+async def finalize_procedure(dossier_id: int, service: ProceduresDep):
+    """Render the finals before sending: each generated piece whose current
+    version is a reviewed draft, again from that draft's snapshot and template,
+    without the watermark. 409 unless the pieces are complete and it is not
+    sent yet. Sending is refused until every supplied piece is final."""
+    outcome = await service.finalize(_community(), dossier_id)
+    return ApiResponse(data=FinalizeOut.model_validate(outcome))
+
+
+@admin_routes.post(
+    "/dossiers/{dossier_id}/regenerate",
+    status_code=202,
+    response_model=ApiResponse[RegenerateOut],
+)
+@with_default_error(errors.admin.GENERATION_FAILED)
+async def regenerate_pieces(dossier_id: int, body: RegenerateIn, service: ProceduresDep):
+    """One click: regenerate the stale pieces (or the ones named) from a fresh
+    pre-fill, the reviewer's own edits of each current version carried over."""
+    outcome = await service.regenerate(_community(), dossier_id, body.document_ids)
+    return ApiResponse(data=RegenerateOut.model_validate(outcome))
+
+
+@admin_routes.post(
+    "/dossiers/{dossier_id}/documents/{document_id}/versions/{version_id}/verify",
+    status_code=202,
+    response_model=ApiResponse[VerifyAccepted],
+)
+@with_default_error(errors.admin.GENERATION_FAILED)
+async def verify_version(
+    dossier_id: int, document_id: int, version_id: int, service: ProceduresDep
+):
+    """Regenerate a rendered version from what it froze (snapshot, template,
+    watermark) and compare the bytes with the stored ones. Nothing new is
+    stored but the outcome; allowed on a sent procedure."""
+    request_id = await service.verify(_community(), dossier_id, document_id, version_id)
+    return ApiResponse(data=VerifyAccepted(docgen_request_id=request_id))
 
 
 @admin_routes.post("/dossiers/{dossier_id}/send", response_model=ApiResponse[ProcedureDetailOut])

@@ -72,6 +72,7 @@ async def process_generate(
                     template_uri=template.file_ref,
                     output_format=template.output_format,
                     data=render.data_snapshot_json,
+                    watermark=render.watermark,
                     # Deterministic in the request id, so a redelivery overwrites
                     # rather than accumulating orphaned artifacts.
                     key_prefix=(

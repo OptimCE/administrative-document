@@ -21,6 +21,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.administrative_document.repository import AdministrativeDocumentRepository
@@ -34,16 +35,21 @@ from core.errors.errors import ErrorException
 from core.queue.helper import Event
 from core.storage import download, parse_s3_uri
 from domain import prefill
+from engine.contracts import PluginRegistry, plugin_for
 from ports.crm_core import CrmCoreReadPort
 from ports.events import EventPublisher
 from shared.const import (
     EVENT_GENERATE_REQUESTED,
     SUBJECT_GENERATE_REQUESTED,
+    DocumentKind,
     ProcedureDocumentStatus,
+    RenderPurpose,
+    VersionStage,
 )
 from shared.custom_errors import errors
 from shared.models.local_models import (
     DocumentModel,
+    DocumentTemplateModel,
     DocumentVersionModel,
     DossierModel,
 )
@@ -81,8 +87,10 @@ class AdministrativeDocumentService:
         repository: AdministrativeDocumentRepository,
         crm_read: CrmCoreReadPort,
         publisher: EventPublisher,
+        registry: PluginRegistry,
     ) -> None:
         self._local = local_session
+        self._registry = registry
         self._crm = crm_session
         self._repo = repository
         self._crm_read = crm_read
@@ -179,7 +187,13 @@ class AdministrativeDocumentService:
         for field, value in changes.items():
             if value is not None:
                 setattr(template, field, value)
-        await self._local.commit()
+        try:
+            await self._local.commit()
+        except IntegrityError:
+            # trg_document_template_in_use: a render used this template, so its
+            # bundle is evidence. The next version is a new row, not this one.
+            await self._local.rollback()
+            raise ErrorException(errors.admin.TEMPLATE_IN_USE, status_code=409) from None
         await self._local.refresh(template)
         await self._audit_and_commit(
             AuditActions.TEMPLATE_SAVED,
@@ -242,32 +256,22 @@ class AdministrativeDocumentService:
         return {"data": snapshot, "warnings": warnings}
 
     async def request_generation(
-        self, *, document_id: int, data: dict[str, Any] | None
+        self, *, document_id: int, data: dict[str, Any] | None, upgrade_template: bool = False
     ) -> tuple[DocumentModel, str]:
-        """Freeze the snapshot, claim the render slot, commit, then publish.
+        """Freeze the reviewed snapshot, claim the render slot, commit, then publish.
 
-        Returns ``(document, docgen_request_id)``.
+        Returns ``(document, docgen_request_id)``. A generated piece renders as a
+        draft, stamped with the plugin's watermark; a collected one as the form
+        to sign, unstamped. The finals are rendered from a reviewed draft's own
+        snapshot (``finalize``), never from here.
 
         Ordering is the idempotency hinge: the request id is committed *before*
         the work message goes out, so a redelivery reuses it — and therefore the
         same deterministic object key — instead of littering the bucket with
         orphaned renders.
         """
-        document = await self.get_document_or_404(document_id)
-        dossier = await self.get_dossier_or_404(document.id_dossier)
-
-        # A piece is (re)generated while it is missing, stale or ready, and never
-        # once its procedure was sent: what was sent is frozen with it.
-        if dossier.frozen_at is not None or document.status not in _GENERATABLE_PIECE:
-            raise ErrorException(errors.admin.GENERATION_NOT_ALLOWED, status_code=409)
-        template = await self._repo.get_current_template(
-            region=dossier.region, doc_type=document.doc_type
-        )
-        if template is None or not template.file_ref:
-            # Either no form is in force for this region/type, or one is
-            # registered but has no bundle yet — both are configuration, not user
-            # error, and both are fixed by a seed change rather than a retry.
-            raise ErrorException(errors.admin.TEMPLATE_NOT_REGISTERED, status_code=422)
+        document, dossier = await self._renderable(document_id)
+        template = await self._pinned_template(document, dossier, upgrade=upgrade_template)
 
         prefilled = await self.build_prefill(document_id=document_id)
         snapshot = prefill.merge_overrides(prefilled["data"], data)
@@ -277,18 +281,167 @@ class AdministrativeDocumentService:
         # filed and printed. An unrepresentable EAN removes the keys entirely
         # and the boxes stay blank and hand-fillable.
         snapshot = prefill.project_comb_fields(document.doc_type, snapshot)
+        stage, watermark = self._working_stage(document, dossier)
+        request_id = await self._request_render(
+            document,
+            id_template=template.id,
+            snapshot=snapshot,
+            prefill_data=prefilled["data"],
+            stage=stage,
+            watermark=watermark,
+        )
+        return document, request_id
 
+    async def regenerate(self, *, document_id: int) -> tuple[DocumentModel, str]:
+        """One click: a fresh pre-fill, the reviewer's own edits of the current
+        version carried over (``prefill.carry_over``), rendered as before.
+
+        409 ``REVIEW_REQUIRED`` when the current version cannot say what the
+        reviewer typed (an upload, or a render older than phase 2): the review
+        form is then the only way.
+        """
+        document, dossier = await self._renderable(document_id)
+        version = await self._current_version(document)
+        if version is None or version.prefill_json is None or version.data_snapshot_json is None:
+            raise ErrorException(errors.admin.REVIEW_REQUIRED, status_code=409)
+        template = await self._pinned_template(document, dossier, upgrade=False)
+
+        fresh = (await self.build_prefill(document_id=document_id))["data"]
+        data = prefill.carry_over(fresh, version.data_snapshot_json, version.prefill_json)
+        snapshot = prefill.project_comb_fields(document.doc_type, data)
+        stage, watermark = self._working_stage(document, dossier)
+        request_id = await self._request_render(
+            document,
+            id_template=template.id,
+            snapshot=snapshot,
+            prefill_data=fresh,
+            stage=stage,
+            watermark=watermark,
+        )
+        return document, request_id
+
+    async def finalize(self, document: DocumentModel) -> str | None:
+        """Render the final of a piece whose current version is a reviewed draft:
+        the same snapshot, the same template, no watermark. None when the current
+        version is not a draft (already final, or a form to sign)."""
+        version = await self._current_version(document)
+        if version is None or version.stage != int(VersionStage.DRAFT):
+            return None
+        if version.id_template is None or version.data_snapshot_json is None:
+            raise ErrorException(errors.admin.VERSION_NOT_REGENERABLE, status_code=409)
+        return await self._request_render(
+            document,
+            id_template=version.id_template,
+            snapshot=version.data_snapshot_json,
+            prefill_data=version.prefill_json,
+            stage=VersionStage.FINAL,
+            watermark=None,
+        )
+
+    async def verify(self, document: DocumentModel, version: DocumentVersionModel) -> str:
+        """Regenerate ``version`` from what it froze (snapshot, pinned template,
+        watermark) and let the result say whether the bytes are the same. No
+        version comes of it: the outcome lands in ``version_check``. Allowed on a
+        sent procedure — that is the point."""
+        if (
+            version.docgen_request_id is None
+            or version.id_template is None
+            or version.data_snapshot_json is None
+        ):
+            raise ErrorException(errors.admin.VERSION_NOT_REGENERABLE, status_code=409)
+        return await self._request_render(
+            document,
+            id_template=version.id_template,
+            snapshot=version.data_snapshot_json,
+            prefill_data=version.prefill_json,
+            stage=VersionStage(version.stage),
+            watermark=version.watermark,
+            purpose=RenderPurpose.VERIFY,
+            id_document_version=version.id,
+        )
+
+    async def _renderable(self, document_id: int) -> tuple[DocumentModel, DossierModel]:
+        document = await self.get_document_or_404(document_id)
+        dossier = await self.get_dossier_or_404(document.id_dossier)
+        # A piece is (re)generated while it is missing, stale or ready, and never
+        # once its procedure was sent: what was sent is frozen with it. A
+        # received piece comes from the recipient, never from a template.
+        if (
+            dossier.frozen_at is not None
+            or document.status not in _GENERATABLE_PIECE
+            or document.kind == int(DocumentKind.RECEIVED)
+        ):
+            raise ErrorException(errors.admin.GENERATION_NOT_ALLOWED, status_code=409)
+        return document, dossier
+
+    async def _pinned_template(
+        self, document: DocumentModel, dossier: DossierModel, *, upgrade: bool
+    ) -> DocumentTemplateModel:
+        """The template the piece keeps, pinned now if it has none yet (or if the
+        render explicitly upgrades it to the one in force)."""
+        template = (
+            await self._local.get(DocumentTemplateModel, document.id_template)
+            if document.id_template is not None and not upgrade
+            else await self._repo.get_current_template(
+                region=dossier.region, doc_type=document.doc_type
+            )
+        )
+        if template is None or not template.file_ref:
+            # Either no form is in force for this region/type, or one is
+            # registered but has no bundle yet — both are configuration, not user
+            # error, and both are fixed by a seed change rather than a retry.
+            raise ErrorException(errors.admin.TEMPLATE_NOT_REGISTERED, status_code=422)
+        document.id_template = template.id
+        return template
+
+    def _working_stage(
+        self, document: DocumentModel, dossier: DossierModel
+    ) -> tuple[VersionStage, str | None]:
+        """What a reviewed render is: a stamped draft of a generated piece, or the
+        unstamped form a participant signs."""
+        if document.kind == int(DocumentKind.COLLECTED):
+            return VersionStage.TO_SIGN, None
+        plugin = plugin_for(self._registry, dossier.regulator)
+        if plugin is None:
+            raise ErrorException(errors.admin.GENERATION_NOT_ALLOWED, status_code=409)
+        return VersionStage.DRAFT, plugin.draft_watermark
+
+    async def _current_version(self, document: DocumentModel) -> DocumentVersionModel | None:
+        if document.current_version_id is None:
+            return None
+        return await self._repo.get_version(document.id, document.current_version_id)
+
+    async def _request_render(
+        self,
+        document: DocumentModel,
+        *,
+        id_template: int,
+        snapshot: dict[str, Any],
+        prefill_data: dict[str, Any] | None,
+        stage: VersionStage,
+        watermark: str | None,
+        purpose: RenderPurpose = RenderPurpose.RENDER,
+        id_document_version: int | None = None,
+    ) -> str:
+        """Claim the piece's render slot, commit, publish. 409 when one is in flight."""
         request_id = uuid.uuid4().hex
         claimed = await self._repo.claim_render(
-            document_id=document_id,
+            document_id=document.id,
             docgen_request_id=request_id,
-            id_template=template.id,
+            id_template=id_template,
             data_snapshot=snapshot,
             requested_by=current_user_id.get(),
             stale_after_seconds=settings.RENDER_STALE_AFTER_SECONDS,
+            stage=stage,
+            watermark=watermark,
+            prefill=prefill_data,
+            purpose=purpose,
+            id_document_version=id_document_version,
         )
         if not claimed:
             raise ErrorException(errors.admin.RENDER_ALREADY_IN_FLIGHT, status_code=409)
+        # Plain values: nothing after the commit reads ORM state.
+        document_id, id_community, doc_type = document.id, document.id_community, document.doc_type
         await self._local.commit()
 
         # Published after the commit. A broker outage leaves a PENDING render the
@@ -297,17 +450,22 @@ class AdministrativeDocumentService:
             SUBJECT_GENERATE_REQUESTED,
             Event(
                 type=EVENT_GENERATE_REQUESTED,
-                data={"document_id": document_id, "id_community": document.id_community},
+                data={"document_id": document_id, "id_community": id_community},
             ),
         )
-        metrics.document_generations_requested.add(1, {"doc_type": document.doc_type})
+        metrics.document_generations_requested.add(1, {"doc_type": doc_type})
         await self._audit_and_commit(
             AuditActions.DOCUMENT_GENERATION_REQUESTED,
             entity_type="document",
             entity_id=str(document_id),
-            payload={"doc_type": document.doc_type, "request_id": request_id},
+            payload={
+                "doc_type": doc_type,
+                "request_id": request_id,
+                "stage": VersionStage(stage).name.lower(),
+                "purpose": RenderPurpose(purpose).name.lower(),
+            },
         )
-        return document, request_id
+        return request_id
 
     async def get_render_status(self, *, document_id: int) -> dict[str, Any]:
         """Small poll target for the UI. No render row means idle or landed."""

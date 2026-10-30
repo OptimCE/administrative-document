@@ -76,6 +76,9 @@ class Effect:
 class RegulatorPlugin(Protocol):
     code: str  # the value of community.regulator: what selects the plugin
     region: str  # whose working calendar its deadlines count on
+    # Stamped across every page of a working draft (docgen's watermark), in the
+    # regulator's language; the final, unstamped, is what is sent.
+    draft_watermark: str
 
     def catalogue(self) -> Catalogue: ...
 

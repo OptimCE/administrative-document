@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.admin.procedures import ProcedureService
 from api.admin.service import AdminService
+from api.administrative_document.deps import get_administrative_document_service
+from api.administrative_document.service import AdministrativeDocumentService
 from core.database.database import get_crm_session, get_local_session
 from engine.contracts import PluginRegistry
 from ports.core_effects_sqlalchemy import SqlCoreEffects
@@ -35,10 +37,12 @@ def get_procedure_service(
     local_session: AsyncSession = Depends(get_local_session),
     crm_session: AsyncSession = Depends(get_crm_session),
     registry: PluginRegistry = Depends(get_registry),
+    generation: AdministrativeDocumentService = Depends(get_administrative_document_service),
 ) -> ProcedureService:
     return ProcedureService(
         local_session=local_session,
         crm_session=crm_session,
         crm_read=SqlEngineCrmRead(crm_session),
         registry=registry,
+        generation=generation,
     )

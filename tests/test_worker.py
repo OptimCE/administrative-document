@@ -21,6 +21,8 @@ from worker import docgen_results, generate
 pytestmark = pytest.mark.asyncio
 
 _URI = "s3://optimce-documents/administrative-document/1/1/req/annexe6-notification.xlsx"
+# What the CWaPE plugin stamps on a draft (CwapePlugin.draft_watermark).
+DRAFT_MARK = "BROUILLON"
 
 
 class FakeDocGen:
@@ -59,20 +61,34 @@ async def _versions(db_session, document_id: int) -> list[DocumentVersionModel]:
     return list(rows)
 
 
-def _success(request_id: str, *, document_id: int, tenant: int, uri: str = _URI) -> dict:
+def _success(
+    request_id: str,
+    *,
+    document_id: int,
+    tenant: int,
+    uri: str = _URI,
+    watermark: str | None = DRAFT_MARK,
+    sha256: str = "abc123",
+) -> dict:
     """A body shaped exactly like ``GenerationResult.to_json_bytes()``.
 
     Note there is no top-level ``tenant_id``: the model is ``extra="forbid"`` and
-    declares none, so it can only arrive through ``metadata``.
+    declares none, so it can only arrive through ``metadata``. ``watermark`` is
+    the echo of what docgen stamped: a generated piece renders as a CWaPE draft,
+    so the default is the plugin's mark; ``None`` is a plain render.
     """
-    return {
+    body = {
         "request_id": request_id,
         "status": "success",
-        "artifacts": [{"format": "xlsx", "uri": uri, "size_bytes": 4096, "sha256": "abc123"}],
+        "artifacts": [{"format": "xlsx", "uri": uri, "size_bytes": 4096, "sha256": sha256}],
         "template_version": "2026.02.25",
+        "renderer": {"python": "3.12.13", "zlib": "1.3.1", "openpyxl": "3.1.5"},
         "generated_at": "2026-07-26T10:00:00Z",
         "metadata": {"tenant_id": str(tenant), "document_id": document_id},
     }
+    if watermark is not None:
+        body["watermark"] = watermark
+    return body
 
 
 class TestRequestSide:
@@ -184,9 +200,9 @@ class TestResultSide:
             crm_session=db_session,
         )
 
-        # The bundle named it; the URI's last segment is that name.
+        # The bundle named it (the URI's last segment); a draft says so too.
         (version,) = await _versions(db_session, document_id)
-        assert version.original_filename == "annexe6-notification.xlsx"
+        assert version.original_filename == "annexe6-notification-brouillon.xlsx"
 
     async def test_an_upload_over_a_generated_document_flips_origin_back(
         self, client, manager_headers, db_session, community, sharing_operation, fake_storage

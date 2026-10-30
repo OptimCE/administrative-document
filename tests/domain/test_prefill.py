@@ -5,6 +5,7 @@ Pure-domain tests: no database, no broker, no template bundle.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import datetime
 
@@ -694,3 +695,84 @@ class TestAnnex8CombBoxes:
             production=[_PV],
         )
         assert snapshot["ean_delivery"] is None
+
+
+class TestCarryOver:
+    """A one-click regeneration: fresh CRM data, the reviewer's own edits kept."""
+
+    def _row(self, member, ean, **cells):
+        return {prefill.ROW_MEMBER_ID: member, "ean": ean, "nom": f"M{member}", **cells}
+
+    def test_a_scalar_the_reviewer_set_wins_and_the_others_are_fresh(self):
+        before = {"community_name": "Old name", "representative_name": None}
+        snapshot = {"community_name": "Old name", "representative_name": "Alice Dupont"}
+        fresh = {"community_name": "New name", "representative_name": None}
+
+        carried = prefill.carry_over(fresh, snapshot, before)
+
+        assert carried == {"community_name": "New name", "representative_name": "Alice Dupont"}
+
+    def test_a_cleared_value_stays_cleared(self):
+        carried = prefill.carry_over({"vat": "BE1"}, {"vat": None}, {"vat": "BE1"})
+        assert carried == {"vat": None}
+
+    def test_an_edited_cell_keeps_its_edit_and_the_rest_of_the_row_is_fresh(self):
+        before = {"participants": [self._row(1, "E1", localite="Liege", part_allouee=None)]}
+        snapshot = {"participants": [self._row(1, "E1", localite="Liege", part_allouee=40)]}
+        fresh = {"participants": [self._row(1, "E1", localite="Liège", part_allouee=None)]}
+
+        rows = prefill.carry_over(fresh, snapshot, before)["participants"]
+
+        assert rows == [self._row(1, "E1", localite="Liège", part_allouee=40)]
+
+    def test_a_row_the_crm_added_since_comes_in_and_one_it_dropped_goes(self):
+        before = {"participants": [self._row(1, "E1"), self._row(2, "E2")]}
+        snapshot = {"participants": [self._row(1, "E1", part_allouee=50), self._row(2, "E2")]}
+        fresh = {"participants": [self._row(1, "E1"), self._row(3, "E3")]}
+
+        rows = prefill.carry_over(fresh, snapshot, before)["participants"]
+
+        assert rows == [self._row(1, "E1", part_allouee=50), self._row(3, "E3")]
+
+    def test_a_row_the_reviewer_removed_stays_removed(self):
+        before = {"participants": [self._row(1, "E1"), self._row(2, "E2")]}
+        snapshot = {"participants": [self._row(1, "E1")]}
+        fresh = {"participants": [self._row(1, "E1"), self._row(2, "E2")]}
+
+        assert prefill.carry_over(fresh, snapshot, before)["participants"] == [self._row(1, "E1")]
+
+    def test_a_row_the_reviewer_added_stays_after_the_crms(self):
+        """The CRM models no storage unit: the reviewer types it, every time otherwise."""
+        hand_typed = {"ean": None, "nom": "Batterie", "puissance_kva": 10}
+        before = {"storage": []}
+        snapshot = {"storage": [hand_typed]}
+        fresh = {"storage": []}
+
+        assert prefill.carry_over(fresh, snapshot, before)["storage"] == [hand_typed]
+
+    def test_an_untouched_sheet_is_simply_fresh(self):
+        before = {"participants": [self._row(1, "E1")]}
+        fresh = {"participants": [self._row(1, "E1", localite="Namur"), self._row(2, "E2")]}
+
+        assert prefill.carry_over(fresh, before, before) == fresh
+
+    def test_an_unmatchable_crm_row_is_not_doubled(self):
+        anonymous = {"nom": None, "ean": None, "localite": "Huy"}
+        before = {"installations": [anonymous]}
+        snapshot = {"installations": [anonymous, {"ean": "E9", "nom": "added"}]}
+        fresh = {"installations": [anonymous]}
+
+        rows = prefill.carry_over(fresh, snapshot, before)["installations"]
+
+        assert rows == [anonymous, {"ean": "E9", "nom": "added"}]
+
+    def test_the_inputs_are_not_mutated(self):
+        before = {"participants": [self._row(1, "E1")], "x": None}
+        snapshot = {"participants": [self._row(1, "E1", part_allouee=1)], "x": "typed"}
+        fresh = {"participants": [self._row(1, "E1")], "x": None}
+        copies = [copy.deepcopy(d) for d in (before, snapshot, fresh)]
+
+        carried = prefill.carry_over(fresh, snapshot, before)
+        carried["participants"][0]["nom"] = "changed"
+
+        assert [before, snapshot, fresh] == copies

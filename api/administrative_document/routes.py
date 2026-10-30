@@ -184,7 +184,7 @@ async def generate_document(document_id: int, payload: GenerateRequest, service:
     polls ``/render-status``.
     """
     document, request_id = await service.request_generation(
-        document_id=document_id, data=payload.data
+        document_id=document_id, data=payload.data, upgrade_template=payload.upgrade_template
     )
     return ApiResponse(
         data=GenerateAccepted(

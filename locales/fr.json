@@ -47,7 +47,12 @@
       "CHANGE_NOT_FOUND": "Changement introuvable dans cette démarche (code: 2381)",
       "PIECE_NOT_FOUND": "Pièce introuvable dans cette démarche (code: 2382)",
       "CORRESPONDENCE_NOT_FOUND": "Message introuvable (code: 2383)",
-      "PROCEDURE_ACTION_FAILED": "L'opération sur la démarche a échoué (code: 2384)"
+      "PROCEDURE_ACTION_FAILED": "L'opération sur la démarche a échoué (code: 2384)",
+      "FINAL_VERSIONS_REQUIRED": "Générez d'abord les versions finales des pièces : une pièce est encore un brouillon ou en cours de génération (code: 2385)",
+      "FINALIZE_NOT_ALLOWED": "Les versions finales se génèrent quand toutes les pièces sont prêtes et avant l'envoi (code: 2386)",
+      "VERSION_NOT_REGENERABLE": "Cette version n'a pas été générée par OptimCE : elle ne peut pas être régénérée (code: 2387)",
+      "REVIEW_REQUIRED": "Cette pièce doit être relue avant d'être régénérée (code: 2388)",
+      "TEMPLATE_IN_USE": "Ce modèle a déjà servi à générer des pièces : enregistrez une nouvelle version plutôt que de le modifier (code: 2389)"
     }
   }
 }

@@ -43,6 +43,7 @@ class FakeRegulator:
         self._catalogue = load_catalogue(catalogue_dir, regulator=code)
         self._calendar = load_calendar(calendar_file)
         self.region = self._calendar.region
+        self.draft_watermark = "DRAFT"
 
     def catalogue(self) -> Catalogue:
         return self._catalogue

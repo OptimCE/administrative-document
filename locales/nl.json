@@ -47,7 +47,12 @@
       "CHANGE_NOT_FOUND": "Wijziging niet gevonden in deze procedure (code: 2381)",
       "PIECE_NOT_FOUND": "Stuk niet gevonden in deze procedure (code: 2382)",
       "CORRESPONDENCE_NOT_FOUND": "Bericht niet gevonden (code: 2383)",
-      "PROCEDURE_ACTION_FAILED": "De actie op de procedure is mislukt (code: 2384)"
+      "PROCEDURE_ACTION_FAILED": "De actie op de procedure is mislukt (code: 2384)",
+      "FINAL_VERSIONS_REQUIRED": "Genereer eerst de definitieve versies van de stukken: een stuk is nog een concept of wordt gegenereerd (code: 2385)",
+      "FINALIZE_NOT_ALLOWED": "Definitieve versies worden gegenereerd zodra alle stukken gereed zijn en vóór het verzenden (code: 2386)",
+      "VERSION_NOT_REGENERABLE": "Deze versie is niet door OptimCE gegenereerd en kan dus niet opnieuw worden gegenereerd (code: 2387)",
+      "REVIEW_REQUIRED": "Dit stuk moet worden nagekeken voordat het opnieuw wordt gegenereerd (code: 2388)",
+      "TEMPLATE_IN_USE": "Dit sjabloon is al gebruikt om stukken te genereren: registreer een nieuwe versie in plaats van het te wijzigen (code: 2389)"
     }
   }
 }

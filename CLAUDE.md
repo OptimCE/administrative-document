@@ -157,6 +157,26 @@ bundles through `document-generation`. Read `README.md` for the domain.
 - **Correlate results by `docgen_request_id`, never by `metadata`** — metadata is
   data that round-tripped through another service. Tenancy comes from the row,
   which forces `_find_render_unscoped` to be the one unscoped read in the service.
+- **Drafts, finals, to sign** (phase 2). A generated piece renders as a DRAFT
+  stamped with `plugin.draft_watermark` (and `-brouillon` in its file name); a
+  collected one as TO_SIGN, unstamped, and stays MISSING until the signed upload
+  (FINAL, SIGNED). `POST /admin/dossiers/{id}/finalize` renders each reviewed
+  draft again from ITS OWN snapshot and template, unstamped; sending (and any
+  step change into SENT) refuses with 2385 while a supplied piece's current
+  version is not FINAL or a render is in flight. An upload is always FINAL.
+  The result handler refuses a draft whose result does not echo the watermark
+  (an older docgen ignores unknown options) and drops a result for a sent
+  procedure.
+- **A piece keeps its template**: pinned at birth (`engine/templates.py`,
+  `sync_pieces`) or at first render; `upgrade_template` re-pins explicitly.
+- **One click** (`POST /admin/dossiers/{id}/regenerate`): a fresh pre-fill plus
+  the reviewer's own edits, i.e. what the current version's snapshot holds and
+  its `prefill_json` did not (`domain/prefill.carry_over`). No `prefill_json`
+  (an upload, an older render) answers `needs_review`.
+- **Verify** (`…/versions/{vid}/verify`, criterion 2.1): the render slot with
+  `purpose=VERIFY` re-sends exactly what the version froze; the result lands in
+  `version_check` (identical, different with the renderer, failed), never as a
+  version. Allowed on a sent procedure.
 - `origin` describes how the CURRENT version was produced, so both the upload and
   the render path set it.
 

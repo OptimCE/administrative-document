@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.context_vars import current_internal_community_id
 from core.database.with_community import with_community_scope
 from core.errors.errors import ErrorException
+from engine.templates import template_in_force
 from shared.const import RenderPurpose, RenderState, VersionStage
 from shared.custom_errors import errors
 from shared.models.local_models import (
@@ -122,26 +123,13 @@ class AdministrativeDocumentRepository:
     async def get_current_template(
         self, *, region: int, doc_type: str
     ) -> DocumentTemplateModel | None:
-        """The form currently in force for this (region, doc_type).
-
-        A community override wins over the platform default — hence the ORDER BY
-        on ``id_community`` with NULLS LAST rather than a second query.
+        """The form currently in force for this (region, doc_type): the community's
+        own override first, then the platform default. The rule lives in the engine,
+        which pins a piece to it when the piece is born.
         """
-        stmt = (
-            select(DocumentTemplateModel)
-            .where(
-                _visible_row(DocumentTemplateModel)
-                & (DocumentTemplateModel.region == region)
-                & (DocumentTemplateModel.doc_type == doc_type)
-                & (DocumentTemplateModel.valid_to.is_(None))
-            )
-            .order_by(
-                DocumentTemplateModel.id_community.desc().nulls_last(),
-                DocumentTemplateModel.version.desc(),
-            )
-            .limit(1)
+        return await template_in_force(
+            self._session, id_community=_tenant_id(), region=region, doc_type=doc_type
         )
-        return (await self._session.execute(stmt)).scalar_one_or_none()
 
     # ---- renders (Phase 2) --------------------------------------------------
 

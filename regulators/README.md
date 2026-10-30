@@ -71,7 +71,8 @@ tests/regulators/<name>/       # its tests (not here: the images copy this tree)
    so adding a regulator never touches it. Anything can be limited to some
    variants with `variants: [...]`.
 3. **Plugin.** Implement `RegulatorPlugin` (`engine/contracts.py`): `code` (the
-   `community.regulator` value), `region`, `catalogue()`, `calendar()` (load
+   `community.regulator` value), `region`, `draft_watermark` (the text stamped on
+   a working draft, in the regulator's language), `catalogue()`, `calendar()` (load
    them with `load_catalogue` and `load_calendar`), and the four methods data
    cannot replace: `variant`, `required_documents`, `render_context` and
    `effects`. Codes of your own (steps, response types, variants, piece codes)

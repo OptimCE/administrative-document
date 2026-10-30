@@ -29,7 +29,11 @@ class NatsDocumentGeneration:
             "data": request.data,
             "key_prefix": request.key_prefix,
             "reply_to": request.reply_to,
-            "options": {"locale": request.locale, "presign_ttl": request.presign_ttl},
+            "options": {
+                "locale": request.locale,
+                "presign_ttl": request.presign_ttl,
+                "watermark": request.watermark,
+            },
             "metadata": request.metadata,
         }
         await self._js.publish(settings.DOCGEN_REQUEST_SUBJECT, json.dumps(body).encode())

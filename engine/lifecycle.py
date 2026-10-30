@@ -28,6 +28,7 @@ from engine.calendar import WorkingCalendar
 from engine.catalogue import ProcedureDefinition, step_event
 from engine.contracts import DocumentRequirement, RegulatorPlugin
 from engine.deadlines import due_date
+from engine.templates import template_in_force
 from shared.const import (
     DeadlineStatus,
     DocOrigin,
@@ -452,9 +453,22 @@ async def sync_pieces(
                 piece.required = requirement.required
                 piece.condition_json = condition
             continue
+        # Pinned at birth: the procedure keeps the form version of its
+        # creation. A received piece is never rendered.
+        template = (
+            await template_in_force(
+                session,
+                id_community=dossier.id_community,
+                region=dossier.region,
+                doc_type=requirement.code,
+            )
+            if requirement.kind != DocumentKind.RECEIVED
+            else None
+        )
         piece = DocumentModel(
             id_community=dossier.id_community,
             id_dossier=dossier.id,
+            id_template=template.id if template is not None else None,
             doc_type=requirement.code,
             origin=int(
                 DocOrigin.GENERATED

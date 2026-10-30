@@ -109,6 +109,8 @@ def _members(spec: DocumentSpec, procedure: ProcedureFacts) -> list[int] | None:
 class CwapePlugin:
     code = CODE
     region = "WAL"
+    # The CWaPE files its forms in French.
+    draft_watermark = "BROUILLON"
 
     def __init__(self) -> None:
         self._catalogue = load_catalogue(HERE / "catalogue", regulator=CODE)

@@ -61,6 +61,13 @@ class GenerateRequest(BaseModel):
     """
 
     data: dict[str, Any] = Field(default_factory=dict)
+    upgrade_template: bool = Field(
+        default=False,
+        description=(
+            "Render with the form in force today rather than the one the piece was "
+            "pinned to when its procedure was opened"
+        ),
+    )
 
 
 class GenerateAccepted(BaseModel):

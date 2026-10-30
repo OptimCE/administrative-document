@@ -19,6 +19,7 @@ from ports.events import EventPublisher
 # Re-exported because `dependency_overrides[deps.get_event_publisher]` keys on
 # this object.
 from ports.providers import get_event_publisher
+from regulators.registry import REGISTRY
 
 __all__ = ["get_administrative_document_service", "get_event_publisher"]
 
@@ -34,4 +35,5 @@ def get_administrative_document_service(
         repository=AdministrativeDocumentRepository(local_session),
         crm_read=SqlAlchemyCrmCoreRead(crm_session),
         publisher=publisher,
+        registry=REGISTRY,
     )

@@ -28,6 +28,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.admin import views
+from api.administrative_document.service import AdministrativeDocumentService
 from core.audit_log import AuditActions, AuditLogInput, AuditLogService
 from core.config import settings
 from core.errors.errors import ErrorException
@@ -56,6 +57,7 @@ from engine.lifecycle import (
     context_for,
     move_to_step,
     open_procedure,
+    pieces_of,
     start_rules,
     supply_piece,
 )
@@ -82,6 +84,7 @@ from shared.models.local_models import (
     CorrespondenceModel,
     DeadlineModel,
     DocumentModel,
+    DocumentRenderModel,
     DocumentVersionModel,
     DossierModel,
     ProcedureDefinitionModel,
@@ -94,6 +97,8 @@ if TYPE_CHECKING:  # the worker image has no starlette; this module is API-only 
 _READ_CHUNK_BYTES = 1024 * 1024
 # Entering a step of one of these releases the changes deferred out of it.
 _RELEASES_DEFERRED = (int(ProcedureStatus.SENT), int(ProcedureStatus.CANCELLED))
+# A piece the community has supplied: what goes out with the sending.
+_SUPPLIED = (int(ProcedureDocumentStatus.READY), int(ProcedureDocumentStatus.SIGNED))
 
 
 def _not_found(error=errors.admin.PROCEDURE_NOT_FOUND) -> ErrorException:
@@ -112,12 +117,14 @@ class ProcedureService:
         crm_session: AsyncSession,
         crm_read: EngineCrmRead,
         registry: PluginRegistry,
+        generation: AdministrativeDocumentService | None = None,
         region_of: RegionOf = region_for_regulator,
     ) -> None:
         self._local = local_session
         self._crm = crm_session
         self._crm_read = crm_read
         self._registry = registry
+        self._generation = generation
         self._region_of = region_of
         self._calendars: dict[str, WorkingCalendar] = {}
 
@@ -656,6 +663,8 @@ class ProcedureService:
         dossier, plugin, ctx = await self._load(id_community, dossier_id)
         if not ctx.definition.allows(str(dossier.step), to_step, dossier.variant):
             raise _conflict(errors.admin.TRANSITION_NOT_ALLOWED)
+        if ctx.definition.step(to_step).common_status == ProcedureStatus.SENT:
+            await self._require_finals(dossier)
         day = on or brussels_today(self._now())
         await move_to_step(
             self._local,
@@ -679,6 +688,124 @@ class ProcedureService:
         if dossier.status == int(ProcedureStatus.SENT) and dossier.frozen_at is None:
             dossier.frozen_at = datetime.datetime.combine(day, datetime.time(), BRUSSELS)
             dossier.submitted_at = dossier.frozen_at
+
+    async def _require_finals(self, dossier: DossierModel) -> None:
+        """What is sent the first time must be final: every piece the community
+        supplied has an unstamped current version, and no render is still in
+        flight (it would land on a frozen piece). Uploads are final; a received
+        piece comes later. A re-send changes no piece (they froze with the first
+        sending), so it is not checked again."""
+        if dossier.frozen_at is not None:
+            return
+        drafts = await self._local.scalar(
+            select(func.count())
+            .select_from(DocumentModel)
+            .join(DocumentVersionModel, DocumentVersionModel.id == DocumentModel.current_version_id)
+            .where(
+                DocumentModel.id_dossier == dossier.id,
+                DocumentModel.kind != int(DocumentKind.RECEIVED),
+                DocumentModel.status.in_(_SUPPLIED),
+                DocumentVersionModel.stage != int(VersionStage.FINAL),
+            )
+        )
+        in_flight = await self._local.scalar(
+            select(func.count())
+            .select_from(DocumentRenderModel)
+            .join(DocumentModel, DocumentModel.id == DocumentRenderModel.id_document)
+            .where(DocumentModel.id_dossier == dossier.id)
+        )
+        if drafts or in_flight:
+            raise _conflict(errors.admin.FINAL_VERSIONS_REQUIRED)
+
+    # -- generation -----------------------------------------------------------------
+
+    def _generator(self) -> AdministrativeDocumentService:
+        if self._generation is None:  # wired by api.admin.deps; a test may omit it
+            raise RuntimeError("ProcedureService was built without a generation service")
+        return self._generation
+
+    async def finalize(self, id_community: int, dossier_id: int) -> dict[str, list[int]]:
+        """Render the finals of a procedure whose pieces are complete: every
+        generated piece whose current version is a draft is rendered again from
+        that draft's own snapshot and template, unstamped. What the send dialog
+        offers as the pieces to attach."""
+        dossier, _plugin, _ctx = await self._load(id_community, dossier_id)
+        if dossier.frozen_at is not None or dossier.status != int(ProcedureStatus.READY):
+            raise _conflict(errors.admin.FINALIZE_NOT_ALLOWED)
+        requested, in_flight = [], []
+        for piece in await pieces_of(self._local, dossier):
+            if piece.kind != int(DocumentKind.GENERATED) or piece.status != int(
+                ProcedureDocumentStatus.READY
+            ):
+                continue
+            try:
+                if await self._generator().finalize(piece) is not None:
+                    requested.append(piece.id)
+            except ErrorException as exc:
+                if exc.error is not errors.admin.RENDER_ALREADY_IN_FLIGHT:
+                    raise
+                in_flight.append(piece.id)
+        return {"requested": requested, "in_flight": in_flight}
+
+    async def regenerate(
+        self, id_community: int, dossier_id: int, document_ids: Sequence[int] | None
+    ) -> dict[str, list[int]]:
+        """One click for the stale pieces (or the ones named): each is regenerated
+        from a fresh pre-fill with its reviewer's edits carried over. A piece
+        whose current version cannot say what was typed needs the review form."""
+        dossier, _plugin, _ctx = await self._load(id_community, dossier_id)
+        if dossier.frozen_at is not None:
+            raise _conflict(errors.admin.GENERATION_NOT_ALLOWED)
+        pieces = await pieces_of(self._local, dossier)
+        if document_ids is None:
+            targets = [
+                p
+                for p in pieces
+                if p.kind == int(DocumentKind.GENERATED)
+                and p.status == int(ProcedureDocumentStatus.STALE)
+            ]
+        else:
+            by_id = {p.id: p for p in pieces}
+            if any(i not in by_id for i in document_ids):
+                raise _not_found(errors.admin.PIECE_NOT_FOUND)
+            targets = [by_id[i] for i in dict.fromkeys(document_ids)]
+        outcome: dict[str, list[int]] = {"requested": [], "needs_review": [], "in_flight": []}
+        for piece in targets:
+            piece_id = piece.id
+            try:
+                await self._generator().regenerate(document_id=piece_id)
+                outcome["requested"].append(piece_id)
+            except ErrorException as exc:
+                if exc.error is errors.admin.REVIEW_REQUIRED:
+                    outcome["needs_review"].append(piece_id)
+                elif exc.error is errors.admin.RENDER_ALREADY_IN_FLIGHT:
+                    outcome["in_flight"].append(piece_id)
+                else:
+                    raise
+        return outcome
+
+    async def verify(
+        self, id_community: int, dossier_id: int, document_id: int, version_id: int
+    ) -> str:
+        """Regenerate one version from what it froze and compare the bytes; the
+        outcome lands in ``version_check``. Returns the docgen request id."""
+        dossier, _plugin, _ctx = await self._load(id_community, dossier_id)
+        piece = await self._local.scalar(
+            select(DocumentModel).where(
+                DocumentModel.id == document_id, DocumentModel.id_dossier == dossier.id
+            )
+        )
+        if piece is None:
+            raise _not_found(errors.admin.PIECE_NOT_FOUND)
+        version = await self._local.scalar(
+            select(DocumentVersionModel).where(
+                DocumentVersionModel.id == version_id,
+                DocumentVersionModel.id_document == piece.id,
+            )
+        )
+        if version is None:
+            raise _not_found(errors.admin.VERSION_NOT_FOUND)
+        return await self._generator().verify(piece, version)
 
     # -- files ----------------------------------------------------------------------
 
@@ -844,6 +971,7 @@ class ProcedureService:
         )
         if target is None:
             raise _conflict(errors.admin.TRANSITION_NOT_ALLOWED)
+        await self._require_finals(dossier)
         day = on or brussels_today(self._now())
         response = next(
             (
@@ -924,6 +1052,8 @@ class ProcedureService:
             return self._proposal(dossier, ctx, response.code, target, allowed, day)
         if not allowed:
             raise _conflict(errors.admin.TRANSITION_NOT_ALLOWED)
+        if target is not None and definition.step(target).common_status == ProcedureStatus.SENT:
+            await self._require_finals(dossier)
 
         message = await self._record(
             dossier,

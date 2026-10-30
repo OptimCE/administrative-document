@@ -30,10 +30,11 @@ async def register_bundle(db_session, *, doc_type="annex6_notification", uri=_BU
 
 
 async def retarget(db_session, document_id: int, doc_type: str) -> None:
-    """Point a piece at another template key: the state a catalogue may reach
-    (a form registered ahead of its bundle, or not registered at all)."""
+    """Point a piece at another template key, unpinned: the state a catalogue may
+    reach (a form registered ahead of its bundle, or not registered at all, when
+    the piece was born)."""
     await db_session.execute(
-        text("UPDATE document SET doc_type = :doc_type WHERE id = :id"),
+        text("UPDATE document SET doc_type = :doc_type, id_template = NULL WHERE id = :id"),
         {"doc_type": doc_type, "id": document_id},
     )
     await db_session.flush()

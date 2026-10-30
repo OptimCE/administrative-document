@@ -323,3 +323,36 @@ class CorrespondenceProposalOut(BaseModel):
     transition_allowed: bool
     deadlines_started: list[ProposalDeadlineOut]
     deadlines_met: list[str]
+
+
+class FinalizeOut(BaseModel):
+    """The finals asked of docgen (piece ids); a piece with a render in flight
+    is left for the client to retry. Each landing is signalled in realtime
+    (``admin.document.ready``)."""
+
+    requested: list[int]
+    in_flight: list[int]
+
+
+class RegenerateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_ids: list[int] | None = Field(
+        default=None, description="The pieces to regenerate; every stale one if omitted"
+    )
+
+
+class RegenerateOut(BaseModel):
+    """``needs_review``: the current version cannot say what the reviewer typed
+    (an upload, an older render), so the review form is the way."""
+
+    requested: list[int]
+    needs_review: list[int]
+    in_flight: list[int]
+
+
+class VerifyAccepted(BaseModel):
+    """The regeneration is asked of docgen; its outcome lands on the version
+    (``last_check`` in the procedure's detail) and is signalled in realtime."""
+
+    docgen_request_id: str
