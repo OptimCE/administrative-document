@@ -5,7 +5,13 @@
 #
 # submission: the 15 working days July recorded for a MODIFICATION dossier
 # (migration 0003 renamed those open deadlines to this code). wallonie.be no
-# longer states it; to confirm with the CWaPE (spec, "Risques").
+# longer states it, but the CWaPE's modification form (version of 27 June 2024,
+# bundle community_modification/v1) does, for the five changes it covers; the
+# others go to the annual report.
+#
+# channel: the form itself says it is deposited as a file on the CWaPE's secure
+# upload platform, not typed into an online form (spec, "Risques": to decide;
+# a different channel is a v2).
 code: CE_ACTUALISATION
 version: 1
 valid_from: 2026-01-01
