@@ -479,6 +479,37 @@ def _move(mover: ChangeModel, procedure: _Procedure | None) -> tuple[str, Any] |
 def _fold(
     row: _Row, current: Episode | None, procedures: Mapping[int, _Procedure]
 ) -> RowState | None:
+    state = _folded(row, current, procedures)
+    if state is not None and current is not None and _written_ahead(current, state):
+        return None
+    return state
+
+
+def _written_ahead(current: Episode, planned: RowState) -> bool:
+    """The core already holds what this very procedure's in-force write put
+    there, its step not taken yet (a crash between the two commits, which the
+    next effect run completes): planning it from the step before must not
+    undo it."""
+    if current.regulatory_ref != planned.ref:
+        return False
+    if planned.status == RegulatoryStatus.AUTHORIZED:
+        return (
+            current.regulatory_status == int(RegulatoryStatus.ACTIVE)
+            and planned.valid_from is not None
+            and current.valid_from == planned.valid_from
+        )
+    if planned.status == RegulatoryStatus.LEAVING:
+        return (
+            current.regulatory_status == int(RegulatoryStatus.ENDED)
+            and planned.valid_to is not None
+            and current.valid_to == planned.valid_to
+        )
+    return False
+
+
+def _folded(
+    row: _Row, current: Episode | None, procedures: Mapping[int, _Procedure]
+) -> RowState | None:
     base: RowState | object | None = _KEEP
     if row.owner is not None:
         base = _addition_state(

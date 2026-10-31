@@ -21,13 +21,24 @@ that community's day (the next run retries; every step is idempotent):
    OPEN and the next run re-sends (``dedupe_key`` collapses the duplicate email).
    Safe because this transaction writes deadlines only, which carry no deferred
    check.
-4. The effects due today, logged (phase 3 applies them).
+4. The effects due: each procedure whose effect date has come goes in force,
+   the core first (``engine.effects.go_in_force``). One the core refuses (an
+   EAN in another operation) stays where it is with the reason, and is tried
+   again the next day; one the catalogue cannot put in force is logged.
+5. The reconciliation: every procedure whose subjects may still move has its
+   badges re-planned (``engine.effects.sync``): what a failed sync, or a crash
+   between two commits, left behind is caught up here. Planning writes only
+   what differs, so a quiet day writes nothing.
 
 Realtime hints go out after the commits.
+
+``python -m worker.engine_jobs`` runs the day once, now, under the same lock:
+a catch-up after an outage, or a test that cannot wait for 06:00.
 """
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import logging
 from dataclasses import dataclass
@@ -57,8 +68,10 @@ from domain.regions import region_for_regulator
 from engine.activation import reconcile_activation
 from engine.baseline import brussels_today, ensure_baseline
 from engine.contracts import PluginRegistry, plugin_for
+from engine.effects import InForceError, go_in_force, sync, tracked_dossiers
 from engine.filing import RegionOf
 from engine.jobs import Chase, chase_deadlines, due_effects, open_calendar_procedures
+from ports.core_effects_sqlalchemy import SqlCoreEffects
 from ports.crm_engine import SqlEngineCrmRead
 from shared.const import DeadlineParty
 from shared.models.local_models import (
@@ -85,6 +98,9 @@ class DailyReport:
     late_answers: int = 0
     expired: int = 0
     effects_due: int = 0
+    effects_applied: int = 0
+    effects_blocked: int = 0
+    reconciled: int = 0
     failed: int = 0
 
 
@@ -194,16 +210,57 @@ async def _run_for(
     report.late_answers += len(chase.late_answers)
     report.expired += chase.expired
 
-    for procedure_id, deadline_id in effects:
-        logger.info(
-            "effect due: procedure %s, deadline %s (applied in phase 3)",
-            procedure_id,
-            deadline_id,
-        )
     report.effects_due += len(effects)
 
+    # 4. The effects due, core first, one procedure at a time.
+    effect_dates = await _effect_dates(local, effects)
+    applied = []
+    for procedure_id, effective in effect_dates:
+        try:
+            refused = await go_in_force(
+                local,
+                crm,
+                crm_read,
+                SqlCoreEffects(crm),
+                registry,
+                procedure_id,
+                effective_date=effective,
+                now=now,
+                context={"reason": "effect_date"},
+            )
+        except InForceError as exc:
+            await local.rollback()
+            logger.warning("effect due but not applicable: %s", exc)
+            continue
+        except Exception:
+            logger.exception("effect of procedure %s not applied", procedure_id)
+            await local.rollback()
+            await crm.rollback()
+            report.effects_blocked += 1
+            continue
+        if refused:
+            logger.warning("effect of procedure %s refused by the core: %s", procedure_id, refused)
+            report.effects_blocked += 1
+        else:
+            report.effects_applied += 1
+            applied.append(procedure_id)
+
+    # 5. The reconciliation of the badges, procedure by procedure.
+    for procedure_id in await tracked_dossiers(local, id_community):
+        if await sync(
+            local,
+            crm,
+            crm_read,
+            SqlCoreEffects(crm),
+            registry,
+            id_community,
+            [procedure_id],
+            now=now,
+        ):
+            report.reconciled += 1
+
     await notify.flush_realtime()
-    await _hint(id_community, opened, due)
+    await _hint(id_community, [*opened, *applied], due)
 
 
 async def _notify(
@@ -270,6 +327,22 @@ async def _notify(
             },
         )
     )
+
+
+async def _effect_dates(
+    local: AsyncSession, effects: list[tuple[int, int]]
+) -> list[tuple[int, datetime.date]]:
+    """(procedure id, the date it takes effect): the procedure's effect date,
+    or its effect deadline's (a procedure from before phase 3 has no date)."""
+    if not effects:
+        return []
+    rows = await local.execute(
+        select(DeadlineModel.id_dossier, DossierModel.effective_date, DeadlineModel.due_date)
+        .join(DossierModel, DossierModel.id == DeadlineModel.id_dossier)
+        .where(DeadlineModel.id.in_([deadline for _procedure, deadline in effects]))
+    )
+    dates = {int(d): effective or due for d, effective, due in rows.tuples()}
+    return [(procedure, dates[procedure]) for procedure, _d in effects if procedure in dates]
 
 
 async def _procedure_codes(local: AsyncSession, chase: Chase) -> dict[int, str | None]:
@@ -342,3 +415,17 @@ async def try_run_daily_jobs(
         finally:
             await lock.execute(select(func.pg_advisory_unlock(_JOBS_ADVISORY_LOCK_KEY)))
             await lock.commit()
+
+
+def main() -> int:
+    """``python -m worker.engine_jobs``: the day, once, now. Exit 1 when
+    another replica holds the lock."""
+    from core.logging import configure_logging
+    from regulators.registry import REGISTRY
+
+    configure_logging()
+    return 0 if asyncio.run(try_run_daily_jobs(REGISTRY)) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
