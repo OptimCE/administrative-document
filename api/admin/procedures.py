@@ -46,17 +46,18 @@ from engine.activation import reconcile_activation
 from engine.baseline import brussels_today, ensure_baseline
 from engine.calendar import WorkingCalendar
 from engine.catalogue import ProcedureDefinition, response_event, step_event
-from engine.contracts import PluginRegistry, RegulatorPlugin, plugin_for
+from engine.contracts import REMOVAL_KINDS, PluginRegistry, RegulatorPlugin, plugin_for
 from engine.deadlines import due_date
-from engine.effects import InForceError, StepOverride, go_in_force, sync
+from engine.effects import InForceError, StepOverride, go_in_force, is_tracked, sync
 from engine.effects import plan as plan_effects
-from engine.events import BRUSSELS
+from engine.events import BRUSSELS, DetectedChange
 from engine.filing import (
     OPEN,
     RegionOf,
     cancel_if_emptied,
     content_changed,
     context_of_procedure,
+    file_change,
     recompute,
     refile_change,
 )
@@ -81,6 +82,7 @@ from shared.const import (
     STORAGE_KEY_PREFIX,
     UPLOAD_MAX_BODY_BYTES,
     ChangeStatus,
+    ChangeSubjectType,
     Channel,
     CorrespondenceDirection,
     Counterparty,
@@ -116,6 +118,16 @@ _READ_CHUNK_BYTES = 1024 * 1024
 _RELEASES_DEFERRED = (int(ProcedureStatus.SENT), int(ProcedureStatus.CANCELLED))
 # A piece the community has supplied: what goes out with the sending.
 _SUPPLIED = (int(ProcedureDocumentStatus.READY), int(ProcedureDocumentStatus.SIGNED))
+# What a refiled change leaves behind: its row, its life in the refused one.
+_NOT_REFILED = (
+    "episode",
+    "baseline",
+    "refiled",
+    "refiled_from",
+    "excluded",
+    "deferred",
+    "superseded_by",
+)
 
 
 # Fixed, not wall-clock: the same finals make the same archive.
@@ -609,6 +621,7 @@ class ProcedureService:
             facts=await self._piece_facts(dossier, pieces),
             has_entry_sheet=any(plugin.entry_sheet(p.requirement_code) for p in pieces),
             episodes=await self._episodes(id_community, changes),
+            refusal=await self._refusal(dossier, ctx, changes),
         )
 
     async def _piece_facts(
@@ -873,6 +886,168 @@ class ProcedureService:
             )
             drafts.append(draft.id)
         return drafts
+
+    # -- after a refusal --------------------------------------------------------------
+
+    @staticmethod
+    def _refilable(dossier: DossierModel, changes: Sequence[ChangeModel]) -> list[ChangeModel]:
+        """A refused procedure's refused changes, or a lapsed one's still
+        attached, about a subject the core tracks, not refiled yet."""
+        wanted = {
+            int(ProcedureStatus.REFUSED): int(ChangeStatus.REFUSED),
+            int(ProcedureStatus.LAPSED): int(ChangeStatus.ATTACHED),
+        }.get(dossier.status)
+        if wanted is None:
+            return []
+        return [
+            c
+            for c in changes
+            if c.status == wanted and is_tracked(c) and not (c.payload_json or {}).get("refiled")
+        ]
+
+    async def _present(
+        self, dossier: DossierModel, changes: Sequence[ChangeModel], *, on: datetime.date
+    ) -> dict[int, bool]:
+        """Is the CRM still as each change says? An addition: the meter is in
+        the operation, the key is its key. A removal: the meter is gone."""
+        operation = dossier.id_sharing_operation
+        if operation is None or not changes:
+            return {}
+        meters = await self._crm_read.meters_in_operation(
+            dossier.id_community,
+            operation,
+            [c.subject_ref for c in changes if c.subject_type == int(ChangeSubjectType.METER)],
+            on=on,
+        )
+        key = await self._crm_read.current_key(dossier.id_community, operation, on=on)
+        present = {}
+        for change in changes:
+            if change.subject_type == int(ChangeSubjectType.KEY):
+                present[change.id] = str(key) == change.subject_ref
+            elif change.kind in REMOVAL_KINDS:
+                present[change.id] = change.subject_ref not in meters
+            else:
+                present[change.id] = change.subject_ref in meters
+        return present
+
+    async def _refusal(
+        self, dossier: DossierModel, ctx: ProcedureContext, changes: Sequence[ChangeModel]
+    ) -> dict[str, Any] | None:
+        refilable = self._refilable(dossier, changes)
+        if not refilable:
+            return None
+        draft = await self._local.scalar(
+            select(DossierModel.id).where(
+                DossierModel.id_community == dossier.id_community,
+                DossierModel.family == ctx.definition.family,
+                DossierModel.status.in_(OPEN),
+                DossierModel.id_sharing_operation.is_not_distinct_from(
+                    dossier.id_sharing_operation
+                ),
+            )
+        )
+        return {
+            "changes": [c.id for c in refilable],
+            "id_sharing_operation": dossier.id_sharing_operation,
+            "draft_id": draft,
+            "present": await self._present(dossier, refilable, on=brussels_today(self._now())),
+        }
+
+    async def refile(
+        self,
+        id_community: int,
+        dossier_id: int,
+        *,
+        change_ids: Sequence[int] | None,
+        actor: str,
+    ) -> dict[str, Any]:
+        """« Corriger et renvoyer »: each refused change filed again, as a new
+        change (no source event, so UNIQUE never bites; ``refiled_from`` says
+        where it comes from), through the same filing as an event, into the
+        family's open draft. The refused one is marked ``refiled`` and stays
+        as it was, history."""
+        dossier, plugin, ctx = await self._load(id_community, dossier_id)
+        changes = list(
+            await self._local.scalars(
+                select(ChangeModel)
+                .where(ChangeModel.id_dossier == dossier.id)
+                .order_by(ChangeModel.id)
+            )
+        )
+        refilable = {c.id: c for c in self._refilable(dossier, changes)}
+        chosen = list(refilable.values()) if change_ids is None else []
+        for change_id in change_ids or ():
+            if change_id not in refilable:
+                raise _conflict(errors.admin.NOT_REFILABLE)
+            chosen.append(refilable[change_id])
+        if not chosen:
+            raise _conflict(errors.admin.NOT_REFILABLE)
+        now = self._now()
+        today = brussels_today(now)
+        present = await self._present(dossier, chosen, on=today)
+        if not all(present.get(c.id) for c in chosen):
+            raise _conflict(errors.admin.SUBJECT_NOT_IN_OPERATION)
+
+        drafts: list[int] = []
+        new_changes: list[int] = []
+        for change in chosen:
+            entry = next(
+                (
+                    e
+                    for e in plugin.catalogue().handling(change.kind, today)
+                    if e.definition.family == ctx.definition.family
+                ),
+                None,
+            )
+            if entry is None:
+                raise _conflict(errors.admin.NOT_REFILABLE)
+            payload = {
+                k: v for k, v in (change.payload_json or {}).items() if k not in _NOT_REFILED
+            }
+            try:
+                filed = await file_change(
+                    self._local,
+                    plugin,
+                    entry,
+                    DetectedChange(
+                        kind=change.kind,
+                        subject_type=ChangeSubjectType(change.subject_type),
+                        subject_ref=change.subject_ref,
+                        id_sharing_operation=change.id_sharing_operation,
+                        payload={**payload, "refiled_from": change.id},
+                    ),
+                    id_community=id_community,
+                    day=today,
+                    at=now,
+                    source_event_id=None,
+                    region_of=self._region_of,
+                    context={"reason": "refiled", "from": dossier_id},
+                )
+            except IntegrityError:
+                await self._local.rollback()
+                raise _conflict(errors.admin.DRAFT_EXISTS) from None
+            if filed is None:
+                raise _conflict(errors.admin.NOT_REFILABLE)
+            drafts.append(filed[0])
+            new_changes.append(filed[1])
+            change.payload_json = {
+                **(change.payload_json or {}),
+                "refiled": {
+                    "into": filed[0],
+                    "change": filed[1],
+                    "by": actor,
+                    "at": now.isoformat(),
+                },
+            }
+        await self._local.commit()
+        await self._audit_ids(
+            AuditActions.DOSSIER_UPDATED,
+            id_community,
+            dossier_id,
+            {"refiled": [c.id for c in chosen], "into": sorted(set(drafts))},
+        )
+        await self._after(id_community, [dossier_id, *drafts])
+        return {"id_dossier": drafts[-1], "changes": new_changes}
 
     # -- steps ----------------------------------------------------------------------
 

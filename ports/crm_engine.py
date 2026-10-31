@@ -136,6 +136,24 @@ class EngineCrmRead(Protocol):
         """The operation's key episodes that are active: what a new key ends."""
         ...
 
+    async def meters_in_operation(
+        self,
+        id_community: int,
+        id_sharing_operation: int,
+        eans: Sequence[str],
+        *,
+        on: datetime.date,
+    ) -> set[str]:
+        """The ``eans`` the CRM attributes to the operation on day ``on``, at
+        any status but inactive (one waiting for its GRD is there)."""
+        ...
+
+    async def current_key(
+        self, id_community: int, id_sharing_operation: int, *, on: datetime.date
+    ) -> int | None:
+        """The operation's approved key on day ``on``."""
+        ...
+
 
 _MODULE_STATE_SQL = text(
     "SELECT c.regulator, s.is_active, s.updated_at "
@@ -223,8 +241,26 @@ _ACTIVE_KEYS_SQL = text(
     "ORDER BY id"
 )
 
-# meter_data.status of an active attribution (MeterDataStatus.ACTIVE).
+# meter_data.status of an active attribution (MeterDataStatus.ACTIVE), and of
+# one the meter left (MeterDataStatus.INACTIVE).
 _ACTIVE_METER_DATA = 1
+_INACTIVE_METER_DATA = 2
+
+_IN_OPERATION_SQL = text(
+    "SELECT DISTINCT md.ean FROM meter_data md "
+    "WHERE md.id_community = :id_community AND md.id_sharing_operation = :id_sharing_operation "
+    "  AND md.ean IN :eans AND md.status <> :inactive "
+    "  AND (md.start_date IS NULL OR md.start_date <= :on) "
+    "  AND (md.end_date IS NULL OR md.end_date >= :on)"
+).bindparams(bindparam("eans", expanding=True))
+
+_CURRENT_KEY_SQL = text(
+    "SELECT sok.id_key FROM sharing_operation_key sok "
+    "WHERE sok.id_community = :id_community AND sok.id_sharing_operation = :id_sharing_operation "
+    "  AND sok.status = 1 AND sok.start_date <= :on "
+    "  AND (sok.end_date IS NULL OR sok.end_date >= :on) "
+    "ORDER BY sok.start_date DESC, sok.id DESC LIMIT 1"
+)
 
 
 class SqlEngineCrmRead:
@@ -352,6 +388,37 @@ class SqlEngineCrmRead:
             )
         ).first()
         return _episode(row) if row is not None else None
+
+    async def meters_in_operation(
+        self,
+        id_community: int,
+        id_sharing_operation: int,
+        eans: Sequence[str],
+        *,
+        on: datetime.date,
+    ) -> set[str]:
+        if not eans:
+            return set()
+        result = await self._session.execute(
+            _IN_OPERATION_SQL,
+            {
+                "id_community": id_community,
+                "id_sharing_operation": id_sharing_operation,
+                "eans": list(eans),
+                "inactive": _INACTIVE_METER_DATA,
+                "on": on,
+            },
+        )
+        return {str(ean) for ean in result.scalars()}
+
+    async def current_key(
+        self, id_community: int, id_sharing_operation: int, *, on: datetime.date
+    ) -> int | None:
+        key = await self._session.scalar(
+            _CURRENT_KEY_SQL,
+            {"id_community": id_community, "id_sharing_operation": id_sharing_operation, "on": on},
+        )
+        return int(key) if key is not None else None
 
     async def active_keys(self, id_community: int, id_sharing_operation: int) -> list[Episode]:
         result = await self._session.execute(

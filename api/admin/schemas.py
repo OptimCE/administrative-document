@@ -200,6 +200,22 @@ class ChangeOut(BaseModel):
     refiled_into: int | None = Field(
         default=None, description="The procedure this refused change was refiled into"
     )
+    in_operation: bool | None = Field(
+        default=None,
+        description="A refused change: is the CRM still so (the meter in the "
+        "operation, the key current)? None when not asked",
+    )
+
+
+class RefusalOut(BaseModel):
+    """A refused (or lapsed) procedure's offer: withdraw the subjects in the
+    CRM, or correct and refile them (``POST .../refile``)."""
+
+    changes: list[int] = Field(description="The changes that can still be refiled")
+    id_sharing_operation: int | None = None
+    draft_id: int | None = Field(
+        default=None, description="The family's open draft a refile would join"
+    )
 
 
 class EffectErrorOut(BaseModel):
@@ -322,6 +338,7 @@ class ProcedureDetailOut(ProcedureItemOut):
         description="Every supplied piece is final and nothing renders: it can be sent"
     )
     has_entry_sheet: bool = Field(description="A piece has a fiche de saisie (GET .../entry-sheet)")
+    refusal: RefusalOut | None = None
 
 
 class EntryFieldOut(BaseModel):
@@ -384,6 +401,19 @@ class ChangeExcludeIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(min_length=1, max_length=500)
+
+
+class RefileIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    change_ids: list[int] | None = Field(
+        default=None, description="Which refused changes; all of them if omitted"
+    )
+
+
+class RefileOut(BaseModel):
+    id_dossier: int = Field(description="The draft they were filed into")
+    changes: list[int] = Field(description="The new changes, one per refiled change")
 
 
 class TransitionIn(BaseModel):

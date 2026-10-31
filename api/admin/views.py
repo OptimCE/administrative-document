@@ -256,9 +256,11 @@ def detail(
     facts: PieceFacts | None = None,
     has_entry_sheet: bool = False,
     episodes: Mapping[int, Episode] | None = None,
+    refusal: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     facts = facts or PieceFacts()
     episodes = episodes or {}
+    present = (refusal or {}).get("present", {})
     active = [c for c in changes if c.status == int(ChangeStatus.ATTACHED)]
     view = item(
         dossier,
@@ -370,12 +372,18 @@ def detail(
                 **_regulatory(episodes.get(c.id)),
                 "refiled_from": c.payload_json.get("refiled_from"),
                 "refiled_into": (c.payload_json.get("refiled") or {}).get("into"),
+                "in_operation": present.get(c.id),
             }
             for c in changes
         ],
         "pieces": [piece_out(p, definition, facts, versions.get(p.id, 0)) for p in pieces],
         "finals_ready": facts.finals_ready(pieces),
         "has_entry_sheet": has_entry_sheet,
+        "refusal": (
+            {k: refusal[k] for k in ("changes", "id_sharing_operation", "draft_id")}
+            if refusal
+            else None
+        ),
         "deadlines": [
             deadline_item(
                 d, dossier, definition, calendar, today=today, operation_names=operation_names

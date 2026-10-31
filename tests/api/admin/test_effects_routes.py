@@ -20,10 +20,16 @@ from engine.events import BRUSSELS
 from engine.routing import route_event
 from ports.crm_engine import SqlEngineCrmRead
 from regulators.cwape.plugin import CwapePlugin
-from shared.const import ChangeStatus, DeadlineStatus, ProcedureStatus, RegulatoryStatus
+from shared.const import (
+    ChangeStatus,
+    DeadlineStatus,
+    EventOutcome,
+    ProcedureStatus,
+    RegulatoryStatus,
+)
 from shared.models.local_models import ChangeModel, DeadlineModel, DossierModel
 from tests.conftest import create_sharing_operation, gateway_headers
-from tests.engine.world import EAN, make_world, meter
+from tests.engine.world import EAN, add_meter, make_world, meter
 from worker.engine_jobs import run_daily_jobs
 
 pytestmark = pytest.mark.asyncio
@@ -440,3 +446,118 @@ class TestIntoForceByHand:
         body = response.json()
         assert (body["error_code"], body["conflicts"]) == (2391, [EAN[0]])
         assert (await _procedure(db_session, dossier_id)).step == "amendment_signed"
+
+
+# -- criterion 3.3: a refusal, and what it offers ------------------------------------
+
+
+async def _refused(client, db_session, world) -> int:
+    """A meter added, sent, at the CWaPE, refused. The meter is in the CRM."""
+    headers = await _headers(db_session, world)
+    dossier_id = await _file(world, "operation.meter_added", EAN[0])
+    await add_meter(world, EAN[0])  # after the first event: not on the baseline
+    await _complete_and_send(client, headers, dossier_id)
+    for type_ in ("completeness_ack", "technical_opinion", "decision_refused"):
+        detail = await _respond(client, headers, dossier_id, type_)
+    assert detail["step"] == "refused"
+    return dossier_id
+
+
+async def _refile(client, headers, dossier_id: int, **body):
+    return await client.post(f"/admin/dossiers/{dossier_id}/refile", json=body, headers=headers)
+
+
+class TestCriterion33:
+    """Acceptance criterion 3.3: a refusal moves the items to « Refusé » and
+    offers to withdraw them (in the CRM) or to correct and refile them."""
+
+    async def test_a_refusal_shows_refused_and_offers_to_withdraw_or_correct(
+        self, client, db_session, admin_storage
+    ):
+        world = await _world(db_session)
+        headers = await _headers(db_session, world)
+        dossier_id = await _refused(client, db_session, world)
+
+        detail = await _get(client, headers, dossier_id)
+
+        (change,) = detail["changes"]
+        assert change["status"] == int(ChangeStatus.REFUSED)
+        assert change["regulatory_status"] == int(RegulatoryStatus.REFUSED)
+        assert change["in_operation"] is True  # still in the CRM: withdraw it there, or refile
+        assert detail["refusal"] == {
+            "changes": [change["id"]],
+            "id_sharing_operation": world.operation,
+            "draft_id": None,
+        }
+        assert (await _core_row(db_session, world, EAN[0]))["regulatory_status"] == int(
+            RegulatoryStatus.REFUSED
+        )
+
+    async def test_correcting_files_them_again_into_a_new_draft(
+        self, client, db_session, admin_storage
+    ):
+        world = await _world(db_session)
+        headers = await _headers(db_session, world)
+        dossier_id = await _refused(client, db_session, world)
+        (old,) = (await _get(client, headers, dossier_id))["changes"]
+
+        response = await _refile(client, headers, dossier_id)
+
+        assert response.status_code == 200, response.text
+        refiled = response.json()["data"]
+        draft = await _get(client, headers, refiled["id_dossier"])
+        (new,) = draft["changes"]
+        assert refiled["changes"] == [new["id"]]
+        assert (draft["step"], draft["code"]) == ("draft", "PARTAGE_MODIF")
+        assert (new["status"], new["refiled_from"]) == (int(ChangeStatus.ATTACHED), old["id"])
+        assert new["regulatory_status"] == int(RegulatoryStatus.TO_NOTIFY)
+        refused = await _get(client, headers, dossier_id)
+        assert refused["changes"][0]["refiled_into"] == refiled["id_dossier"]
+        assert refused["changes"][0]["regulatory_status"] == int(RegulatoryStatus.REFUSED)
+        assert refused["refusal"] is None  # nothing left to refile
+        again = await _refile(client, headers, dossier_id)
+        assert (again.status_code, again.json()["error_code"]) == (409, 2392)
+
+    async def test_withdrawn_in_the_crm_there_is_nothing_to_notify_nor_to_refile(
+        self, client, db_session, admin_storage
+    ):
+        world = await _world(db_session)
+        headers = await _headers(db_session, world)
+        dossier_id = await _refused(client, db_session, world)
+        await db_session.execute(
+            text("UPDATE meter_data SET status = 2 WHERE ean = :ean"), {"ean": EAN[0]}
+        )
+
+        removed = await route_event(
+            meter(world, "operation.meter_removed", EAN[0]),
+            local=world.session,
+            crm=SqlEngineCrmRead(world.session),
+            registry=world.registry,
+        )
+
+        assert removed.outcome == EventOutcome.ALREADY_REFLECTED
+        detail = await _get(client, headers, dossier_id)
+        assert detail["changes"][0]["in_operation"] is False  # « Retiré »
+        refused = await _refile(client, headers, dossier_id)
+        assert (refused.status_code, refused.json()["error_code"]) == (409, 2393)
+
+    async def test_a_refused_removal_leaves_the_meter_as_it_was(
+        self, client, db_session, admin_storage
+    ):
+        world = await _world(db_session)
+        headers = await _headers(db_session, world)
+        await add_meter(world, EAN[0])
+        response = await client.post(
+            "/admin/baseline/confirm", json={"choices": []}, headers=headers
+        )
+        assert response.status_code == 200, response.text
+        before = await _core_row(db_session, world, EAN[0])
+        assert before["regulatory_status"] == int(RegulatoryStatus.ACTIVE)
+        dossier_id = await _file(world, "operation.meter_removed", EAN[0])
+        sent = await _complete_and_send(client, headers, dossier_id)
+        assert _badge(sent)[0] == int(RegulatoryStatus.LEAVING)
+
+        detail = await _respond(client, headers, dossier_id, "decision_refused")
+
+        assert detail["step"] == "refused"
+        assert await _core_row(db_session, world, EAN[0]) == before

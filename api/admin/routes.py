@@ -30,6 +30,8 @@ from api.admin.schemas import (
     ProcedureDefinitionOut,
     ProcedureDetailOut,
     ProcedureItemOut,
+    RefileIn,
+    RefileOut,
     RegenerateIn,
     RegenerateOut,
     StatusOut,
@@ -251,6 +253,19 @@ async def exclude_change(
         _community(), dossier_id, change_id, reason=body.reason, actor=_actor()
     )
     return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.post("/dossiers/{dossier_id}/refile", response_model=ApiResponse[RefileOut])
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def refile_changes(dossier_id: int, body: RefileIn, service: ProceduresDep):
+    """« Corriger et renvoyer »: file a refused (or lapsed) procedure's changes
+    again, as new changes, into the family's open draft (created if none). The
+    refused procedure keeps its own, refused, as they were. 409 (2392) for a
+    change that cannot be refiled, (2393) when the CRM no longer holds it so."""
+    refiled = await service.refile(
+        _community(), dossier_id, change_ids=body.change_ids, actor=_actor()
+    )
+    return ApiResponse(data=RefileOut.model_validate(refiled))
 
 
 @admin_routes.post(
