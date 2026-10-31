@@ -43,6 +43,7 @@ def get_procedure_service(
         local_session=local_session,
         crm_session=crm_session,
         crm_read=SqlEngineCrmRead(crm_session),
+        effects=SqlCoreEffects(crm_session),
         registry=registry,
         generation=generation,
     )

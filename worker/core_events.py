@@ -14,10 +14,16 @@ with their own sessions. Ack matrix, decided by ``subscribe``:
 - anything else (a database hiccup, a catalogue not synced yet): nak with a
   delay; after ``_MAX_DELIVER`` deliveries, park it and ack. The broker's own
   ``max_deliver`` is one higher, so the handler's DLQ always runs first.
+
+Once filed (committed), the procedures it touched have their badges brought
+in line in the core (``engine.effects.sync``): a consequence of the filing,
+never a reason to redeliver it, so a failure there is kept on the procedures
+for the daily reconciliation instead.
 """
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -32,8 +38,10 @@ from core.database.database import AsyncSessionCRMFactory, AsyncSessionLocalFact
 from core.queue.helper import subscribe_durable
 from core.realtime import CommunityAudience, Tier, emit
 from engine.contracts import PluginRegistry
+from engine.effects import sync
 from engine.events import CoreEvent, EventError
 from engine.routing import DuplicateEventError, RoutingResult, route_event
+from ports.core_effects_sqlalchemy import SqlCoreEffects
 from ports.crm_engine import SqlEngineCrmRead
 from shared.const import CORE_EVENTS_SUBJECT, EventOutcome
 from worker.context import with_tenant
@@ -89,6 +97,17 @@ async def process_core_event(
                 return POISON
             if own_local:
                 await local.commit()
+            if result.dossiers:
+                await sync(
+                    local,
+                    crm,
+                    SqlEngineCrmRead(crm),
+                    SqlCoreEffects(crm),
+                    registry,
+                    event.id_community,
+                    result.dossiers,
+                    now=datetime.datetime.now(datetime.UTC),
+                )
     finally:
         if own_local:
             await local.close()

@@ -259,16 +259,33 @@ async def exclude_change(
 @with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
 async def transition_procedure(dossier_id: int, body: TransitionIn, service: ProceduresDep):
     """A step change by hand, along one of the catalogue's edges, with its
-    reason (journaled)."""
-    view = await service.transition(
-        _community(),
-        dossier_id,
-        to_step=body.to_step,
-        reason=body.reason,
-        on=body.on,
-        actor=_actor(),
-    )
+    reason (journaled). Into force, the core is written first, on ``on`` (or
+    the effect date): a 409 (2391) lists the EANs it refused, and the
+    procedure stays where it was."""
+    try:
+        view = await service.transition(
+            _community(),
+            dossier_id,
+            to_step=body.to_step,
+            reason=body.reason,
+            on=body.on,
+            actor=_actor(),
+        )
+    except EffectConflictError as exc:
+        return _effect_conflict(exc)
     return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+def _effect_conflict(exc: EffectConflictError) -> JSONResponse:
+    error = errors.admin.EFFECT_CONFLICT
+    return JSONResponse(
+        status_code=409,
+        content={
+            "data": translate(error.key, locale=current_locale.get()),
+            "error_code": error.code,
+            "conflicts": exc.subjects,
+        },
+    )
 
 
 @admin_routes.post(

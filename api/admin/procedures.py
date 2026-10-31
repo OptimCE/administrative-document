@@ -12,7 +12,10 @@ The rules enforced here:
   the procedure's variant;
 - ``dry_run`` on a response computes its consequences and writes nothing;
 - a change deferred to "the next procedure" moves into the family's next
-  draft once this one is sent or cancelled.
+  draft once this one is sent or cancelled;
+- after the commits, the core's badges follow (``engine.effects.sync``, which
+  never fails the action) and the screens are told to refetch; a step into
+  force goes through ``engine.effects.go_in_force``, the core first.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from api.administrative_document.service import AdministrativeDocumentService
 from core.audit_log import AuditActions, AuditLogInput, AuditLogService
 from core.config import settings
 from core.errors.errors import ErrorException
+from core.realtime import CommunityAudience, Tier, emit
 from core.storage import build_s3_uri, download, parse_s3_uri, upload
 from domain.regions import region_for_regulator
 from engine.activation import reconcile_activation
@@ -44,6 +48,8 @@ from engine.calendar import WorkingCalendar
 from engine.catalogue import ProcedureDefinition, response_event, step_event
 from engine.contracts import PluginRegistry, RegulatorPlugin, plugin_for
 from engine.deadlines import due_date
+from engine.effects import InForceError, StepOverride, go_in_force, sync
+from engine.effects import plan as plan_effects
 from engine.events import BRUSSELS
 from engine.filing import (
     OPEN,
@@ -56,9 +62,11 @@ from engine.filing import (
 )
 from engine.lifecycle import (
     UNRESOLVED,
+    EffectsNotWrittenError,
     ProcedureContext,
     close_rules,
     context_for,
+    effect_date,
     move_to_step,
     open_procedure,
     pieces_of,
@@ -66,8 +74,9 @@ from engine.lifecycle import (
     supply_piece,
 )
 from engine.templates import template_in_force
+from ports.core_effects import CoreEffectsPort, EffectConflictError
 from ports.crm_core_sqlalchemy import SqlAlchemyCrmCoreRead
-from ports.crm_engine import EngineCrmRead
+from ports.crm_engine import EngineCrmRead, Episode
 from shared.const import (
     STORAGE_KEY_PREFIX,
     UPLOAD_MAX_BODY_BYTES,
@@ -75,6 +84,7 @@ from shared.const import (
     Channel,
     CorrespondenceDirection,
     Counterparty,
+    DeadlineKind,
     DocOrigin,
     DocumentKind,
     OpenedBy,
@@ -160,6 +170,7 @@ class ProcedureService:
         local_session: AsyncSession,
         crm_session: AsyncSession,
         crm_read: EngineCrmRead,
+        effects: CoreEffectsPort,
         registry: PluginRegistry,
         generation: AdministrativeDocumentService | None = None,
         region_of: RegionOf = region_for_regulator,
@@ -167,6 +178,7 @@ class ProcedureService:
         self._local = local_session
         self._crm = crm_session
         self._crm_read = crm_read
+        self._effects = effects
         self._registry = registry
         self._generation = generation
         self._region_of = region_of
@@ -229,13 +241,54 @@ class ProcedureService:
         return dossier, plugin, await context_of_procedure(self._local, plugin, dossier)
 
     async def _audit(self, action: str, dossier: DossierModel, payload: dict[str, Any]) -> None:
+        await self._audit_ids(action, dossier.id_community, dossier.id, payload)
+
+    async def _audit_ids(
+        self, action: str, id_community: int, dossier_id: int, payload: dict[str, Any]
+    ) -> None:
         await AuditLogService(self._crm).log(
             AuditLogInput(
-                action=action, entity_type="dossier", entity_id=str(dossier.id), payload=payload
+                action=action, entity_type="dossier", entity_id=str(dossier_id), payload=payload
             ),
-            id_community=dossier.id_community,
+            id_community=id_community,
         )
         await self._crm.commit()
+
+    async def _after(self, id_community: int, dossier_ids: Sequence[int]) -> None:
+        """After the commits: the core's badges for these procedures (never
+        raising: a failure stays on them for the daily reconciliation), then
+        the hint that makes their screens refetch."""
+        ids = sorted(set(dossier_ids))
+        await sync(
+            self._local,
+            self._crm,
+            self._crm_read,
+            self._effects,
+            self._registry,
+            id_community,
+            ids,
+            now=self._now(),
+        )
+        audience = CommunityAudience(id_community, Tier.MANAGER)
+        for dossier_id in ids:
+            await emit(
+                topic="admin.dossier.updated",
+                audience=audience,
+                resource=("dossier", dossier_id),
+                scope_community_id=id_community,
+            )
+
+    async def _episodes(
+        self, id_community: int, changes: Sequence[ChangeModel]
+    ) -> dict[int, Episode]:
+        """The core row each change's pin names, by change id."""
+        keys = {
+            c.id: (int(pin["origin"]), c.subject_type, c.subject_ref)
+            for c in changes
+            if isinstance(pin := (c.payload_json or {}).get("episode"), dict) and "origin" in pin
+        }
+        rows = await self._crm_read.episode_rows(id_community, list(keys.values()))
+        return {change_id: rows[key] for change_id, key in keys.items() if key in rows}
 
     # -- reads ------------------------------------------------------------------
 
@@ -555,6 +608,7 @@ class ProcedureService:
             version_rows=version_rows,
             facts=await self._piece_facts(dossier, pieces),
             has_entry_sheet=any(plugin.entry_sheet(p.requirement_code) for p in pieces),
+            episodes=await self._episodes(id_community, changes),
         )
 
     async def _piece_facts(
@@ -773,7 +827,8 @@ class ProcedureService:
         await recompute(self._local, ctx, dossier)
         await self._local.commit()
         await self._audit(AuditActions.CHANGE_DEFERRED, dossier, {"change": change.id})
-        return await self.procedure(id_community, dossier.id)
+        await self._after(id_community, [dossier_id])
+        return await self.procedure(id_community, dossier_id)
 
     async def exclude_change(
         self, id_community: int, dossier_id: int, change_id: int, *, reason: str, actor: str
@@ -794,13 +849,15 @@ class ProcedureService:
         await self._audit(
             AuditActions.CHANGE_EXCLUDED, dossier, {"change": change.id, "reason": reason}
         )
-        return await self.procedure(id_community, dossier.id)
+        await self._after(id_community, [dossier_id])
+        return await self.procedure(id_community, dossier_id)
 
     async def _release_deferred(
         self, plugin: RegulatorPlugin, dossier: DossierModel, day: datetime.date
-    ) -> None:
+    ) -> list[int]:
+        """The drafts the deferred changes went to."""
         if dossier.status not in _RELEASES_DEFERRED:
-            return
+            return []
         deferred = list(
             await self._local.scalars(
                 select(ChangeModel).where(
@@ -809,8 +866,13 @@ class ProcedureService:
                 )
             )
         )
+        drafts = []
         for change in deferred:
-            await refile_change(self._local, plugin, change, day=day, region_of=self._region_of)
+            draft = await refile_change(
+                self._local, plugin, change, day=day, region_of=self._region_of
+            )
+            drafts.append(draft.id)
+        return drafts
 
     # -- steps ----------------------------------------------------------------------
 
@@ -827,7 +889,17 @@ class ProcedureService:
         dossier, plugin, ctx = await self._load(id_community, dossier_id)
         if not ctx.definition.allows(str(dossier.step), to_step, dossier.variant):
             raise _conflict(errors.admin.TRANSITION_NOT_ALLOWED)
-        if ctx.definition.step(to_step).common_status == ProcedureStatus.SENT:
+        target = ctx.definition.step(to_step).common_status
+        if target == ProcedureStatus.IN_FORCE:
+            return await self._in_force(
+                id_community,
+                dossier_id,
+                to_step=to_step,
+                effective=on or dossier.effective_date or brussels_today(self._now()),
+                reason=reason,
+                actor=actor,
+            )
+        if target == ProcedureStatus.SENT:
             await self._require_finals(dossier)
         day = on or brussels_today(self._now())
         await move_to_step(
@@ -840,12 +912,53 @@ class ProcedureService:
             context={"reason": reason, "manual": True},
         )
         self._freeze_if_sent(dossier, day)
-        await self._release_deferred(plugin, dossier, day)
+        released = await self._release_deferred(plugin, dossier, day)
         await self._local.commit()
         await self._audit(
             AuditActions.DOSSIER_STATUS_CHANGED, dossier, {"to_step": to_step, "reason": reason}
         )
-        return await self.procedure(id_community, dossier.id)
+        await self._after(id_community, [dossier_id, *released])
+        return await self.procedure(id_community, dossier_id)
+
+    async def _in_force(
+        self,
+        id_community: int,
+        dossier_id: int,
+        *,
+        to_step: str,
+        effective: datetime.date,
+        reason: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """By hand into force: the core first, as the effect job does. Raises
+        ``EffectConflictError`` (the route's 409 lists the EANs) when the core
+        refuses; the procedure then stays where it was."""
+        try:
+            refused = await go_in_force(
+                self._local,
+                self._crm,
+                self._crm_read,
+                self._effects,
+                self._registry,
+                dossier_id,
+                effective_date=effective,
+                now=self._now(),
+                to_step=to_step,
+                actor=actor,
+                context={"reason": reason, "manual": True},
+            )
+        except InForceError:
+            raise _conflict(errors.admin.TRANSITION_NOT_ALLOWED) from None
+        if refused:
+            raise EffectConflictError(refused)
+        await self._audit_ids(
+            AuditActions.DOSSIER_STATUS_CHANGED,
+            id_community,
+            dossier_id,
+            {"to_step": to_step, "reason": reason, "effective_date": effective.isoformat()},
+        )
+        await self._after(id_community, [dossier_id])
+        return await self.procedure(id_community, dossier_id)
 
     @staticmethod
     def _freeze_if_sent(dossier: DossierModel, day: datetime.date) -> None:
@@ -1176,12 +1289,13 @@ class ProcedureService:
                 self._local, ctx, dossier, event, anchor=day, correspondence_id=message.id
             )
         self._freeze_if_sent(dossier, day)
-        await self._release_deferred(plugin, dossier, day)
+        released = await self._release_deferred(plugin, dossier, day)
         await self._local.commit()
         await self._audit(
             AuditActions.DOSSIER_STATUS_CHANGED, dossier, {"to_step": target, "sent_on": str(day)}
         )
-        return await self.procedure(id_community, dossier.id)
+        await self._after(id_community, [dossier_id, *released])
+        return await self.procedure(id_community, dossier_id)
 
     async def respond(
         self,
@@ -1213,11 +1327,12 @@ class ProcedureService:
         allowed = target is None or definition.allows(step, target, dossier.variant)
 
         if dry_run:
-            return self._proposal(dossier, ctx, response.code, target, allowed, day)
+            return await self._proposal(dossier, ctx, response.code, target, allowed, day)
         if not allowed:
             raise _conflict(errors.admin.TRANSITION_NOT_ALLOWED)
         if target is not None and definition.step(target).common_status == ProcedureStatus.SENT:
             await self._require_finals(dossier)
+        released: list[int] = []
 
         message = await self._record(
             dossier,
@@ -1238,17 +1353,23 @@ class ProcedureService:
             self._local, ctx, dossier, event, anchor=day, correspondence_id=message.id
         )
         if target is not None:
-            await move_to_step(
-                self._local,
-                ctx,
-                dossier,
-                target,
-                day=day,
-                actor=actor,
-                context={"reason": response.code, "correspondence": message.id},
-            )
+            try:
+                await move_to_step(
+                    self._local,
+                    ctx,
+                    dossier,
+                    target,
+                    day=day,
+                    actor=actor,
+                    context={"reason": response.code, "correspondence": message.id},
+                )
+            except EffectsNotWrittenError:
+                # Going in force is the effect date's (or a step change by
+                # hand, core first), never a response's.
+                await self._local.rollback()
+                raise _conflict(errors.admin.TRANSITION_NOT_ALLOWED) from None
             self._freeze_if_sent(dossier, day)
-            await self._release_deferred(plugin, dossier, day)
+            released = await self._release_deferred(plugin, dossier, day)
         if external_ref and dossier.external_ref is None:
             dossier.external_ref = external_ref
         try:
@@ -1259,9 +1380,10 @@ class ProcedureService:
         await self._audit(
             AuditActions.DOSSIER_UPDATED, dossier, {"response": response.code, "on": str(day)}
         )
-        return await self.procedure(id_community, dossier.id)
+        await self._after(id_community, [dossier_id, *released])
+        return await self.procedure(id_community, dossier_id)
 
-    def _proposal(
+    async def _proposal(
         self,
         dossier: DossierModel,
         ctx: ProcedureContext,
@@ -1270,26 +1392,53 @@ class ProcedureService:
         allowed: bool,
         day: datetime.date,
     ) -> dict[str, Any]:
-        """What ``respond`` would do. Reads the catalogue, writes nothing."""
+        """What ``respond`` would do, the CRM's badges included. Reads the
+        catalogue and both databases, writes nothing (the effects are planned
+        without saving their pins)."""
         definition = ctx.definition
         events = [response_event(code)]
         if target is not None and allowed:
             events.append(step_event(target))
         started = []
         met: list[str] = []
+        effective = dossier.effective_date
         for event in events:
             met.extend(r.code for r in definition.rules_closed_by(event, dossier.variant))
             for rule in definition.rules_started_by(event, dossier.variant):
+                due = due_date(rule, ctx.calendar, anchor=day)
+                if rule.kind_of_deadline == DeadlineKind.EFFECT:
+                    due = effective = effect_date(due, dossier.requested_effective_date)
                 started.append(
                     {
                         "code": rule.code,
                         "labels": rule.labels,
-                        "due_date": due_date(rule, ctx.calendar, anchor=day),
+                        "due_date": due,
                         "party": int(rule.deadline_party),
                         "kind": int(rule.kind_of_deadline),
                     }
                 )
         response = definition.response_type(code)
+        effects: list[dict[str, Any]] = []
+        if allowed:
+            writes = await plan_effects(
+                self._local,
+                self._crm_read,
+                self._registry,
+                dossier.id_community,
+                [dossier.id],
+                overrides={dossier.id: StepOverride(target or str(dossier.step), effective)},
+                persist_pins=False,
+            )
+            effects = [
+                {
+                    "subject_type": w.subject_type,
+                    "subject_ref": w.subject_ref,
+                    "regulatory_status": int(w.regulatory_status),
+                    "valid_from": w.valid_from,
+                    "valid_to": w.valid_to,
+                }
+                for w in writes
+            ]
         return {
             "type": code,
             "labels": response.labels,
@@ -1297,9 +1446,12 @@ class ProcedureService:
             "from_step": str(dossier.step),
             "to_step": target,
             "to_step_labels": definition.step(target).labels if target else None,
+            "to_status": int(definition.step(target).common_status) if target else None,
             "transition_allowed": allowed,
             "deadlines_started": started,
             "deadlines_met": sorted(set(met)),
+            "effective_date": effective if effective != dossier.effective_date else None,
+            "effects": effects,
         }
 
     async def correspondence_file(

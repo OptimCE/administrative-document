@@ -16,6 +16,7 @@ from typing import Any
 from engine.calendar import CalendarNotCoveredError, WorkingCalendar
 from engine.catalogue import CatalogueEntry, ProcedureDefinition
 from engine.lifecycle import UNRESOLVED
+from ports.crm_engine import Episode
 from shared.const import (
     ChangeStatus,
     DocumentKind,
@@ -227,6 +228,17 @@ def definition_out(entry: CatalogueEntry, *, today: datetime.date) -> dict[str, 
     }
 
 
+def _regulatory(episode: Episode | None) -> dict[str, Any]:
+    """What the core shows of a change's subject: its episode's effect columns."""
+    if episode is None:
+        return {}
+    return {
+        "regulatory_status": episode.regulatory_status,
+        "valid_from": episode.valid_from,
+        "valid_to": episode.valid_to,
+    }
+
+
 def detail(
     dossier: DossierModel,
     definition: ProcedureDefinition,
@@ -243,8 +255,10 @@ def detail(
     version_rows: Sequence[tuple[int, int, datetime.datetime, str | None]],
     facts: PieceFacts | None = None,
     has_entry_sheet: bool = False,
+    episodes: Mapping[int, Episode] | None = None,
 ) -> dict[str, Any]:
     facts = facts or PieceFacts()
+    episodes = episodes or {}
     active = [c for c in changes if c.status == int(ChangeStatus.ATTACHED)]
     view = item(
         dossier,
@@ -353,6 +367,9 @@ def detail(
                 "injection_status": c.payload_json.get("injection_status"),
                 "effective_date": c.payload_json.get("effective_date"),
                 "excluded_reason": (c.payload_json.get("excluded") or {}).get("reason"),
+                **_regulatory(episodes.get(c.id)),
+                "refiled_from": c.payload_json.get("refiled_from"),
+                "refiled_into": (c.payload_json.get("refiled") or {}).get("into"),
             }
             for c in changes
         ],

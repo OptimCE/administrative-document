@@ -45,8 +45,10 @@ The engine decides which rows, statuses and dates; the plugin only says which
 regulatory status each of its "sent" steps means
 (``RegulatorPlugin.episode_status``).
 
-Nothing here commits, except ``push`` and ``record_effect_error``, which run
-after the caller's local commit (see them).
+``sync`` (the badges, after any step or change) and ``go_in_force`` (the
+effect, core first) are what the entry points call. They, ``push`` and
+``record_effect_error`` are the only code here that commits: they run after
+the caller's own local commit.
 """
 
 from __future__ import annotations
@@ -68,6 +70,8 @@ from engine.contracts import (
     RegulatorPlugin,
     plugin_for,
 )
+from engine.filing import context_of_procedure
+from engine.lifecycle import ENGINE_ACTOR, move_to_step
 from ports.core_effects import CoreEffectsPort, EffectConflictError, EpisodeWrite
 from ports.crm_engine import EngineCrmRead, Episode
 from shared.const import ChangeStatus, ChangeSubjectType, ProcedureStatus, RegulatoryStatus
@@ -660,3 +664,149 @@ async def record_effect_error(
         elif not held or held.get("kind") == kind or kind == "in_force":
             dossier.effect_error_json = error
     await local.commit()
+
+
+async def sync(
+    local: AsyncSession,
+    crm_session: AsyncSession,
+    crm_read: EngineCrmRead,
+    effects: CoreEffectsPort,
+    registry: PluginRegistry,
+    id_community: int,
+    dossier_ids: Iterable[int],
+    *,
+    now: datetime.datetime,
+) -> bool:
+    """Bring the core's badges in line with these procedures, AFTER the
+    caller's local commit: plan (the pins committed locally), then the core.
+    What the CRM shows is a consequence, never a precondition, so this never
+    raises: a failure is kept on the procedures (``effect_error_json``, kind
+    "sync") and the daily reconciliation tries again. Returns whether the core
+    holds the plan."""
+    ids = sorted(set(dossier_ids))
+    if not ids:
+        return True
+    try:
+        writes = await plan(local, crm_read, registry, id_community, ids)
+        await local.commit()
+        await push(
+            crm_session,
+            effects,
+            id_community,
+            writes,
+            audit_payload={"reason": "sync", "dossiers": ids},
+        )
+    except Exception as exc:
+        if not isinstance(exc, EffectConflictError):
+            logger.exception("episodes of procedures %s not synced", ids)
+        await local.rollback()
+        await _keep_error(local, ids, error_of("sync", exc, at=now), kind="sync")
+        return False
+    await _keep_error(local, ids, None, kind="sync")
+    return True
+
+
+async def _keep_error(
+    local: AsyncSession, ids: Sequence[int], error: dict[str, Any] | None, *, kind: str
+) -> None:
+    try:
+        await record_effect_error(local, ids, error, kind=kind)
+    except Exception:
+        logger.exception("effect error of procedures %s not recorded", ids)
+        await local.rollback()
+
+
+class InForceError(Exception):
+    """The procedure cannot go in force from where it stands."""
+
+
+async def go_in_force(
+    local: AsyncSession,
+    crm_session: AsyncSession,
+    crm_read: EngineCrmRead,
+    effects: CoreEffectsPort,
+    registry: PluginRegistry,
+    dossier_id: int,
+    *,
+    effective_date: datetime.date,
+    now: datetime.datetime,
+    to_step: str | None = None,
+    actor: str = ENGINE_ACTOR,
+    context: dict[str, Any] | None = None,
+) -> list[str]:
+    """Put a procedure in force on ``effective_date``, in the order of spec
+    « Écriture des effets »: the core first, then the step.
+
+    1. Locally: the pins (the previous key included), committed.
+    2. The core: the rows as if in force, and their audit row, committed.
+    3. Locally: the step (``to_step``, or the catalogue's automatic edge),
+       which settles the changes as applied and meets the effect deadline;
+       the effect date; the effect error cleared. Committed.
+
+    A replay after a crash finds 1 and 2 already done (the plan is empty) and
+    completes 3. Returns the EANs the core refused (one operation per date),
+    in which case the procedure stays where it is with the reason in
+    ``effect_error_json``; an empty list when it is in force."""
+    dossier = await local.get(DossierModel, dossier_id)
+    plugin = plugin_for(registry, dossier.regulator) if dossier is not None else None
+    if dossier is None or plugin is None:
+        raise InForceError(f"procedure {dossier_id} has no plugin")
+    ctx = await context_of_procedure(local, plugin, dossier)
+    target = to_step
+    if target is None:
+        edge = ctx.definition.automatic_edge_to(
+            str(dossier.step), ProcedureStatus.IN_FORCE, dossier.variant
+        )
+        target = edge.target if edge is not None else None
+    if (
+        target is None
+        or ctx.definition.step(target).common_status != ProcedureStatus.IN_FORCE
+        or not ctx.definition.allows(str(dossier.step), target, dossier.variant)
+    ):
+        raise InForceError(f"procedure {dossier_id} cannot go in force from {dossier.step}")
+    id_community = dossier.id_community
+
+    writes = await plan(
+        local,
+        crm_read,
+        registry,
+        id_community,
+        [dossier_id],
+        overrides={dossier_id: StepOverride(target, effective_date)},
+    )
+    await local.commit()
+    try:
+        await push(
+            crm_session,
+            effects,
+            id_community,
+            writes,
+            audit_payload={
+                "reason": "in_force",
+                "dossier": dossier_id,
+                "effective_date": effective_date.isoformat(),
+            },
+        )
+    except EffectConflictError as exc:
+        await _keep_error(local, [dossier_id], error_of("in_force", exc, at=now), kind="in_force")
+        return exc.subjects
+
+    dossier = await local.get(DossierModel, dossier_id)
+    if dossier is None:
+        raise InForceError(f"procedure {dossier_id} is gone")
+    await local.refresh(dossier)
+    ctx = await context_of_procedure(local, plugin, dossier)
+    await move_to_step(
+        local,
+        ctx,
+        dossier,
+        target,
+        day=effective_date,
+        actor=actor,
+        context={**(context or {}), "effective_date": effective_date.isoformat()},
+        effects_written=True,
+    )
+    dossier.effective_date = effective_date
+    dossier.effect_error_json = None
+    await local.commit()
+    return []

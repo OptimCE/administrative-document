@@ -53,7 +53,10 @@
       "VERSION_NOT_REGENERABLE": "Deze versie is niet door OptimCE gegenereerd en kan dus niet opnieuw worden gegenereerd (code: 2387)",
       "REVIEW_REQUIRED": "Dit stuk moet worden nagekeken voordat het opnieuw wordt gegenereerd (code: 2388)",
       "TEMPLATE_IN_USE": "Dit sjabloon is al gebruikt om stukken te genereren: registreer een nieuwe versie in plaats van het te wijzigen (code: 2389)",
-      "STORED_FILE_ALTERED": "Het opgeslagen bestand komt niet meer overeen met zijn vingerafdruk en wordt niet vrijgegeven (code: 2390)"
+      "STORED_FILE_ALTERED": "Het opgeslagen bestand komt niet meer overeen met zijn vingerafdruk en wordt niet vrijgegeven (code: 2390)",
+      "EFFECT_CONFLICT": "Het CRM weigert de inwerkingtreding: deze meters worden op die datum al in een andere operatie gevolgd (code: 2391)",
+      "NOT_REFILABLE": "Deze wijziging is niet geweigerd of vervallen, of werd al opnieuw ingediend (code: 2392)",
+      "SUBJECT_NOT_IN_OPERATION": "Het CRM bevat dit niet meer zo: de meter heeft de operatie verlaten of de sleutel werd vervangen (code: 2393)"
     }
   }
 }

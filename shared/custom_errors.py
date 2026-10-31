@@ -101,6 +101,13 @@ class _AdminErrors:
     TEMPLATE_IN_USE = Error(code=2389, key="ERRORS.ADMIN.TEMPLATE_IN_USE")
     # The bytes behind a version no longer match its recorded sha256.
     STORED_FILE_ALTERED = Error(code=2390, key="ERRORS.ADMIN.STORED_FILE_ALTERED")
+    # Phase 3: effects. Going in force, the core's one-operation constraint
+    # refused (the 409 lists the EANs). -> 409.
+    EFFECT_CONFLICT = Error(code=2391, key="ERRORS.ADMIN.EFFECT_CONFLICT")
+    # Refiling: the change is not refused (or lapsed), or already refiled. -> 409.
+    NOT_REFILABLE = Error(code=2392, key="ERRORS.ADMIN.NOT_REFILABLE")
+    # Refiling: the CRM no longer has it so (meter left, key replaced). -> 409.
+    SUBJECT_NOT_IN_OPERATION = Error(code=2393, key="ERRORS.ADMIN.SUBJECT_NOT_IN_OPERATION")
 
 
 class _Errors:

@@ -6,11 +6,15 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import select, text
 
 from engine.contracts import build_registry
+from ports.core_effects import EffectConflictError
+from ports.core_effects_sqlalchemy import SqlCoreEffects
 from regulators.cwape.plugin import CwapePlugin
 from regulators.testing.fake import FakeRegulator
-from shared.const import CORE_EVENTS_SUBJECT
+from shared.const import CORE_EVENTS_SUBJECT, RegulatoryStatus
+from shared.models.local_models import DossierModel
 from tests.engine.world import EAN, NOW, make_world
 from tests.fake_jetstream import FakeJetStream
 from worker import core_events
@@ -67,6 +71,51 @@ class TestProcessing:
     async def test_a_meter_event_without_its_meter_is_poison(self, db_session):
         world = await _world(db_session)
         assert await _process(world, _body(world, payload={})) == core_events.POISON
+
+
+async def _episodes(world) -> list[tuple]:
+    rows = await world.session.execute(
+        text(
+            "SELECT subject_ref, regulatory_status FROM regulatory_link_status "
+            "WHERE id_community = :c"
+        ),
+        {"c": world.id_community},
+    )
+    return [tuple(row) for row in rows]
+
+
+class TestTheBadges:
+    async def test_a_filed_meter_shows_to_notify_in_the_core(self, db_session):
+        world = await _world(db_session)
+
+        assert await _process(world, _body(world)) == core_events.FILED
+
+        assert await _episodes(world) == [(EAN[0], int(RegulatoryStatus.TO_NOTIFY))]
+
+    async def test_a_core_that_refuses_the_badge_does_not_undo_the_filing(
+        self, db_session, monkeypatch
+    ):
+        world = await _world(db_session)
+
+        async def refuse(self, *_a, **_kw):
+            raise EffectConflictError([EAN[0]])
+
+        monkeypatch.setattr(SqlCoreEffects, "apply", refuse)
+
+        assert await _process(world, _body(world)) == core_events.FILED
+
+        (dossier,) = (
+            await world.session.scalars(
+                select(DossierModel).where(
+                    DossierModel.id_community == world.id_community,
+                    DossierModel.family == "PARTAGE_MODIF",
+                )
+            )
+        ).all()
+        await world.session.refresh(dossier)
+        assert dossier.effect_error_json["kind"] == "sync"
+        assert dossier.effect_error_json["subjects"] == [EAN[0]]
+        assert await _episodes(world) == []
 
 
 class _Msg:

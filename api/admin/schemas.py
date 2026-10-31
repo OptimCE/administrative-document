@@ -188,6 +188,31 @@ class ChangeOut(BaseModel):
     injection_status: int | None = None
     effective_date: str | None = None
     excluded_reason: str | None = None
+    # What the core shows of the subject (its regulatory_link_status row).
+    regulatory_status: int | None = Field(
+        default=None, description="RegulatoryStatus of its episode in the core; None: none yet"
+    )
+    valid_from: datetime.date | None = None
+    valid_to: datetime.date | None = Field(
+        default=None, description="Its last day in the operation"
+    )
+    refiled_from: int | None = Field(default=None, description="The refused change it refiles")
+    refiled_into: int | None = Field(
+        default=None, description="The procedure this refused change was refiled into"
+    )
+
+
+class EffectErrorOut(BaseModel):
+    """Why the core refused the procedure's effects, kept until they land."""
+
+    kind: Literal["sync", "in_force"] = Field(
+        description="sync: the badges; in_force: the effect date (retried each day)"
+    )
+    code: Literal["exclude", "unavailable"]
+    subjects: list[str] = Field(
+        default_factory=list, description="The EANs tracked in another operation"
+    )
+    at: datetime.datetime
 
 
 class PieceVersionOut(BaseModel):
@@ -284,7 +309,7 @@ class ProcedureDetailOut(ProcedureItemOut):
     requested_effective_date: datetime.date | None = None
     effective_date: datetime.date | None = None
     frozen_at: datetime.datetime | None = None
-    effect_error: dict | None = None
+    effect_error: EffectErrorOut | None = None
     timeline: list[StepOut]
     transitions: list[TransitionOptionOut]
     response_types: list[ResponseTypeOut]
@@ -379,6 +404,16 @@ class ProposalDeadlineOut(BaseModel):
     kind: int
 
 
+class EffectPreviewOut(BaseModel):
+    """What the core would show of a subject once the response is recorded."""
+
+    subject_type: int
+    subject_ref: str
+    regulatory_status: int = Field(description="RegulatoryStatus")
+    valid_from: datetime.date | None = None
+    valid_to: datetime.date | None = None
+
+
 class CorrespondenceProposalOut(BaseModel):
     """What recording this response would do, before it is recorded."""
 
@@ -388,9 +423,18 @@ class CorrespondenceProposalOut(BaseModel):
     from_step: str
     to_step: str | None = None
     to_step_labels: Labels | None = None
+    to_status: int | None = Field(
+        default=None, description="ProcedureStatus of the step it moves to"
+    )
     transition_allowed: bool
     deadlines_started: list[ProposalDeadlineOut]
     deadlines_met: list[str]
+    effective_date: datetime.date | None = Field(
+        default=None, description="The effect date it would set (the 20th working day…)"
+    )
+    effects: list[EffectPreviewOut] = Field(
+        default_factory=list, description="What the CRM would show differently"
+    )
 
 
 class FinalizeOut(BaseModel):
