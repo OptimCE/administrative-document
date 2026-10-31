@@ -73,9 +73,13 @@ tests/regulators/<name>/       # its tests (not here: the images copy this tree)
 3. **Plugin.** Implement `RegulatorPlugin` (`engine/contracts.py`): `code` (the
    `community.regulator` value), `region`, `draft_watermark` (the text stamped on
    a working draft, in the regulator's language), `catalogue()`, `calendar()` (load
-   them with `load_catalogue` and `load_calendar`), and the four methods data
-   cannot replace: `variant`, `required_documents`, `render_context` and
-   `effects`. Codes of your own (steps, response types, variants, piece codes)
+   them with `load_catalogue` and `load_calendar`), and the methods data
+   cannot replace: `variant`, `required_documents`, `render_context`,
+   `entry_sheet` and `episode_status` (what each step of common status "sent"
+   means for the core's regulatory status: with the DSO, with the regulator, or
+   authorised; `build_registry` refuses a sent step of a procedure filing meters
+   or keys left unmapped). Which rows of the core a procedure touches, and with
+   which dates, is the engine's (`engine/effects.py`). Codes of your own (steps, response types, variants, piece codes)
    are strings validated by the catalogue, never database enums. A regulator
    needs no migration.
 4. **Register** it in `registry.py`. A plugin that is not listed there is not

@@ -10,8 +10,8 @@
 # others go to the annual report.
 #
 # channel: the form itself says it is deposited as a file on the CWaPE's secure
-# upload platform, not typed into an online form (spec, "Risques": to decide;
-# a different channel is a v2).
+# upload platform. Kept online_form (decided 30/10/2026): the CWaPE has a newer
+# online way to file it, which does not seem to work yet.
 code: CE_ACTUALISATION
 version: 1
 valid_from: 2026-01-01

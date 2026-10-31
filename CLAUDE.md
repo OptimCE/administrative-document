@@ -49,10 +49,15 @@ bundles through `document-generation`. Read `README.md` for the domain.
   stream order across replicas. Every event lands in `processed_event` (the
   idempotency key), even when nothing is filed. Activation is read from the
   CRM on EVERY event (`ports/crm_engine.py`), no cache; `module_activation`
-  periods are reconciled from it (`engine/activation.py`). A removal is never
-  "already reflected": before the baseline the annexe cannot know the meter was
-  absent. A system draft emptied by compensation is cancelled (catalogue edge
-  `draft -> cancelled`, `automatic: true`). A converted July draft keeps its
+  periods are reconciled from it (`engine/activation.py`). A change counts as
+  filed only while a LIVE procedure (draft, ready, sent) or a deferral carries
+  it: a meter added again after a refusal, or after its removal went in force,
+  is filed again. A removal is "already reflected" only on positive evidence
+  (the meter's latest addition refused or lapsed, and no live episode in the
+  core): before the baseline the annexe cannot know the meter was absent. A
+  later `key_changed` in a draft supersedes the earlier one. A system draft
+  emptied by compensation is cancelled (catalogue edge `draft -> cancelled`,
+  `automatic: true`). A converted July draft keeps its
   variant. `engine/lifecycle.py` holds the step/deadline/piece operations the
   router, the API and the jobs share; realtime hints go out after the commit.
 - **Realtime topics** (`admin.change.detected`, `admin.dossier.updated`,
@@ -100,7 +105,7 @@ bundles through `document-generation`. Read `README.md` for the domain.
   UNRESOLVED (`lifecycle.UNRESOLVED`: still overdue on the dashboard, still met
   late, superseded by a new clock); a third party's stays OPEN and is told once
   (`reminded_at`, in-app only); a finished procedure's closes CANCELLED
-  silently; EFFECT dates are the effect job's (phase 3; listed only). Opening a
+  silently; EFFECT dates are the effect job's (below). Opening a
   calendar procedure cancels the converted July deadline it takes over (open,
   on a MIGRATION dossier, unlinked, same code/party/kind, and no rule of that
   code in its own procedure). Nothing after the commits may read ORM
@@ -109,6 +114,39 @@ bundles through `document-generation`. Read `README.md` for the domain.
   past the file's years instead of assuming none. workalendar is a TEST
   dependency only: the independent oracle the plugins' calendar files are
   checked against.
+
+## Effects: the core's regulatory badges (phase 3)
+- `engine/effects.py` keeps the core's `regulatory_link_status` in step with
+  the procedures. An addition (meter, installation, key) OWNS a row keyed by
+  the procedure where it was first filed (the baseline's for one the baseline
+  filed); a removal MOVES the row of what it removes; a key taking effect ends
+  the previous one. Each change pins its row once in `payload_json["episode"]`
+  (a deferral moves the change, never the row). `plan()` folds every change on
+  a subject into one absolute value per row and returns only what differs
+  (to notify, the plugin's pending/authorised, authorised from the effect date,
+  active, ended the day before a removal's effect, refused, withdrawn 9). An
+  APPLIED change is the core's truth; `_written_ahead` keeps what a procedure's
+  own in-force write put there while its step is not taken yet.
+- The plugin only maps its "sent" steps (`RegulatorPlugin.episode_status`);
+  `build_registry` refuses one left unmapped.
+- **Badges are a consequence**: `effects.sync()` runs AFTER the caller's local
+  commit (worker routing; API defer, exclude, send, respond, transition,
+  refile) and never fails the action; a refusal (one EAN in two operations) or
+  a down core stays on the procedure (`effect_error_json`, kind "sync").
+- **In force is core first**: `effects.go_in_force()` (pins committed, then
+  the core and its audit row, then the step with `effects_written=True`).
+  `move_to_step` refuses IN_FORCE with a tracked change otherwise
+  (`EffectsNotWrittenError`), and entering a step settles the changes
+  (refused, excluded when cancelled, applied in force). The daily job applies
+  the effect dates that have come, then re-syncs every procedure that may
+  still move; a blocked effect keeps `effect_error_json` kind "in_force" and is
+  retried the next day. `python -m worker.engine_jobs` runs the day now.
+- The effect date is the EFFECT deadline (`lifecycle.start_rules`), never
+  before `requested_effective_date`, and lands in `dossier.effective_date`.
+- After a refusal (or a lapse) the detail offers `refusal`; `POST
+  /admin/dossiers/{id}/refile` files the refused changes again as NEW changes
+  (`source_event_id` NULL, `refiled_from`) into the family's open draft.
+- `valid_to` is the last day in the operation (like `meter_data.end_date`).
 
 ## Two DB-enforced invariants
 - **The journal writes the status.** `status_event` is append-only, and
