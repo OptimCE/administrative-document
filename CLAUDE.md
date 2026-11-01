@@ -165,6 +165,30 @@ bundles through `document-generation`. Read `README.md` for the domain.
   service, which still cannot write `meter_data`. crm-backend refuses a hand
   status change while the procedure drives it (409).
 
+## The reception address (phase 4)
+- One mailbox serves every community; each community's address is
+  `INBOUND_ADDRESS_TEMPLATE` with its random code (`inbound_address.token`,
+  one live per community, an admin rotates it). The worker polls the mailbox
+  by IMAP (`worker/inbound.py`, `ports/inbound_mailbox.py`, stdlib `imaplib`
+  in a thread; off without a template or host): no inbound route anywhere
+  (IMAP chosen over Brevo's inbound webhook, 01/11/2026).
+- Per mail: parse (`domain/inbound_mail.py`, stdlib `email`), the community
+  from the code in a recipient header (To, Cc, Delivered-To, X-Original-To…),
+  dropped when unknown, revoked or the module is off; once per (community,
+  sha256); the raw .eml and each attachment stored content-addressed; the
+  procedure by `[OPT-<id>]` (subject first, then body; the community's own
+  only, the id is global) else an `external_ref` it mentions; the plugin's
+  `suggest_response` kept only when the procedure offers it from its step;
+  managers told in-app (`admin_correspondence.received`). A mail is marked
+  seen after it is stored or dropped; a storage or database failure leaves it
+  unseen for the next pass.
+- Nothing moves a procedure on its own: a manager qualifies a mail (« Ajouter
+  une réponse » with `inbound_mail_id`: its .eml becomes the correspondence's
+  file) or attaches/discards an unmatched one, and may make an attachment a
+  piece's version (`…/versions/from-inbound`). `inbound_mail.status` is a
+  working state; the files and `inbound_mail_attachment` are evidence
+  (append-only).
+
 ## Two DB-enforced invariants
 - **The journal writes the status.** `status_event` is append-only, and
   appending a row COPIES its `(to_status, to_step)` onto the subject

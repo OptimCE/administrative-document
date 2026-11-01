@@ -35,6 +35,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.admin import views
+from api.admin.inbound import find_attachment, find_mail, mails_out, stored
 from api.administrative_document.service import AdministrativeDocumentService
 from core.audit_log import AuditActions, AuditLogInput, AuditLogService
 from core.config import settings
@@ -90,6 +91,7 @@ from shared.const import (
     DeadlineKind,
     DocOrigin,
     DocumentKind,
+    InboundMailStatus,
     OpenedBy,
     ProcedureDocumentStatus,
     ProcedureStatus,
@@ -106,6 +108,7 @@ from shared.models.local_models import (
     DocumentTemplateModel,
     DocumentVersionModel,
     DossierModel,
+    InboundMailModel,
     ProcedureDefinitionModel,
     StatusEventModel,
     VersionCheckModel,
@@ -704,6 +707,20 @@ class ProcedureService:
             has_entry_sheet=any(plugin.entry_sheet(p.requirement_code) for p in pieces),
             episodes=await self._episodes(id_community, changes),
             refusal=await self._refusal(dossier, ctx, changes),
+            inbound=await mails_out(
+                self._local,
+                list(
+                    await self._local.scalars(
+                        select(InboundMailModel)
+                        .where(
+                            InboundMailModel.id_community == id_community,
+                            InboundMailModel.id_dossier == dossier.id,
+                            InboundMailModel.status == int(InboundMailStatus.ATTACHED),
+                        )
+                        .order_by(InboundMailModel.received_at)
+                    )
+                ),
+            ),
         )
 
     async def _piece_facts(
@@ -1384,6 +1401,64 @@ class ProcedureService:
         if dossier.frozen_at is not None and piece.kind != int(DocumentKind.RECEIVED):
             raise _conflict(errors.admin.PROCEDURE_FROZEN)
         content = await self._read(file)
+        return await self._supply_bytes(
+            dossier, ctx, piece, content, file.content_type, file.filename, actor=actor
+        )
+
+    async def piece_from_inbound(
+        self,
+        id_community: int,
+        dossier_id: int,
+        document_id: int,
+        *,
+        mail_id: int,
+        attachment_id: int,
+        actor: str,
+    ) -> dict[str, Any]:
+        """An attachment of a mail received for this procedure becomes a version
+        of one of its pieces (« Utiliser comme pièce »): the signed amendment
+        the GRD returned, a decision. The same rules as an upload."""
+        dossier, _plugin, ctx = await self._load(id_community, dossier_id)
+        mail = await find_mail(self._local, id_community, mail_id)
+        if mail.id_dossier != dossier.id:
+            raise _not_found(errors.admin.INBOUND_MAIL_NOT_FOUND)
+        attachment = await find_attachment(self._local, id_community, mail_id, attachment_id)
+        piece = await self._local.scalar(
+            select(DocumentModel).where(
+                DocumentModel.id == document_id,
+                DocumentModel.id_dossier == dossier.id,
+                DocumentModel.requirement_code.is_not(None),
+            )
+        )
+        if piece is None:
+            raise _not_found(errors.admin.PIECE_NOT_FOUND)
+        if dossier.frozen_at is not None and piece.kind != int(DocumentKind.RECEIVED):
+            raise _conflict(errors.admin.PROCEDURE_FROZEN)
+        content = await stored(attachment.file_ref, attachment.content_sha256)
+        return await self._supply_bytes(
+            dossier,
+            ctx,
+            piece,
+            content,
+            attachment.content_type,
+            attachment.filename,
+            actor=actor,
+        )
+
+    async def _supply_bytes(
+        self,
+        dossier: DossierModel,
+        ctx: ProcedureContext,
+        piece: DocumentModel,
+        content: bytes,
+        content_type: str | None,
+        filename: str | None,
+        *,
+        actor: str,
+    ) -> dict[str, Any]:
+        """A new final version of ``piece`` from these bytes: a person (or a
+        mail) supplying a file means it to be sent."""
+        id_community = dossier.id_community
         digest = hashlib.sha256(content).hexdigest()
         version_no = (
             int(
@@ -1401,11 +1476,11 @@ class ProcedureService:
             id_community=id_community,
             id_document=piece.id,
             version_no=version_no,
-            file_ref=await self._store(key, content, file.content_type),
+            file_ref=await self._store(key, content, content_type),
             content_sha256=digest,
-            content_type=file.content_type,
+            content_type=content_type,
             byte_size=len(content),
-            original_filename=file.filename,
+            original_filename=filename,
             generated_by=actor,
             # A file a person supplies is what they mean to send: there is no
             # such thing as an uploaded draft.
@@ -1450,6 +1525,7 @@ class ProcedureService:
         external_ref: str | None,
         file: UploadFile | None,
         actor: str,
+        content: tuple[bytes, str | None, str | None] | None = None,
     ) -> CorrespondenceModel:
         message = CorrespondenceModel(
             id_community=dossier.id_community,
@@ -1466,16 +1542,18 @@ class ProcedureService:
             context_json={},
         )
         if file is not None:
-            content = await self._read(file)
-            digest = hashlib.sha256(content).hexdigest()
+            content = (await self._read(file), file.content_type, file.filename)
+        if content is not None:
+            data, content_type, filename = content
+            digest = hashlib.sha256(data).hexdigest()
             key = (
                 f"{STORAGE_KEY_PREFIX}/{dossier.id_community}/correspondence/{dossier.id}/{digest}"
             )
-            message.file_ref = await self._store(key, content, file.content_type)
+            message.file_ref = await self._store(key, data, content_type)
             message.content_sha256 = digest
-            message.content_type = file.content_type
-            message.byte_size = len(content)
-            message.original_filename = file.filename
+            message.content_type = content_type
+            message.byte_size = len(data)
+            message.original_filename = filename
         self._local.add(message)
         await self._local.flush()
         return message
@@ -1572,10 +1650,28 @@ class ProcedureService:
         file: UploadFile | None,
         dry_run: bool,
         actor: str,
+        inbound_mail_id: int | None = None,
     ) -> dict[str, Any]:
         """Record a response (or say what recording it would do, ``dry_run``):
-        the message, the deadlines it meets and starts, its step change."""
+        the message, the deadlines it meets and starts, its step change.
+
+        ``inbound_mail_id``: a mail the reception address received (phase 4),
+        unmatched or attached to this procedure. Its raw .eml becomes the
+        message's file (unless a file is given), its subject, text and date the
+        defaults, and it is marked recorded."""
         dossier, plugin, ctx = await self._load(id_community, dossier_id)
+        mail = None
+        if inbound_mail_id is not None:
+            mail = await find_mail(self._local, id_community, inbound_mail_id)
+            if mail.status not in (
+                int(InboundMailStatus.UNMATCHED),
+                int(InboundMailStatus.ATTACHED),
+            ) or mail.id_dossier not in (None, dossier.id):
+                raise _conflict(errors.admin.INBOUND_MAIL_HANDLED)
+            subject = subject or (mail.subject or None)
+            body_text = body_text or mail.body_text
+            if on is None and mail.sent_at is not None:
+                on = brussels_today(mail.sent_at)
         definition = ctx.definition
         try:
             response = definition.response_type(type_)
@@ -1596,19 +1692,37 @@ class ProcedureService:
             await self._require_finals(dossier)
         released: list[int] = []
 
+        content = None
+        if mail is not None and file is None:
+            content = (
+                await stored(mail.file_ref, mail.content_sha256),
+                "message/rfc822",
+                f"message-{mail.id}.eml",
+            )
+        if mail is not None:
+            channel = int(Channel.EMAIL)
+        else:
+            channel = int(Channel.UPLOAD if file is not None else definition.channel_code)
         message = await self._record(
             dossier,
             type_=response.code,
             direction=response.correspondence_direction,
             counterparty=response.counterparty_code,
-            channel=int(Channel.UPLOAD if file is not None else definition.channel_code),
+            channel=channel,
             occurred_on=day,
-            subject=subject,
+            subject=(subject or "")[:255] or None,
             body_text=body_text,
             external_ref=external_ref,
             file=file,
+            content=content,
             actor=actor,
         )
+        if mail is not None:
+            mail.status = int(InboundMailStatus.RECORDED)
+            mail.id_dossier = dossier.id
+            mail.id_correspondence = message.id
+            mail.handled_by = actor
+            mail.handled_at = self._now()
         event = response_event(response.code)
         await close_rules(self._local, ctx, dossier, event)
         await start_rules(

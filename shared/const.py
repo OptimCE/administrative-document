@@ -176,6 +176,15 @@ class ChangeSubjectType(IntEnum):
     COMMUNITY = 5
 
 
+class InboundMailStatus(IntEnum):
+    """What became of a mail the reception address received (phase 4)."""
+
+    UNMATCHED = 1  # no procedure found: a manager attaches or discards it
+    ATTACHED = 2  # attached to its procedure, to qualify
+    RECORDED = 3  # recorded as a correspondence of its procedure
+    DISCARDED = 4  # not a procedure's (spam, a mistake)
+
+
 class ChangeStatus(IntEnum):
     """Lifecycle of a ``change``."""
 

@@ -29,6 +29,7 @@ from core.tracing import setup_tracer_provider
 from engine.catalogue_sync import sync_registry
 from regulators.registry import REGISTRY
 from worker import dispatcher
+from worker.inbound import run_inbound_poller
 from worker.scheduler import run_deadline_scheduler
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,7 @@ async def main() -> None:
     subs: list = []
     heartbeat_task: asyncio.Task | None = None
     scheduler_task: asyncio.Task | None = None
+    inbound_task: asyncio.Task | None = None
     try:
         subs = await dispatcher.subscribe_all(js, inflight=inflight, registry=REGISTRY)
         heartbeat_task = asyncio.create_task(_heartbeat(shutdown_event), name="heartbeat")
@@ -124,6 +126,11 @@ async def main() -> None:
         scheduler_task = asyncio.create_task(
             run_deadline_scheduler(shutdown_event, registry=REGISTRY), name="deadline-scheduler"
         )
+        # The reception address (phase 4): the mailbox polled by IMAP, off
+        # unless INBOUND_ADDRESS_TEMPLATE and INBOUND_IMAP_HOST are set.
+        inbound_task = asyncio.create_task(
+            run_inbound_poller(shutdown_event, registry=REGISTRY), name="inbound-mailbox"
+        )
 
         logger.info("Administrative-document worker ready")
         await shutdown_event.wait()
@@ -133,6 +140,11 @@ async def main() -> None:
             scheduler_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await scheduler_task
+
+        if inbound_task is not None:
+            inbound_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await inbound_task
 
         if heartbeat_task is not None:
             heartbeat_task.cancel()

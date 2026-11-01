@@ -2,11 +2,11 @@
 
 Fires at a fixed LOCAL time rather than "every N hours from process start". A
 from-start interval re-runs the jobs on every deploy, and they are a
-user-visible event: `admin_deadline.missed` is TRANSACTIONAL and reaches every
-manager's inbox. `reminded_at` and the MISSED status flip make a re-run
-harmless, so this is hygiene rather than correctness — but "one email a day"
-versus "an email every deploy" is the difference between a useful reminder and
-one people filter.
+user-visible event: the in-app reminders, and the one summary email per
+manager per day. `reminders_sent`, the MISSED status flip and the summary's
+per-day dedupe key make a re-run harmless, so this is hygiene rather than
+correctness — but a morning email versus one at every deploy is the
+difference between a useful summary and one people filter.
 """
 
 from __future__ import annotations

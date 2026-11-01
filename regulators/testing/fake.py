@@ -88,6 +88,10 @@ class FakeRegulator:
     def entry_sheet(self, code: str) -> EntrySheet | None:
         return None
 
+    def suggest_response(self, subject: str, text: str) -> str | None:
+        """``answer`` when a mail says so, nothing otherwise."""
+        return "answer" if "answer" in f"{subject} {text}".lower() else None
+
     def episode_status(self, definition: ProcedureDefinition, step: str) -> RegulatoryStatus | None:
         """``sent`` and ``missing_info`` wait for the first party, ``reviewed``
         for the second; ``accepted`` and ``signed`` are authorised."""

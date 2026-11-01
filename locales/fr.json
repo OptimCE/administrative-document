@@ -56,7 +56,10 @@
       "STORED_FILE_ALTERED": "Le fichier enregistré ne correspond plus à son empreinte : il n'est pas transmis (code: 2390)",
       "EFFECT_CONFLICT": "Le CRM refuse la prise d'effet : ces compteurs sont déjà suivis dans une autre opération à cette date (code: 2391)",
       "NOT_REFILABLE": "Ce changement n'est ni refusé ni caduc, ou il a déjà été renvoyé (code: 2392)",
-      "SUBJECT_NOT_IN_OPERATION": "Le CRM ne le porte plus ainsi : le compteur a quitté l'opération ou la clé a été remplacée (code: 2393)"
+      "SUBJECT_NOT_IN_OPERATION": "Le CRM ne le porte plus ainsi : le compteur a quitté l'opération ou la clé a été remplacée (code: 2393)",
+      "INBOUND_DISABLED": "L'adresse de réception n'est pas configurée sur cette instance.",
+      "INBOUND_MAIL_NOT_FOUND": "Ce courrier reçu est introuvable.",
+      "INBOUND_MAIL_HANDLED": "Ce courrier reçu a déjà été enregistré ou écarté."
     }
   }
 }

@@ -106,6 +106,13 @@ class RegulatorPlugin(Protocol):
         the regulator's form), or None when the piece has none."""
         ...
 
+    def suggest_response(self, subject: str, text: str) -> str | None:
+        """A response type to suggest for a mail the reception address received
+        (its subject and text), or None. Only a suggestion: a manager confirms
+        it, and the engine drops one the procedure's catalogue does not offer
+        from its current step."""
+        ...
+
 
 PluginRegistry = Mapping[str, RegulatorPlugin]
 

@@ -33,6 +33,8 @@ when it is unknown, and left out when it is known not to hold.
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -127,6 +129,31 @@ def _members(spec: DocumentSpec, procedure: ProcedureFacts) -> list[int] | None:
     return None
 
 
+def _fold(text: str) -> str:
+    """Lower case, accents off: « Complétude » and « completude » read alike."""
+    decomposed = unicodedata.normalize("NFKD", text or "")
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch)).lower()
+
+
+# What a mail from the GRD or the CWaPE says, and the response type it is
+# (PARTAGE_MODIF and PARTAGE_AUTORISATION codes; the community procedures share
+# the first two). Most specific first: « dossier incomplet » before « complet ».
+_SUGGESTIONS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pattern), code)
+    for pattern, code in (
+        (r"\bincomplet|complements? d.information|pieces? manquantes?", "incomplete_notice"),
+        (r"\bnon[- ]conformite|invitation a se conformer", "non_conformity"),
+        (r"\brefus|decision de refus|rejet", "decision_refused"),
+        (r"\bavenant\b.*\bsigne|avenant signe", "amendment_signed"),
+        (r"proposition d.avenant|\bavenant\b", "amendment_proposal"),
+        (r"proposition de convention|\bconvention\b", "agreement_proposal"),
+        (r"\bavis technique|avis du grd", "technical_opinion"),
+        (r"decision d.autorisation|\bautoris", "decision_granted"),
+        (r"\bcomplet|completude|accuse de reception", "completeness_ack"),
+    )
+)
+
+
 class CwapePlugin:
     code = CODE
     region = "WAL"
@@ -206,3 +233,14 @@ class CwapePlugin:
         """The CWaPE takes its community forms as files a representative fills in
         (or online): their fiche de saisie, in the forms' own order."""
         return self._sheets.get(code)
+
+    def suggest_response(self, subject: str, text: str) -> str | None:
+        """The answer a GRD's or the CWaPE's mail most likely is, from its words
+        (French, as they write): the subject first, then the text. The first
+        rule that matches wins, the most specific first."""
+        for content in (subject, text):
+            words = _fold(content)
+            for pattern, code in _SUGGESTIONS:
+                if pattern.search(words):
+                    return code
+        return None

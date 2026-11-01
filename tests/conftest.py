@@ -371,11 +371,14 @@ def fake_storage(monkeypatch) -> dict[tuple[str | None, str], bytes]:
 
     Nothing real is contacted in tests, but versions still round-trip through
     upload/download so the key layout and the download path stay covered. One
-    store for both modules that touch it: /admin uploads (pieces, messages) and
-    the version download outside /admin.
+    store for every module that touches it: /admin uploads (pieces, messages),
+    the version download outside /admin, and the reception address (the
+    worker stores, the API reads back).
     """
+    from api.admin import inbound as inbound_api
     from api.admin import procedures
     from api.administrative_document import service as service_module
+    from worker import inbound as inbound_worker
 
     store: dict[tuple[str | None, str], bytes] = {}
 
@@ -391,6 +394,8 @@ def fake_storage(monkeypatch) -> dict[tuple[str | None, str], bytes]:
     monkeypatch.setattr(procedures, "upload", _upload)
     monkeypatch.setattr(procedures, "download", _download)
     monkeypatch.setattr(service_module, "download", _download)
+    monkeypatch.setattr(inbound_worker, "upload", _upload)
+    monkeypatch.setattr(inbound_api, "download", _download)
     return store
 
 

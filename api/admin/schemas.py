@@ -324,9 +324,53 @@ class PieceOut(BaseModel):
     last_check: PieceCheckOut | None = None
 
 
+class InboundAddressOut(BaseModel):
+    enabled: bool = Field(description="False: no reception address on this instance")
+    address: str | None = Field(default=None, description="The community's reception address")
+
+
+class InboundAttachmentOut(BaseModel):
+    id: int
+    filename: str
+    content_type: str
+    byte_size: int
+    content_sha256: str
+
+
+class InboundMailOut(BaseModel):
+    """A mail the reception address received."""
+
+    id: int
+    status: int = Field(
+        description="InboundMailStatus: 1 unmatched, 2 attached, 3 recorded, 4 discarded"
+    )
+    from_address: str | None = None
+    subject: str | None = None
+    sent_at: datetime.datetime | None = None
+    received_at: datetime.datetime
+    body_text: str | None = None
+    id_dossier: int | None = None
+    match_reason: str | None = Field(default=None, description="reference, external_ref, manual")
+    suggested_response: str | None = Field(
+        default=None, description="A response type the procedure offers from its step"
+    )
+    id_correspondence: int | None = None
+    byte_size: int
+    attachments: list[InboundAttachmentOut] = []
+
+
+class InboundAttachIn(BaseModel):
+    id_dossier: int
+
+
+class PieceFromInboundIn(BaseModel):
+    id_inbound_mail: int
+    id_attachment: int
+
+
 class ThreadEntryOut(BaseModel):
     at: datetime.datetime
-    kind: Literal["step", "correspondence", "version"]
+    kind: Literal["step", "correspondence", "version", "inbound"]
     actor: str | None = None
     # step
     from_step: str | None = None
@@ -341,6 +385,8 @@ class ThreadEntryOut(BaseModel):
     # version
     id_document: int | None = None
     version_no: int | None = None
+    # inbound
+    id_inbound_mail: int | None = None
 
 
 class SendPreviewOut(BaseModel):
@@ -374,6 +420,9 @@ class ProcedureDetailOut(ProcedureItemOut):
     )
     has_entry_sheet: bool = Field(description="A piece has a fiche de saisie (GET .../entry-sheet)")
     refusal: RefusalOut | None = None
+    inbound: list[InboundMailOut] = Field(
+        default=[], description="Mails the reception address attached here, to qualify"
+    )
 
 
 class EntryFieldOut(BaseModel):

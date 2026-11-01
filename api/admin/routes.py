@@ -15,7 +15,8 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from fastapi.responses import JSONResponse
 
-from api.admin.deps import get_admin_service, get_procedure_service
+from api.admin.deps import get_admin_service, get_inbound_service, get_procedure_service
+from api.admin.inbound import InboundService
 from api.admin.procedures import ProcedureService
 from api.admin.schemas import (
     BaselineConfirmIn,
@@ -26,7 +27,11 @@ from api.admin.schemas import (
     DeadlineItemOut,
     EntrySheetOut,
     FinalizeOut,
+    InboundAddressOut,
+    InboundAttachIn,
+    InboundMailOut,
     InboxOut,
+    PieceFromInboundIn,
     ProcedureCreateIn,
     ProcedureDefinitionOut,
     ProcedureDetailOut,
@@ -449,10 +454,14 @@ async def record_correspondence(
     body_text: Annotated[str | None, Form()] = None,
     external_ref: Annotated[str | None, Form(max_length=128)] = None,
     file: Annotated[UploadFile | None, File()] = None,
+    inbound_mail_id: Annotated[int | None, Form()] = None,
     dry_run: bool = False,
 ):
     """Add a response. With dry_run=true nothing is written: the answer says
-    which step change and which deadlines recording it would make."""
+    which step change and which deadlines recording it would make.
+
+    ``inbound_mail_id``: record it from a mail the reception address received
+    (its .eml as the file, its subject, text and date as defaults)."""
     view = await service.respond(
         _community(),
         dossier_id,
@@ -464,6 +473,7 @@ async def record_correspondence(
         file=file,
         dry_run=dry_run,
         actor=_actor(),
+        inbound_mail_id=inbound_mail_id,
     )
     if dry_run:
         return ApiResponse(data=CorrespondenceProposalOut.model_validate(view))
@@ -487,3 +497,113 @@ async def download_correspondence(dossier_id: int, correspondence_id: int, servi
         media_type=message.content_type or "application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{name or "download"}"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# The reception address (phase 4)
+# ---------------------------------------------------------------------------
+
+InboundDep = Annotated[InboundService, Depends(get_inbound_service)]
+
+
+def _download(content: bytes, media_type: str | None, name: str) -> Response:
+    safe = "".join(ch for ch in name if ch.isprintable() and ch not in '"\\\r\n')[:200]
+    return Response(
+        content=content,
+        media_type=media_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{safe or "download"}"'},
+    )
+
+
+@admin_routes.get("/inbound-address", response_model=ApiResponse[InboundAddressOut])
+@with_default_error(errors.admin.GET_PROCEDURES)
+async def get_inbound_address(service: InboundDep):
+    """The community's reception address, to forward the GRD's and the CWaPE's
+    answers to (its code is made on first sight). ``enabled`` false: none on
+    this instance."""
+    view = await service.address(_community(), actor=_actor())
+    return ApiResponse(data=InboundAddressOut.model_validate(view))
+
+
+@admin_routes.post(
+    "/inbound-address/rotate",
+    response_model=ApiResponse[InboundAddressOut],
+    dependencies=[Depends(require_min_role(Role.ADMIN))],
+)
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def rotate_inbound_address(service: InboundDep):
+    """A new code for the address (admins): the old address reaches nobody
+    from now on."""
+    view = await service.rotate(_community(), actor=_actor())
+    return ApiResponse(data=InboundAddressOut.model_validate(view))
+
+
+@admin_routes.get("/inbound-mail", response_model=ApiResponse[list[InboundMailOut]])
+@with_default_error(errors.admin.GET_PROCEDURES)
+async def list_inbound_mail(
+    service: InboundDep,
+    status: Literal["open", "unmatched", "attached", "recorded", "discarded", "all"] = "open",
+    id_dossier: int | None = None,
+):
+    """What the reception address received, newest first: ``open`` (the
+    default) is what waits for a manager, unmatched or to qualify."""
+    rows = await service.mails(_community(), status=status, dossier_id=id_dossier)
+    return ApiResponse(data=[InboundMailOut.model_validate(r) for r in rows])
+
+
+@admin_routes.post("/inbound-mail/{mail_id}/attach", response_model=ApiResponse[InboundMailOut])
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def attach_inbound_mail(mail_id: int, body: InboundAttachIn, service: InboundDep):
+    """Attach a mail no reference placed to one of the community's procedures."""
+    view = await service.attach(_community(), mail_id, body.id_dossier, actor=_actor())
+    return ApiResponse(data=InboundMailOut.model_validate(view))
+
+
+@admin_routes.post("/inbound-mail/{mail_id}/discard", response_model=ApiResponse[InboundMailOut])
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def discard_inbound_mail(mail_id: int, service: InboundDep):
+    """Set a mail aside: not a procedure's (its file stays)."""
+    view = await service.discard(_community(), mail_id, actor=_actor())
+    return ApiResponse(data=InboundMailOut.model_validate(view))
+
+
+@admin_routes.get(
+    "/inbound-mail/{mail_id}/file", responses={200: {"content": {"message/rfc822": {}}}}
+)
+@with_default_error(errors.admin.STORAGE_DOWNLOAD_FAILED)
+async def download_inbound_mail(mail_id: int, service: InboundDep):
+    """The mail exactly as it was received (.eml)."""
+    mail, content = await service.mail_file(_community(), mail_id)
+    return _download(content, "message/rfc822", f"message-{mail.id}.eml")
+
+
+@admin_routes.get(
+    "/inbound-mail/{mail_id}/attachments/{attachment_id}/file",
+    responses={200: {"content": {"application/octet-stream": {}}}},
+)
+@with_default_error(errors.admin.STORAGE_DOWNLOAD_FAILED)
+async def download_inbound_attachment(mail_id: int, attachment_id: int, service: InboundDep):
+    """One attachment of a received mail, exactly as it was received."""
+    attachment, content = await service.attachment_file(_community(), mail_id, attachment_id)
+    return _download(content, attachment.content_type, attachment.filename)
+
+
+@admin_routes.post(
+    "/dossiers/{dossier_id}/documents/{document_id}/versions/from-inbound",
+    response_model=ApiResponse[ProcedureDetailOut],
+)
+@with_default_error(errors.admin.UPLOAD_VERSION_FAILED)
+async def piece_from_inbound(
+    dossier_id: int, document_id: int, body: PieceFromInboundIn, service: ProceduresDep
+):
+    """An attachment of a mail received for this procedure, as a new version
+    of one of its pieces (« Utiliser comme pièce »)."""
+    view = await service.piece_from_inbound(
+        _community(),
+        dossier_id,
+        document_id,
+        mail_id=body.id_inbound_mail,
+        attachment_id=body.id_attachment,
+        actor=_actor(),
+    )
+    return ApiResponse(data=ProcedureDetailOut.model_validate(view))

@@ -616,6 +616,86 @@ class CorrespondenceModel(LocalBase):
     )
 
 
+class InboundAddressModel(LocalBase):
+    """A community's reception address code (phase 4). One live per community."""
+
+    __tablename__ = "inbound_address"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id_community: Mapped[int] = mapped_column(Integer, nullable=False)
+    token: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, default=_utcnow
+    )
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    revoked_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+
+class InboundMailModel(LocalBase):
+    """A mail the reception address received (phase 4). ``status`` is
+    ``InboundMailStatus``, a working state; the file is the evidence."""
+
+    __tablename__ = "inbound_mail"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id_community: Mapped[int] = mapped_column(Integer, nullable=False)
+    id_inbound_address: Mapped[int] = mapped_column(
+        Integer, ForeignKey("inbound_address.id"), nullable=False
+    )
+    message_id: Mapped[str | None] = mapped_column(String(998), nullable=True)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    file_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    from_address: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    subject: Mapped[str | None] = mapped_column(String(998), nullable=True)
+    sent_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    body_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    received_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, default=_utcnow
+    )
+    status: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # InboundMailStatus
+    id_dossier: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("dossier.id", ondelete="SET NULL"), nullable=True
+    )
+    match_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    suggested_response: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    id_correspondence: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("correspondence.id"), nullable=True
+    )
+    handled_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    handled_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
+
+
+class InboundMailAttachmentModel(LocalBase):
+    """An attachment of a received mail. APPEND-ONLY (trigger)."""
+
+    __tablename__ = "inbound_mail_attachment"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id_inbound_mail: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("inbound_mail.id"), nullable=False
+    )
+    id_community: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    file_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, default=_utcnow
+    )
+
+
 # ---------------------------------------------------------------------------
 # Procedures engine
 # ---------------------------------------------------------------------------

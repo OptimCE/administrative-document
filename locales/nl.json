@@ -56,7 +56,10 @@
       "STORED_FILE_ALTERED": "Het opgeslagen bestand komt niet meer overeen met zijn vingerafdruk en wordt niet vrijgegeven (code: 2390)",
       "EFFECT_CONFLICT": "Het CRM weigert de inwerkingtreding: deze meters worden op die datum al in een andere operatie gevolgd (code: 2391)",
       "NOT_REFILABLE": "Deze wijziging is niet geweigerd of vervallen, of werd al opnieuw ingediend (code: 2392)",
-      "SUBJECT_NOT_IN_OPERATION": "Het CRM bevat dit niet meer zo: de meter heeft de operatie verlaten of de sleutel werd vervangen (code: 2393)"
+      "SUBJECT_NOT_IN_OPERATION": "Het CRM bevat dit niet meer zo: de meter heeft de operatie verlaten of de sleutel werd vervangen (code: 2393)",
+      "INBOUND_DISABLED": "Het ontvangstadres is op deze instantie niet ingesteld.",
+      "INBOUND_MAIL_NOT_FOUND": "Deze ontvangen e-mail is niet gevonden.",
+      "INBOUND_MAIL_HANDLED": "Deze ontvangen e-mail werd al geregistreerd of terzijde gelegd."
     }
   }
 }

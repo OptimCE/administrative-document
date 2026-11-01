@@ -91,6 +91,24 @@ class Settings(BaseSettings):
     DEADLINE_SWEEP_HOUR_LOCAL: int = 6
     DEADLINE_SWEEP_ENABLED: bool = True
 
+    # ---- The reception address (phase 4, worker/inbound.py) ----
+    # One mailbox serves every community; the worker polls it by IMAP. The
+    # address of a community is the template with its code in place of
+    # {token}: plus-addressing (`demarches+{token}@optimce.be`) or a catch-all
+    # (`{token}@inbox.optimce.be`). Empty template or host: the feature is off
+    # and the hub shows no address.
+    INBOUND_ADDRESS_TEMPLATE: str = ""
+    INBOUND_IMAP_HOST: str = ""
+    INBOUND_IMAP_PORT: int = 993
+    INBOUND_IMAP_SSL: bool = True
+    INBOUND_IMAP_USER: str = ""
+    INBOUND_IMAP_PASSWORD: str = ""
+    INBOUND_IMAP_FOLDER: str = "INBOX"
+    INBOUND_POLL_SECONDS: int = 120
+    INBOUND_POLL_BATCH: int = 50
+    # A mail larger than this (with its attachments) is dropped, and logged.
+    INBOUND_MAX_BYTES: int = 30 * 1024 * 1024
+
     # ---- Regulator registry ----
     # Points at the SHARED reference/regulators.json, which maps a community's
     # `regulator` code to its geographic region — that is what selects the

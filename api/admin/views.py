@@ -257,6 +257,7 @@ def detail(
     has_entry_sheet: bool = False,
     episodes: Mapping[int, Episode] | None = None,
     refusal: Mapping[str, Any] | None = None,
+    inbound: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     facts = facts or PieceFacts()
     episodes = episodes or {}
@@ -309,12 +310,24 @@ def detail(
                 "version_no": version_no,
             }
         )
+    for mail in inbound:
+        # Received at the reception address, attached here, to qualify.
+        thread.append(
+            {
+                "at": mail["received_at"],
+                "kind": "inbound",
+                "actor": None,
+                "id_inbound_mail": mail["id"],
+                "subject": mail["subject"],
+            }
+        )
     thread.sort(key=lambda entry: entry["at"])
 
     operation = operation_names.get(dossier.id_sharing_operation or 0)
     reference = f"[OPT-{dossier.id}]"
     return {
         **view,
+        "inbound": list(inbound),
         "channel": definition.channel,
         "scope": definition.scope,
         "opened_by": dossier.opened_by,

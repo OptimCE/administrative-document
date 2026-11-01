@@ -108,6 +108,12 @@ class _AdminErrors:
     NOT_REFILABLE = Error(code=2392, key="ERRORS.ADMIN.NOT_REFILABLE")
     # Refiling: the CRM no longer has it so (meter left, key replaced). -> 409.
     SUBJECT_NOT_IN_OPERATION = Error(code=2393, key="ERRORS.ADMIN.SUBJECT_NOT_IN_OPERATION")
+    # Phase 4: the reception address is not configured (no template or host). -> 409.
+    INBOUND_DISABLED = Error(code=2394, key="ERRORS.ADMIN.INBOUND_DISABLED")
+    # A received mail (or one of its attachments) of this community does not exist. -> 404.
+    INBOUND_MAIL_NOT_FOUND = Error(code=2395, key="ERRORS.ADMIN.INBOUND_MAIL_NOT_FOUND")
+    # A received mail already recorded or discarded. -> 409.
+    INBOUND_MAIL_HANDLED = Error(code=2396, key="ERRORS.ADMIN.INBOUND_MAIL_HANDLED")
 
 
 class _Errors:

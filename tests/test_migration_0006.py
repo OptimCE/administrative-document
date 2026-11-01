@@ -26,6 +26,18 @@ M0006 = (_ROOT / "scripts" / "sql" / "migrations" / "0006_phase4.sql").read_text
 
 COLUMNS = {
     "deadline": ("reminders_sent",),
+    "inbound_address": ("id_community", "token", "created_by", "revoked_at"),
+    "inbound_mail": (
+        "id_inbound_address",
+        "content_sha256",
+        "file_ref",
+        "status",
+        "id_dossier",
+        "match_reason",
+        "suggested_response",
+        "id_correspondence",
+    ),
+    "inbound_mail_attachment": ("id_inbound_mail", "position", "content_sha256", "file_ref"),
 }
 
 

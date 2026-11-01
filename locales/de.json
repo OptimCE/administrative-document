@@ -56,7 +56,10 @@
       "STORED_FILE_ALTERED": "Die gespeicherte Datei stimmt nicht mehr mit ihrem Fingerabdruck überein und wird nicht herausgegeben (Code: 2390)",
       "EFFECT_CONFLICT": "Das CRM lehnt das Inkrafttreten ab: Diese Zähler werden an diesem Datum bereits in einer anderen Operation geführt (Code: 2391)",
       "NOT_REFILABLE": "Diese Änderung ist weder abgelehnt noch verfallen, oder sie wurde bereits erneut eingereicht (Code: 2392)",
-      "SUBJECT_NOT_IN_OPERATION": "Das CRM führt sie so nicht mehr: Der Zähler hat die Operation verlassen oder der Schlüssel wurde ersetzt (Code: 2393)"
+      "SUBJECT_NOT_IN_OPERATION": "Das CRM führt sie so nicht mehr: Der Zähler hat die Operation verlassen oder der Schlüssel wurde ersetzt (Code: 2393)",
+      "INBOUND_DISABLED": "Die Empfangsadresse ist auf dieser Instanz nicht eingerichtet.",
+      "INBOUND_MAIL_NOT_FOUND": "Diese empfangene E-Mail wurde nicht gefunden.",
+      "INBOUND_MAIL_HANDLED": "Diese empfangene E-Mail wurde bereits erfasst oder verworfen."
     }
   }
 }
