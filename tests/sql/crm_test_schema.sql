@@ -25,6 +25,12 @@ CREATE TABLE IF NOT EXISTS community (
     legal_name               VARCHAR(255),
     iban                     VARCHAR(34),
     account_holder_name      VARCHAR(255),
+    -- crm-backend 2026-11-01_community_representative_documents.sql (phase 4).
+    representative_first_name VARCHAR(255),
+    representative_last_name  VARCHAR(255),
+    representative_email      VARCHAR(255),
+    statutes_date             DATE,
+    internal_rules_date       DATE,
     headquarters_address_id  INTEGER,
     created_at               TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at               TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP

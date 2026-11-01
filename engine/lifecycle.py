@@ -36,7 +36,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from engine.calendar import WorkingCalendar
 from engine.catalogue import ProcedureDefinition, step_event
-from engine.contracts import TRACKED_CHANGE_KINDS, DocumentRequirement, RegulatorPlugin
+from engine.contracts import (
+    REMOVAL_KINDS,
+    TRACKED_CHANGE_KINDS,
+    DocumentRequirement,
+    RegulatorPlugin,
+)
 from engine.deadlines import due_date
 from engine.templates import template_in_force
 from shared.const import (
@@ -55,6 +60,7 @@ from shared.models.local_models import (
     DeadlineModel,
     DeadlineRuleModel,
     DocumentModel,
+    DocumentVersionModel,
     DossierModel,
     ProcedureDefinitionModel,
     StatusEventModel,
@@ -378,6 +384,11 @@ async def move_to_step(
         )
     target = definition.step(to_step)
     await _settle_changes(session, dossier, target.common_status, effects_written=effects_written)
+    leftovers = (
+        await _exclude_leftover_removals(session, dossier)
+        if target.common_status == ProcedureStatus.REFUSED
+        else []
+    )
     event = await _journal(
         session,
         dossier,
@@ -394,7 +405,96 @@ async def move_to_step(
             session, ctx, dossier, step_event(to_step), anchor=day, journal_event_id=event.id
         )
     await refresh_next_action(session, ctx, dossier)
+    for draft in leftovers:
+        holding = await session.get(ProcedureDefinitionModel, draft.id_procedure_definition)
+        if holding is not None:
+            draft_ctx = await context_for(session, ctx.plugin, holding.code, holding.version)
+            await cancel_if_emptied(session, draft_ctx, draft, day)
     return event
+
+
+async def _exclude_leftover_removals(
+    session: AsyncSession, dossier: DossierModel
+) -> list[DossierModel]:
+    """A refused addition never put the meter in the operation: a removal of
+    it still waiting (in a draft, or deferred) removes nothing, so it is
+    excluded. Returns the drafts that held one."""
+    refused = list(
+        await session.scalars(
+            select(ChangeModel).where(
+                ChangeModel.id_community == dossier.id_community,
+                ChangeModel.id_dossier == dossier.id,
+                ChangeModel.status == int(ChangeStatus.REFUSED),
+                ChangeModel.kind.in_(("meter_added", "installation_added")),
+                ChangeModel.id_sharing_operation.is_not(None),
+            )
+        )
+    )
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    drafts: dict[int, DossierModel] = {}
+    for addition in refused:
+        rows = await session.execute(
+            select(ChangeModel, DossierModel)
+            .outerjoin(DossierModel, DossierModel.id == ChangeModel.id_dossier)
+            .where(
+                ChangeModel.id_community == dossier.id_community,
+                ChangeModel.id_sharing_operation == addition.id_sharing_operation,
+                ChangeModel.subject_type == addition.subject_type,
+                ChangeModel.subject_ref == addition.subject_ref,
+                ChangeModel.kind.in_(list(REMOVAL_KINDS)),
+                ChangeModel.id > addition.id,
+                ChangeModel.status.in_((int(ChangeStatus.ATTACHED), int(ChangeStatus.DEFERRED))),
+            )
+        )
+        for removal, holder in rows.tuples():
+            if removal.status == int(ChangeStatus.ATTACHED) and (
+                holder is None
+                or holder.status not in (int(ProcedureStatus.DRAFT), int(ProcedureStatus.READY))
+            ):
+                continue  # sent with its procedure: the GRD decides that one
+            removal.status = int(ChangeStatus.EXCLUDED)
+            removal.payload_json = {
+                **(removal.payload_json or {}),
+                "excluded": {
+                    "reason": "addition_refused",
+                    "addition": addition.id,
+                    "by": ENGINE_ACTOR,
+                    "at": now,
+                },
+            }
+            if holder is not None and removal.id_dossier is not None:
+                drafts[holder.id] = holder
+    await session.flush()
+    return list(drafts.values())
+
+
+async def cancel_if_emptied(
+    session: AsyncSession, ctx: ProcedureContext, dossier: DossierModel, day: datetime.date
+) -> bool:
+    """A draft the system opened, left with no change and no file, is cancelled
+    (if the catalogue lets the engine take that edge). One a person opened, or
+    worked on, stays."""
+    if dossier.opened_by != int(OpenedBy.SYSTEM) or dossier.status != int(ProcedureStatus.DRAFT):
+        return False
+    attached = await session.scalar(
+        select(func.count(ChangeModel.id)).where(
+            ChangeModel.id_community == dossier.id_community,
+            ChangeModel.id_dossier == dossier.id,
+            ChangeModel.status == int(ChangeStatus.ATTACHED),
+        )
+    )
+    if attached:
+        return False
+    versions = await session.scalar(
+        select(func.count(DocumentVersionModel.id))
+        .join(DocumentModel, DocumentModel.id == DocumentVersionModel.id_document)
+        .where(DocumentModel.id_dossier == dossier.id)
+    )
+    if versions:
+        return False
+    return await take_automatic_edge(
+        session, ctx, dossier, ProcedureStatus.CANCELLED, day=day, context={"reason": "compensated"}
+    )
 
 
 def path_to(

@@ -995,13 +995,17 @@ CREATE TABLE IF NOT EXISTS change (
     detected_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     created_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_change_source UNIQUE (source_event_id, procedure_code),
     CONSTRAINT ck_change_subject_type CHECK (subject_type IN (1, 2, 3, 4, 5)),
     CONSTRAINT ck_change_status CHECK (status IN (1, 2, 3, 4, 5, 6, 7)),
     -- attached, applied and refused changes belong to a procedure.
     CONSTRAINT ck_change_filed CHECK (status NOT IN (2, 6, 7) OR id_dossier IS NOT NULL)
 );
 
+-- One change per event, procedure and operation: a community event feeds an
+-- operation procedure once per operation (phase 4; 0003 had no operation).
+ALTER TABLE change DROP CONSTRAINT IF EXISTS uq_change_source;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_change_source_operation
+    ON change (source_event_id, procedure_code, COALESCE(id_sharing_operation, 0));
 CREATE INDEX IF NOT EXISTS ix_change_dossier ON change (id_community, id_dossier);
 -- Compensation: "is the inverse of this change still sitting in a draft?"
 CREATE INDEX IF NOT EXISTS ix_change_subject

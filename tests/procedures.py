@@ -26,6 +26,32 @@ PROCEDURE_OF = {
 }
 
 
+async def baseline_all_done(world: Any) -> None:
+    """Confirm a test world's baseline as a community where everything asked
+    about was already done (phase 4: the creation's notification, each
+    operation's authorisation), so the world starts with no task."""
+    from api.admin.service import AdminService
+    from engine.baseline import Choice, ChoiceIn
+    from ports.core_effects_sqlalchemy import SqlCoreEffects
+    from ports.crm_engine import SqlEngineCrmRead
+
+    service = AdminService(
+        local_session=world.session,
+        crm_session=world.session,
+        crm_read=SqlEngineCrmRead(world.session),
+        effects=SqlCoreEffects(world.session),
+        registry=world.registry,
+        region_of=lambda _code: 1,
+    )
+    view = await service.baseline(world.id_community)
+    done = [
+        ChoiceIn(item["key"], Choice.ACTIVE)
+        for item in view["items"]
+        if item["subject_type"] == "procedure"
+    ]
+    await service.confirm_baseline(world.id_community, done, actor="test")
+
+
 async def open_procedure(
     client: Any,
     headers: dict[str, str],

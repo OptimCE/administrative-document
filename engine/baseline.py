@@ -19,6 +19,14 @@ current meters and approved keys, and opens the plugin's baseline procedure
   episodes, the changes already filed) is listed: ``added`` (the same three
   choices, ``not_notified`` by default) or ``removed`` (``ended`` when the GRD
   already took it out, else ``not_notified`` or ``in_progress``).
+- **Procedures asked** (phase 4): a procedure whose trigger always lands before
+  the module can be on (``asked_at_baseline``: the creation's notification, an
+  operation's authorisation) is asked about at first activation, once for a
+  community procedure and once per operation for an operation one: ``active``
+  (already done, the default when the community or the operation has an
+  active meter), ``not_notified`` (its draft opens, and takes the operation's
+  meters said not notified when it absorbs them) or ``in_progress`` (born
+  sent, with the operation's meters in progress, on its date).
 - Nothing to list: confirmed at once, no task.
 
 Confirmation spans two databases, in the order of decision Q3: the core's
@@ -40,9 +48,10 @@ from typing import Any
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from engine.catalogue import Catalogue, CatalogueEntry, ProcedureDefinition
 from engine.contracts import RegulatorPlugin
 from engine.events import BRUSSELS, DetectedChange
-from engine.filing import LIVE_STATUSES, RegionOf, file_change, recompute
+from engine.filing import LIVE_STATUSES, RegionOf, file_change, placements, recompute
 from engine.lifecycle import (
     ENGINE_ACTOR,
     LifecycleError,
@@ -64,6 +73,8 @@ from shared.models.local_models import ChangeModel, DossierModel, ModuleActivati
 
 _METER = int(ChangeSubjectType.METER)
 _KEY = int(ChangeSubjectType.KEY)
+_OPERATION = int(ChangeSubjectType.OPERATION)
+_COMMUNITY = int(ChangeSubjectType.COMMUNITY)
 _CRM_ACTIVE = 1  # meter_data.status; 3 and 4 are waiting
 _ADD_KINDS = ("meter_added", "installation_added", "key_changed")
 
@@ -132,7 +143,14 @@ class Decision:
         return ItemChange(self.item["change"])
 
     @property
+    def asked(self) -> bool:
+        """A procedure the baseline asks about, not a subject the core tracks."""
+        return "procedure_code" in self.item
+
+    @property
     def kind(self) -> str:
+        if self.asked:
+            return str(self.item["ask_kind"])
         if self.change == ItemChange.REMOVED:
             return "meter_removed"
         return "meter_added" if self.item["subject_type"] == _METER else "key_changed"
@@ -140,6 +158,10 @@ class Decision:
 
 def item_key(subject_type: int, id_sharing_operation: int, subject_ref: str) -> str:
     return f"{subject_type}:{id_sharing_operation}:{subject_ref}"
+
+
+def ask_key(procedure_code: str, id_sharing_operation: int | None) -> str:
+    return f"ask:{procedure_code}:{id_sharing_operation or 0}"
 
 
 def brussels_today(now: datetime.datetime) -> datetime.date:
@@ -198,6 +220,39 @@ def _key_items(photo: CommunityPhoto, change: ItemChange, keep) -> list[dict[str
         for k in photo.keys
         if keep(_KEY, k.id_sharing_operation, str(k.id_key))
     ]
+
+
+def _ask_items(
+    catalogue: Catalogue, photo: CommunityPhoto, *, id_community: int, on: datetime.date
+) -> list[dict[str, Any]]:
+    """The procedures the baseline asks about: one per operation for an
+    operation procedure, one for a community procedure. Already done by
+    default where a meter is active (the GRD lets nothing run unauthorised),
+    not notified otherwise: the choice that cannot under-notify."""
+    active_operations = {m.id_sharing_operation for m in photo.meters if m.status == _CRM_ACTIVE}
+    items: list[dict[str, Any]] = []
+    for entry in catalogue.asked_at_baseline(on):
+        definition = entry.definition
+        scopes: list[int | None] = (
+            [*sorted(photo.operations)] if definition.scope == "operation" else [None]
+        )
+        for operation in scopes:
+            done = bool(active_operations) if operation is None else operation in active_operations
+            items.append(
+                {
+                    "key": ask_key(definition.code, operation),
+                    "subject_type": _COMMUNITY if operation is None else _OPERATION,
+                    "subject_ref": str(id_community if operation is None else operation),
+                    "id_sharing_operation": operation,
+                    "operation_name": photo.operations.get(operation) if operation else None,
+                    "change": str(ItemChange.PRESENT),
+                    "default": str(Choice.ACTIVE if done else Choice.NOT_NOTIFIED),
+                    "procedure_code": definition.code,
+                    "procedure_labels": dict(definition.labels),
+                    "ask_kind": definition.handles_change_kinds[0],
+                }
+            )
+    return items
 
 
 def _first_items(photo: CommunityPhoto) -> list[dict[str, Any]]:
@@ -303,7 +358,9 @@ async def ensure_baseline(
         items = _difference(photo, episodes, await _filed_subjects(local, period.id_community))
     else:
         kind = "first"
-        items = _first_items(photo)
+        items = _ask_items(
+            plugin.catalogue(), photo, id_community=period.id_community, on=today
+        ) + _first_items(photo)
 
     ctx = await context_for(local, plugin, entry.definition.code, entry.definition.version)
     region = region_of(plugin.code)
@@ -338,6 +395,16 @@ async def ensure_baseline(
         period.baseline_json = {**baseline, "confirmation": {}}
     await local.flush()
     return dict(period.baseline_json)
+
+
+def asked(baseline: Mapping[str, Any], kind: str, operation: int | None) -> bool:
+    """Did this period's baseline ask about the procedure a change of this kind
+    opens, for this operation? Its answer covers the change: an event in flight
+    when the photo was taken files nothing more."""
+    return any(
+        item.get("ask_kind") == kind and item.get("id_sharing_operation") == operation
+        for item in baseline.get("items", ())
+    )
 
 
 def photographed(baseline: Mapping[str, Any], subject_type: int, operation: int, ref: str) -> bool:
@@ -399,6 +466,8 @@ def episode_writes(
     origin = int(baseline["id_dossier"])
     writes = []
     for decision in decisions:
+        if decision.asked:
+            continue  # a procedure, not a subject the core tracks
         item = decision.item
         status = _STATUS[(decision.change, decision.choice)]
         if decision.change == ItemChange.REMOVED:
@@ -435,13 +504,18 @@ def episode_writes(
 
 def _detected(decision: Decision, period_id: int) -> DetectedChange:
     item = decision.item
+    operation = item.get("id_sharing_operation")
     return DetectedChange(
         kind=decision.kind,
         subject_type=ChangeSubjectType(int(item["subject_type"])),
         subject_ref=str(item["subject_ref"]),
-        id_sharing_operation=int(item["id_sharing_operation"]),
+        id_sharing_operation=int(operation) if operation is not None else None,
         payload={
-            **{k: v for k, v in item.items() if k not in ("key", "change", "default")},
+            **{
+                k: v
+                for k, v in item.items()
+                if k not in ("key", "change", "default", "procedure_labels")
+            },
             "baseline": {"period": period_id, "item": item["key"]},
             "effective_date": _iso(decision.effective_date),
         },
@@ -469,8 +543,18 @@ async def record_confirmation(
     if baseline_entry is None:
         raise LifecycleError(f"{plugin.code} declares no baseline procedure")
 
+    # The procedures asked about go first: a draft or a sent request opened for
+    # an operation takes the meters filed after it (absorbs_change_kinds).
+    ordered = sorted(decisions, key=lambda d: not d.asked)
+    opening = {
+        d.item.get("id_sharing_operation"): d
+        for d in ordered
+        if d.asked
+        and d.choice == Choice.IN_PROGRESS
+        and _definition(catalogue, str(d.item["procedure_code"]), today).absorbs_change_kinds
+    }
     sent: dict[tuple[int, str, datetime.date], list[Decision]] = defaultdict(list)
-    for decision in decisions:
+    for decision in ordered:
         change = _detected(decision, period.id)
         if decision.choice in (Choice.ACTIVE, Choice.ENDED):
             local.add(
@@ -489,16 +573,22 @@ async def record_confirmation(
                 )
             )
             continue
-        targets = catalogue.handling(change.kind, today)
+        if decision.asked:
+            code = str(decision.item["procedure_code"])
+            targets = [(_entry(catalogue, code, today), change)]
+        else:
+            targets = await placements(
+                local, catalogue, change, id_community=period.id_community, day=today
+            )
         if not targets:
             raise LifecycleError(f"{plugin.code} files no {change.kind}: cannot record it")
         if decision.choice == Choice.NOT_NOTIFIED:
-            for entry in targets:
+            for entry, placed in targets:
                 await file_change(
                     local,
                     plugin,
                     entry,
-                    change,
+                    placed,
                     id_community=period.id_community,
                     day=today,
                     at=now,
@@ -509,9 +599,20 @@ async def record_confirmation(
             continue
         if decision.sent_date is None:  # resolve() refuses it; kept for the type
             raise BaselineError(f"{decision.item['key']}: in progress needs its sending date")
-        sent[
-            (int(change.id_sharing_operation or 0), targets[0].definition.code, decision.sent_date)
-        ].append(decision)
+        code, sent_date = targets[0][0].definition.code, decision.sent_date
+        request = opening.get(change.id_sharing_operation)
+        if (
+            not decision.asked
+            and request is not None
+            and request.sent_date is not None
+            and change.kind
+            in _definition(
+                catalogue, str(request.item["procedure_code"]), today
+            ).absorbs_change_kinds
+        ):
+            # Sent with the operation's authorisation request: in it, on its date.
+            code, sent_date = str(request.item["procedure_code"]), request.sent_date
+        sent[(int(change.id_sharing_operation or 0), code, sent_date)].append(decision)
 
     for (operation, code, sent_date), group in sorted(sent.items()):
         await _already_sent(
@@ -551,6 +652,17 @@ async def record_confirmation(
         },
     }
     await local.flush()
+
+
+def _entry(catalogue: Catalogue, code: str, day: datetime.date) -> CatalogueEntry:
+    entry = catalogue.in_force(code, day)
+    if entry is None:
+        raise LifecycleError(f"{catalogue.regulator} has no {code} in force on {day}")
+    return entry
+
+
+def _definition(catalogue: Catalogue, code: str, day: datetime.date) -> ProcedureDefinition:
+    return _entry(catalogue, code, day).definition
 
 
 async def _already_sent(

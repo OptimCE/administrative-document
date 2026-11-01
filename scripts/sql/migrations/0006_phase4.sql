@@ -11,6 +11,11 @@
 --     address. Each community's address carries a random code; the worker
 --     polls one mailbox by IMAP, stores each mail and its attachments, and
 --     attaches it to the procedure its [OPT-<id>] reference names.
+--   * change: one change per (event, procedure, operation). A community event
+--     (a new representative) feeds an operation procedure once per operation,
+--     so UNIQUE (source_event_id, procedure_code) becomes an index on the
+--     operation too. Every existing row has one change per (event, procedure),
+--     so the new index holds them all.
 --
 -- Idempotent and forward-only. On a fresh install (schema.sql already has all
 -- of this) it changes nothing.
@@ -115,6 +120,11 @@ DROP TRIGGER IF EXISTS trg_inbound_mail_attachment_immutable ON inbound_mail_att
 CREATE TRIGGER trg_inbound_mail_attachment_immutable
     BEFORE UPDATE OR DELETE ON inbound_mail_attachment
     FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
+
+-- ---- change: one per event, procedure and operation ------------------------
+ALTER TABLE change DROP CONSTRAINT IF EXISTS uq_change_source;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_change_source_operation
+    ON change (source_event_id, procedure_code, COALESCE(id_sharing_operation, 0));
 
 INSERT INTO schema_version (version, description)
 VALUES (6, 'Phase 4: reminder ladder, reception address')

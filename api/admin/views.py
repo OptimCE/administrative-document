@@ -19,6 +19,8 @@ from engine.lifecycle import UNRESOLVED
 from ports.crm_engine import Episode
 from shared.const import (
     ChangeStatus,
+    DeadlineKind,
+    DeadlineStatus,
     DocumentKind,
     ProcedureDocumentStatus,
     ProcedureStatus,
@@ -310,6 +312,17 @@ def detail(
                 "version_no": version_no,
             }
         )
+    for correction in (dossier.metadata_json or {}).get("effective_date_corrections") or ():
+        thread.append(
+            {
+                "at": datetime.datetime.fromisoformat(correction["at"]),
+                "kind": "effective_date",
+                "actor": correction.get("actor"),
+                "reason": correction.get("reason"),
+                "effective_date": correction.get("to"),
+                "previous_effective_date": correction.get("from"),
+            }
+        )
     for mail in inbound:
         # Received at the reception address, attached here, to qualify.
         thread.append(
@@ -333,6 +346,12 @@ def detail(
         "opened_by": dossier.opened_by,
         "requested_effective_date": dossier.requested_effective_date,
         "effective_date": dossier.effective_date,
+        # Phase 4: an effect still to come may be corrected by hand.
+        "effective_date_correctable": dossier.status != int(ProcedureStatus.IN_FORCE)
+        and any(
+            d.kind == int(DeadlineKind.EFFECT) and d.status == int(DeadlineStatus.OPEN)
+            for d in deadlines
+        ),
         "frozen_at": dossier.frozen_at,
         "effect_error": dossier.effect_error_json,
         "timeline": [

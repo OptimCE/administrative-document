@@ -258,6 +258,17 @@ class ProcedureDefinition(_Model):
     channel: Literal["email", "online_form", "post"]
     family: UpperCode  # one open draft per family
     handles_change_kinds: tuple[LowerCode, ...] = ()
+    # While this procedure has an open draft for an operation, it takes these
+    # changes of that operation instead of the procedures that handle them (a
+    # new operation's first meters go into its authorisation request).
+    absorbs_change_kinds: tuple[LowerCode, ...] = ()
+    # The baseline asks whether it was already done (per operation for an
+    # operation procedure, once for a community one): the trigger it handles
+    # always lands before the module could be switched on.
+    asked_at_baseline: bool = False
+    # In force, it ends the operation: every meter the operation still holds
+    # leaves the day before the effect date, and its key with them.
+    ends_operation: bool = False
     opens_annually: AnnualDate | None = None  # a calendar procedure, one per year
     variants: tuple[LowerCode, ...] = ()
     default_variant: LowerCode | None = None
@@ -279,6 +290,7 @@ class ProcedureDefinition(_Model):
             ("deadline rule", [r.code for r in self.deadline_rules]),
             ("document", [d.code for d in self.documents]),
             ("change kind", list(self.handles_change_kinds)),
+            ("absorbed change kind", list(self.absorbs_change_kinds)),
             ("variant", list(self.variants)),
         ):
             for code in _duplicates(codes):
@@ -336,10 +348,26 @@ class ProcedureDefinition(_Model):
             if unreachable:
                 problems.append(f"no transition reaches {', '.join(unreachable)}")
 
+        for kind in sorted(set(self.absorbs_change_kinds) & set(self.handles_change_kinds)):
+            problems.append(f"change kind {kind} is both handled and absorbed")
+        if self.absorbs_change_kinds and self.scope != "operation":
+            problems.append("only an operation procedure absorbs its operation's changes")
+        if self.asked_at_baseline and not self.handles_change_kinds:
+            problems.append("a procedure asked at baseline handles the change it is asked for")
+        if self.ends_operation and self.scope != "operation":
+            problems.append("only an operation procedure ends an operation")
+
         if self.purpose == "baseline":
             if self.scope != "community":
                 problems.append("a baseline procedure is about the whole community")
-            if self.handles_change_kinds or self.opens_annually or self.variants:
+            if (
+                self.handles_change_kinds
+                or self.absorbs_change_kinds
+                or self.opens_annually
+                or self.variants
+                or self.asked_at_baseline
+                or self.ends_operation
+            ):
                 problems.append("a baseline procedure takes no change, period or variant")
             if self.automatic_edge_to(self.initial_step, ProcedureStatus.IN_FORCE, None) is None:
                 problems.append(
@@ -478,6 +506,21 @@ class Catalogue:
             e
             for e in self.entries
             if e.in_force_on(on) and change_kind in e.definition.handles_change_kinds
+        )
+
+    def absorbing(self, change_kind: str, on: datetime.date) -> tuple[CatalogueEntry, ...]:
+        """The procedures in force on ``on`` that take a change of this kind
+        instead of its handlers while they have an open draft."""
+        return tuple(
+            e
+            for e in self.entries
+            if e.in_force_on(on) and change_kind in e.definition.absorbs_change_kinds
+        )
+
+    def asked_at_baseline(self, on: datetime.date) -> tuple[CatalogueEntry, ...]:
+        """The procedures in force on ``on`` the baseline asks about."""
+        return tuple(
+            e for e in self.entries if e.in_force_on(on) and e.definition.asked_at_baseline
         )
 
     def baseline(self, on: datetime.date) -> CatalogueEntry | None:

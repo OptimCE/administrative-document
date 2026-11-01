@@ -286,6 +286,42 @@ class TestSnapshot:
         assert snapshot["distribution_key"] is None
         assert snapshot["start_date"] is None
 
+    @pytest.mark.parametrize(
+        "doc_type",
+        [
+            prefill.DOC_TYPE_COMMUNITY_NOTIFICATION,
+            prefill.DOC_TYPE_COMMUNITY_MODIFICATION,
+            prefill.DOC_TYPE_SHARING_NOTIFICATION,
+            prefill.DOC_TYPE_SHARING_MODIFICATION,
+        ],
+    )
+    def test_the_representative_the_crm_knows_fills_the_form(self, doc_type):
+        """Phase 4: the CRM records the community's representative, so the
+        reviewer no longer types it."""
+        community = dataclasses.replace(
+            _COMMUNITY, representative_first_name=" Anne ", representative_last_name="Dupont"
+        )
+        assert prefill.build_snapshot(doc_type, community=community)["representative_name"] == (
+            "Anne Dupont"
+        )
+        assert prefill.build_snapshot(doc_type, community=_COMMUNITY)["representative_name"] is None
+
+    def test_a_form_without_a_representative_gets_none(self):
+        community = dataclasses.replace(_COMMUNITY, representative_last_name="Dupont")
+        snapshot = prefill.build_snapshot(
+            prefill.DOC_TYPE_ANNEX8_SWORN_DECLARATION, community=community
+        )
+        assert "representative_name" not in snapshot
+
+    def test_the_dso_convention_names_the_representative_when_known(self):
+        community = dataclasses.replace(
+            _COMMUNITY, representative_first_name="Anne", representative_last_name="Dupont"
+        )
+        snapshot = prefill.build_snapshot(
+            prefill.DOC_TYPE_DSO_AGREEMENT_COMMUNITY, community=community
+        )
+        assert snapshot["representative_name"] == "Anne Dupont"
+
     def test_the_building_convention_has_its_own_extra_clause(self):
         """It splits the preamble in two; the community one states it in one."""
         building = prefill.build_snapshot(

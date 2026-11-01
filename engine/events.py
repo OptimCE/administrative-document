@@ -110,13 +110,15 @@ def _field(name: str) -> Callable[[CoreEvent], str]:
 
 
 # event type -> (change kind, subject, how to read the subject's reference).
-# The reserved events (installation_*, operation.closed, representative,
-# statutes, internal rules) have no emitter in the core yet.
+# The reserved events installation_* and operation.closed have no emitter in
+# the core yet; the representative, statutes and internal rules have one since
+# phase 4 (crm-backend updateCommunity).
 _CHANGES: dict[str, tuple[str, ChangeSubjectType, Callable[[CoreEvent], str]]] = {
     "operation.created": ("operation_created", ChangeSubjectType.OPERATION, _operation),
     "operation.closed": ("operation_closed", ChangeSubjectType.OPERATION, _operation),
     # A hard delete is not a closure: nothing says the operation was ever
-    # authorised. No catalogue routes it; ending a sharing is filed by hand.
+    # authorised. It only undoes a request still in a draft (UNDO_ONLY);
+    # ending a sharing is filed by hand.
     "operation.deleted": ("operation_deleted", ChangeSubjectType.OPERATION, _operation),
     "operation.meter_added": ("meter_added", ChangeSubjectType.METER, _field("ean")),
     "operation.meter_removed": ("meter_removed", ChangeSubjectType.METER, _field("ean")),
@@ -151,7 +153,13 @@ INVERSE: dict[str, str] = {
     "installation_removed": "installation_added",
     "member_joined": "member_left",
     "member_left": "member_joined",
+    # A deleted operation was never authorised: it only undoes the request a
+    # draft still holds for it.
+    "operation_deleted": "operation_created",
 }
+
+# Changes that only undo their inverse: with nothing to undo they file nothing.
+UNDO_ONLY = frozenset({"operation_deleted"})
 
 
 def change_of(event: CoreEvent) -> DetectedChange | None:

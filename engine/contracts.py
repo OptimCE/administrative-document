@@ -176,7 +176,8 @@ TRACKED_CHANGE_KINDS = frozenset({*ADDITION_KINDS, *REMOVAL_KINDS})
 def _check_episode_statuses(plugin: RegulatorPlugin) -> None:
     for entry in plugin.catalogue().entries:
         definition = entry.definition
-        if not TRACKED_CHANGE_KINDS & set(definition.handles_change_kinds):
+        filed = {*definition.handles_change_kinds, *definition.absorbs_change_kinds}
+        if not TRACKED_CHANGE_KINDS & filed:
             continue
         for step in definition.steps:
             if step.common_status != ProcedureStatus.SENT:

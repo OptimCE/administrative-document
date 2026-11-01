@@ -59,7 +59,8 @@
       "SUBJECT_NOT_IN_OPERATION": "Das CRM führt sie so nicht mehr: Der Zähler hat die Operation verlassen oder der Schlüssel wurde ersetzt (Code: 2393)",
       "INBOUND_DISABLED": "Die Empfangsadresse ist auf dieser Instanz nicht eingerichtet.",
       "INBOUND_MAIL_NOT_FOUND": "Diese empfangene E-Mail wurde nicht gefunden.",
-      "INBOUND_MAIL_HANDLED": "Diese empfangene E-Mail wurde bereits erfasst oder verworfen."
+      "INBOUND_MAIL_HANDLED": "Diese empfangene E-Mail wurde bereits erfasst oder verworfen.",
+      "EFFECTIVE_DATE_NOT_OPEN": "Das Datum des Inkrafttretens kann nur korrigiert werden, solange es noch bevorsteht: Für dieses Verfahren steht kein Inkrafttreten aus."
     }
   }
 }

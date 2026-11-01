@@ -158,6 +158,11 @@ class EngineCrmRead(Protocol):
         """The operation's approved key on day ``on``."""
         ...
 
+    async def operations_in_use(self, id_community: int, *, on: datetime.date) -> list[int]:
+        """The community's operations holding a meter on day ``on`` (active or
+        waiting): what a change of the community itself is notified for."""
+        ...
+
 
 _MODULE_STATE_SQL = text(
     "SELECT c.regulator, s.is_active, s.updated_at "
@@ -250,6 +255,16 @@ _ACTIVE_KEYS_SQL = text(
 # WAITING_GRD, WAITING_MANAGER), and of one the meter left (INACTIVE).
 _IN_OPERATION_METER_DATA = [1, 3, 4]
 _INACTIVE_METER_DATA = 2
+
+_OPERATIONS_IN_USE_SQL = text(
+    "SELECT DISTINCT md.id_sharing_operation FROM meter_data md "
+    "JOIN sharing_operation so "
+    "  ON so.id = md.id_sharing_operation AND so.id_community = md.id_community "
+    "WHERE md.id_community = :id_community AND md.status IN :in_operation "
+    "  AND (md.start_date IS NULL OR md.start_date <= :on) "
+    "  AND (md.end_date IS NULL OR md.end_date >= :on) "
+    "ORDER BY md.id_sharing_operation"
+).bindparams(bindparam("in_operation", expanding=True))
 
 _IN_OPERATION_SQL = text(
     "SELECT DISTINCT md.ean FROM meter_data md "
@@ -436,6 +451,13 @@ class SqlEngineCrmRead:
             },
         )
         return [_episode(row) for row in result]
+
+    async def operations_in_use(self, id_community: int, *, on: datetime.date) -> list[int]:
+        result = await self._session.execute(
+            _OPERATIONS_IN_USE_SQL,
+            {"id_community": id_community, "on": on, "in_operation": _IN_OPERATION_METER_DATA},
+        )
+        return [int(row[0]) for row in result]
 
     async def communities_with_module(self) -> list[int]:
         result = await self._session.execute(

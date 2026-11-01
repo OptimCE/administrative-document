@@ -114,6 +114,9 @@ class _AdminErrors:
     INBOUND_MAIL_NOT_FOUND = Error(code=2395, key="ERRORS.ADMIN.INBOUND_MAIL_NOT_FOUND")
     # A received mail already recorded or discarded. -> 409.
     INBOUND_MAIL_HANDLED = Error(code=2396, key="ERRORS.ADMIN.INBOUND_MAIL_HANDLED")
+    # Phase 4: the effect date is corrected only while it is still to come (an
+    # open effect deadline). -> 409.
+    EFFECTIVE_DATE_NOT_OPEN = Error(code=2397, key="ERRORS.ADMIN.EFFECTIVE_DATE_NOT_OPEN")
 
 
 class _Errors:

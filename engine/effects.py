@@ -45,6 +45,12 @@ The engine decides which rows, statuses and dates; the plugin only says which
 regulatory status each of its "sent" steps means
 (``RegulatorPlugin.episode_status``).
 
+A procedure that ends its operation (``ends_operation``, PARTAGE_FIN v2)
+files, as it goes in force, the removal of every meter the operation still
+holds (so each row ends the day before the effect date, like any removal),
+ends the operation's key the same day, and cancels the operation's open
+drafts: nothing is left to notify for it.
+
 ``sync`` (the badges, after any step or change) and ``go_in_force`` (the
 effect, core first) are what the entry points call. They, ``push`` and
 ``record_effect_error`` are the only code here that commits: they run after
@@ -70,8 +76,8 @@ from engine.contracts import (
     RegulatorPlugin,
     plugin_for,
 )
-from engine.filing import context_of_procedure
-from engine.lifecycle import ENGINE_ACTOR, move_to_step
+from engine.filing import LIVE_STATUSES, OPEN, context_of_procedure
+from engine.lifecycle import ENGINE_ACTOR, move_to_step, take_automatic_edge
 from ports.core_effects import CoreEffectsPort, EffectConflictError, EpisodeWrite
 from ports.crm_engine import EngineCrmRead, Episode
 from shared.const import ChangeStatus, ChangeSubjectType, ProcedureStatus, RegulatoryStatus
@@ -747,6 +753,122 @@ async def _keep_error(
         await local.rollback()
 
 
+# A meter episode the end of its operation takes out: there, or on its way in.
+_HELD = [
+    int(RegulatoryStatus.PENDING_GRD),
+    int(RegulatoryStatus.PENDING_REGULATOR),
+    int(RegulatoryStatus.AUTHORIZED),
+    int(RegulatoryStatus.ACTIVE),
+    int(RegulatoryStatus.LEAVING),
+]
+
+
+async def _end_operation(
+    local: AsyncSession,
+    crm: EngineCrmRead,
+    plugin: RegulatorPlugin,
+    dossier: DossierModel,
+    *,
+    code: str,
+    effective_date: datetime.date,
+) -> list[EpisodeWrite]:
+    """What ending the operation adds before its plan: the open drafts
+    cancelled, a removal of each meter it still holds filed into this
+    procedure (one already being removed keeps its own). Returns the writes
+    ending its active key, which no change carries."""
+    operation = int(dossier.id_sharing_operation or 0)
+    community = dossier.id_community
+    drafts = list(
+        await local.scalars(
+            select(DossierModel).where(
+                DossierModel.id_community == community,
+                DossierModel.id_sharing_operation == operation,
+                DossierModel.status.in_(OPEN),
+                DossierModel.id != dossier.id,
+            )
+        )
+    )
+    for draft in drafts:
+        draft_ctx = await context_of_procedure(local, plugin, draft)
+        reason = {"reason": "operation_ended", "procedure": dossier.id}
+        if draft.status == int(ProcedureStatus.READY):
+            await take_automatic_edge(
+                local, draft_ctx, draft, ProcedureStatus.DRAFT, day=effective_date, context=reason
+            )
+        if not await take_automatic_edge(
+            local, draft_ctx, draft, ProcedureStatus.CANCELLED, day=effective_date, context=reason
+        ):
+            logger.warning("procedure %s stays open: no automatic way to cancelled", draft.id)
+
+    leaving = set(
+        await local.scalars(
+            select(ChangeModel.subject_ref)
+            .outerjoin(DossierModel, DossierModel.id == ChangeModel.id_dossier)
+            .where(
+                ChangeModel.id_community == community,
+                ChangeModel.id_sharing_operation == operation,
+                ChangeModel.subject_type == _METER,
+                ChangeModel.kind.in_(list(REMOVALS)),
+                (
+                    (ChangeModel.status == int(ChangeStatus.DEFERRED))
+                    | (
+                        (ChangeModel.status == int(ChangeStatus.ATTACHED))
+                        & (
+                            DossierModel.status.in_(LIVE_STATUSES)
+                            | (ChangeModel.id_dossier == dossier.id)
+                        )
+                    )
+                ),
+            )
+        )
+    )
+    now = datetime.datetime.now(datetime.UTC)
+    for episode in await crm.episodes(community, statuses=_HELD):
+        if (
+            episode.id_sharing_operation != operation
+            or episode.subject_type != _METER
+            or episode.subject_ref in leaving
+        ):
+            continue
+        leaving.add(episode.subject_ref)
+        local.add(
+            ChangeModel(
+                id_community=community,
+                id_sharing_operation=operation,
+                kind="meter_removed",
+                subject_type=_METER,
+                subject_ref=episode.subject_ref,
+                payload_json={"ean": episode.subject_ref, "reason": "operation_ended"},
+                source_event_id=None,
+                procedure_code=code,
+                status=int(ChangeStatus.ATTACHED),
+                id_dossier=dossier.id,
+                detected_at=now,
+            )
+        )
+    await local.flush()
+
+    last_day = effective_date - _DAY
+    writes = []
+    for key in await crm.active_keys(community, operation):
+        ends_before = key.valid_from is not None and last_day < key.valid_from
+        writes.append(
+            EpisodeWrite(
+                id_sharing_operation=operation,
+                subject_type=_KEY,
+                subject_ref=key.subject_ref,
+                id_dossier_origin=key.id_dossier_origin,
+                regulatory_status=RegulatoryStatus.WITHDRAWN
+                if ends_before
+                else RegulatoryStatus.ENDED,
+                valid_from=key.valid_from,
+                valid_to=None if ends_before else last_day,
+                regulatory_ref=str(dossier.id),
+            )
+        )
+    return writes
+
+
 class InForceError(Exception):
     """The procedure cannot go in force from where it stands."""
 
@@ -797,6 +919,16 @@ async def go_in_force(
         raise InForceError(f"procedure {dossier_id} cannot go in force from {dossier.step}")
     id_community = dossier.id_community
 
+    ended: list[EpisodeWrite] = []
+    if ctx.definition.ends_operation and dossier.id_sharing_operation is not None:
+        ended = await _end_operation(
+            local,
+            crm_read,
+            plugin,
+            dossier,
+            code=ctx.definition.code,
+            effective_date=effective_date,
+        )
     writes = await plan(
         local,
         crm_read,
@@ -805,6 +937,7 @@ async def go_in_force(
         [dossier_id],
         overrides={dossier_id: StepOverride(target, effective_date)},
     )
+    writes += ended
     await local.commit()
     try:
         await push(

@@ -20,6 +20,7 @@ from regulators.cwape.plugin import CwapePlugin
 from shared.models.local_models import DeadlineModel, StatusEventModel
 from tests.conftest import create_sharing_operation, gateway_headers
 from tests.engine.world import EAN, make_world, meter
+from tests.procedures import baseline_all_done
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,7 +29,9 @@ WAL = WorkingCalendar(CwapePlugin().calendar())
 
 
 async def _world(db_session):
-    return await make_world(db_session, plugin=CwapePlugin())
+    world = await make_world(db_session, plugin=CwapePlugin())
+    await baseline_all_done(world)
+    return world
 
 
 async def _headers(db_session, world, role: str = "MANAGER") -> dict[str, str]:
@@ -149,9 +152,11 @@ class TestTheDashboard:
             True,
             "BE-WAL-CWAPE",
         )
-        assert status["baseline"] == "confirmed"  # nothing to confirm in an empty community
+        assert status["baseline"] == "confirmed"
         definitions = (await client.get("/admin/procedure-definitions", headers=headers)).json()
-        assert len(definitions["data"]) == 7
+        # Every version; one in force per code (the four phase-4 ones have two).
+        assert len(definitions["data"]) == 11
+        assert len([d for d in definitions["data"] if d["in_force"]]) == 7
 
     async def test_the_agenda_lists_open_deadlines(self, client, db_session, admin_storage):
         world = await _world(db_session)

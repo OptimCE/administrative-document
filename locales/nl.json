@@ -59,7 +59,8 @@
       "SUBJECT_NOT_IN_OPERATION": "Het CRM bevat dit niet meer zo: de meter heeft de operatie verlaten of de sleutel werd vervangen (code: 2393)",
       "INBOUND_DISABLED": "Het ontvangstadres is op deze instantie niet ingesteld.",
       "INBOUND_MAIL_NOT_FOUND": "Deze ontvangen e-mail is niet gevonden.",
-      "INBOUND_MAIL_HANDLED": "Deze ontvangen e-mail werd al geregistreerd of terzijde gelegd."
+      "INBOUND_MAIL_HANDLED": "Deze ontvangen e-mail werd al geregistreerd of terzijde gelegd.",
+      "EFFECTIVE_DATE_NOT_OPEN": "De datum van inwerkingtreding kan alleen worden gecorrigeerd zolang ze nog moet komen: deze procedure heeft geen inwerkingtreding in afwachting."
     }
   }
 }

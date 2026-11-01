@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.regions import region_for_regulator
@@ -31,6 +31,10 @@ from ports.crm_core import (
 
 # meter_data.status value for an active attribution (MeterDataStatus.ACTIVE).
 _ACTIVE_METER_DATA_STATUS = 1
+# In one operation, a meter waiting for its GRD (3) or its manager (4) is listed
+# too: it is what an authorisation or a modification notifies (phase 4; one
+# status per meter keeps it waiting until its procedure makes it active).
+_IN_OPERATION_METER_DATA_STATUSES = [1, 3, 4]
 
 _COMMUNITY_IDENTITY_SQL = text(
     """
@@ -39,6 +43,9 @@ _COMMUNITY_IDENTITY_SQL = text(
            c.regulator,
            c.legal_name,
            c.vat_number,
+           c.representative_first_name,
+           c.representative_last_name,
+           c.representative_email,
            a.street,
            a.number     AS address_number,
            a.postcode,
@@ -107,7 +114,8 @@ _KEY_CONSUMERS_SQL = text(
     """
 )
 
-# One row per ACTIVE meter attribution in the operation, carrying the member's
+# One row per meter attribution in the operation (active, or waiting when one
+# operation is asked for: see _IN_OPERATION_METER_DATA_STATUSES), carrying the member's
 # identity and both the meter's own address and the member's home address. The
 # annexes list a delivery point at the meter's address, so that one wins when
 # present. member is LEFT JOINed: an attributed-to-nobody meter must still show
@@ -152,10 +160,10 @@ _OPERATION_METERS_SQL = text(
      WHERE md.id_community = :id_community
        AND (CAST(:id_sharing_operation AS INTEGER) IS NULL
             OR md.id_sharing_operation = :id_sharing_operation)
-       AND md.status = :active
+       AND md.status IN :statuses
      ORDER BY mem.name NULLS LAST, mem.id, md.ean
     """
-)
+).bindparams(bindparam("statuses", expanding=True))
 
 
 def _as_optional_str(value: object) -> str | None:
@@ -268,6 +276,9 @@ class SqlAlchemyCrmCoreRead:
             legal_name=row["legal_name"],
             vat_number=row["vat_number"],
             address=address,
+            representative_first_name=row["representative_first_name"],
+            representative_last_name=row["representative_last_name"],
+            representative_email=row["representative_email"],
         )
 
     async def get_sharing_operation(
@@ -294,7 +305,8 @@ class SqlAlchemyCrmCoreRead:
     async def get_operation_participants(
         self, id_community: int, id_sharing_operation: int | None
     ) -> OperationParticipants:
-        """Fold the operation's active meter attributions into the annexe lists.
+        """Fold the operation's meter attributions into the annexe lists: the
+        active ones community-wide, the waiting ones too for one operation.
 
         Note on storage: the CRM does not model storage units — ``meter_data``
         distinguishes only consumption from injection. The sharing form's storage
@@ -306,7 +318,9 @@ class SqlAlchemyCrmCoreRead:
             {
                 "id_community": id_community,
                 "id_sharing_operation": id_sharing_operation,
-                "active": _ACTIVE_METER_DATA_STATUS,
+                "statuses": [_ACTIVE_METER_DATA_STATUS]
+                if id_sharing_operation is None
+                else _IN_OPERATION_METER_DATA_STATUSES,
             },
         )
         rows: list[dict[str, Any]] = [dict(row) for row in result.mappings().all()]

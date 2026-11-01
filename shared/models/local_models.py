@@ -705,13 +705,20 @@ class ChangeModel(_TimestampMixin, LocalBase):
     """A gap between the CRM and what the authorities know, born from one event.
 
     ``kind`` is the engine's vocabulary, the same for every regulator; one event
-    yields one change per procedure the catalogue routes it to, hence
-    ``UNIQUE (source_event_id, procedure_code)``.
+    yields one change per procedure the catalogue routes it to, and per
+    operation for a community event feeding an operation procedure, hence
+    ``UNIQUE (source_event_id, procedure_code, COALESCE(id_sharing_operation, 0))``.
     """
 
     __tablename__ = "change"
     __table_args__ = (
-        UniqueConstraint("source_event_id", "procedure_code", name="uq_change_source"),
+        Index(
+            "uq_change_source_operation",
+            "source_event_id",
+            "procedure_code",
+            text("COALESCE(id_sharing_operation, 0)"),
+            unique=True,
+        ),
         Index("ix_change_dossier", "id_community", "id_dossier"),
         Index(
             "ix_change_subject",

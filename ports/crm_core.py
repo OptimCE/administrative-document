@@ -53,6 +53,20 @@ class CommunityContext:
     legal_name: str | None = None
     vat_number: str | None = None
     address: PostalAddress | None = None
+    # Who represents the community towards the GRD and the regulator (phase 4).
+    representative_first_name: str | None = None
+    representative_last_name: str | None = None
+    representative_email: str | None = None
+
+    @property
+    def representative(self) -> str | None:
+        """The representative's name, as a form writes it, or None."""
+        parts = [
+            (self.representative_first_name or "").strip(),
+            (self.representative_last_name or "").strip(),
+        ]
+        name = " ".join(part for part in parts if part)
+        return name or None
 
 
 @dataclass(frozen=True)

@@ -73,6 +73,7 @@ from engine.lifecycle import (
     move_to_step,
     open_procedure,
     pieces_of,
+    refresh_next_action,
     start_rules,
     supply_piece,
 )
@@ -89,6 +90,7 @@ from shared.const import (
     CorrespondenceDirection,
     Counterparty,
     DeadlineKind,
+    DeadlineStatus,
     DocOrigin,
     DocumentKind,
     InboundMailStatus,
@@ -1192,6 +1194,61 @@ class ProcedureService:
             AuditActions.DOSSIER_STATUS_CHANGED, dossier, {"to_step": to_step, "reason": reason}
         )
         await self._after(id_community, [dossier_id, *released])
+        return await self.procedure(id_community, dossier_id)
+
+    async def correct_effective_date(
+        self,
+        id_community: int,
+        dossier_id: int,
+        *,
+        on: datetime.date,
+        reason: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """The effect date by hand (spec, « Réception de l'avenant »): the GRD
+        took it from another day than the one the engine counted. Only while the
+        effect is still to come, i.e. the procedure has an open effect deadline:
+        its due date and the procedure's date move, and the daily job applies it
+        when it comes. The correction is kept on the procedure (its thread shows
+        it) and audited; the badges follow (an authorised meter's date)."""
+        dossier, _plugin, ctx = await self._load(id_community, dossier_id)
+        deadline = await self._local.scalar(
+            select(DeadlineModel).where(
+                DeadlineModel.id_community == id_community,
+                DeadlineModel.id_dossier == dossier.id,
+                DeadlineModel.kind == int(DeadlineKind.EFFECT),
+                DeadlineModel.status == int(DeadlineStatus.OPEN),
+            )
+        )
+        if deadline is None or dossier.status == int(ProcedureStatus.IN_FORCE):
+            raise _conflict(errors.admin.EFFECTIVE_DATE_NOT_OPEN)
+        previous = dossier.effective_date or deadline.due_date
+        deadline.due_date = on
+        dossier.effective_date = on
+        metadata = dict(dossier.metadata_json or {})
+        metadata["effective_date_corrections"] = [
+            *(metadata.get("effective_date_corrections") or []),
+            {
+                "at": self._now().isoformat(),
+                "actor": actor,
+                "from": previous.isoformat() if previous else None,
+                "to": on.isoformat(),
+                "reason": reason,
+            },
+        ]
+        dossier.metadata_json = metadata
+        await refresh_next_action(self._local, ctx, dossier)
+        await self._local.commit()
+        await self._audit(
+            AuditActions.DOSSIER_UPDATED,
+            dossier,
+            {
+                "effective_date": on.isoformat(),
+                "previous_effective_date": previous.isoformat() if previous else None,
+                "reason": reason,
+            },
+        )
+        await self._after(id_community, [dossier_id])
         return await self.procedure(id_community, dossier_id)
 
     async def _in_force(

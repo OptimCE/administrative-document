@@ -402,7 +402,9 @@ def build_snapshot(
         # theirs to write.
         for field in _DSO_AGREEMENT_FIELDS:
             snapshot[field] = None
-        snapshot["representative_name"] = community.legal_name or community.name
+        snapshot["representative_name"] = (
+            community.representative or community.legal_name or community.name
+        )
         # What the procedure itself knows: the DSO it goes to, the effective
         # date asked for, the key it applies. The terms stay the parties'.
         snapshot["grid_operator_name"] = labels.grd_label(grd_ref) or grd_ref
@@ -468,8 +470,13 @@ def build_snapshot(
             snapshot["ean_delivery"] = delivery[0] if len(delivery) == 1 else None
             snapshot["ean_injection"] = injection[0] if len(injection) == 1 else None
 
-        # Every field of the form, in its order, then what it does not bind.
+        # The community's representative, where the form asks for one and the
+        # CRM knows them (phase 4); the reviewer types it otherwise.
         fields = ACROFORM_FIELDS.get(doc_type, ())
+        if "representative_name" in dict(fields):
+            snapshot["representative_name"] = community.representative
+
+        # Every field of the form, in its order, then what it does not bind.
         snapshot = {
             **{
                 name: snapshot.get(name, False if kind == "check" else None)

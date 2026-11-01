@@ -137,6 +137,9 @@ class AdminService:
         return _view(period)
 
 
+_SUBJECTS = {1: "meter", 2: "key"}
+
+
 def _view(period: ModuleActivationModel) -> dict[str, Any]:
     baseline = period.baseline_json or {}
     confirmation = baseline.get("confirmation") or {}
@@ -147,7 +150,7 @@ def _view(period: ModuleActivationModel) -> dict[str, Any]:
         items.append(
             {
                 "key": item["key"],
-                "subject_type": "meter" if item["subject_type"] == 1 else "key",
+                "subject_type": _SUBJECTS.get(item["subject_type"], "procedure"),
                 "subject_ref": item["subject_ref"],
                 "id_sharing_operation": item["id_sharing_operation"],
                 "operation_name": item.get("operation_name"),
@@ -160,6 +163,8 @@ def _view(period: ModuleActivationModel) -> dict[str, Any]:
                 "injection_status": item.get("injection_status"),
                 "start_date": item.get("start_date"),
                 "crm_status": item.get("crm_status"),
+                "procedure_code": item.get("procedure_code"),
+                "procedure_labels": item.get("procedure_labels"),
                 "chosen": chosen.get("choice"),
                 "effective_date": chosen.get("effective_date"),
                 "sent_date": chosen.get("sent_date"),

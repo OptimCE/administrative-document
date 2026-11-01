@@ -15,12 +15,15 @@ from shared.const import DeadlineKind, DeadlineParty, DeadlineStatus
 from shared.models.local_models import ChangeModel, DeadlineModel
 from tests.conftest import gateway_headers
 from tests.engine.world import EAN, make_world, meter
+from tests.procedures import baseline_all_done
 
 pytestmark = pytest.mark.asyncio
 
 
 async def _world(db_session):
-    return await make_world(db_session, plugin=CwapePlugin())
+    world = await make_world(db_session, plugin=CwapePlugin())
+    await baseline_all_done(world)
+    return world
 
 
 async def _headers(db_session, world, role: str = "MANAGER") -> dict[str, str]:

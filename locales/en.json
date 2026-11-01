@@ -59,7 +59,8 @@
       "SUBJECT_NOT_IN_OPERATION": "The CRM no longer holds it so: the meter left the operation or the key was replaced (code: 2393)",
       "INBOUND_DISABLED": "The reception address is not configured on this instance.",
       "INBOUND_MAIL_NOT_FOUND": "This received mail cannot be found.",
-      "INBOUND_MAIL_HANDLED": "This received mail was already recorded or discarded."
+      "INBOUND_MAIL_HANDLED": "This received mail was already recorded or discarded.",
+      "EFFECTIVE_DATE_NOT_OPEN": "The effective date can only be corrected while it is still to come: this procedure has no effect pending."
     }
   }
 }

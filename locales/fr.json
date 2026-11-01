@@ -59,7 +59,8 @@
       "SUBJECT_NOT_IN_OPERATION": "Le CRM ne le porte plus ainsi : le compteur a quitté l'opération ou la clé a été remplacée (code: 2393)",
       "INBOUND_DISABLED": "L'adresse de réception n'est pas configurée sur cette instance.",
       "INBOUND_MAIL_NOT_FOUND": "Ce courrier reçu est introuvable.",
-      "INBOUND_MAIL_HANDLED": "Ce courrier reçu a déjà été enregistré ou écarté."
+      "INBOUND_MAIL_HANDLED": "Ce courrier reçu a déjà été enregistré ou écarté.",
+      "EFFECTIVE_DATE_NOT_OPEN": "La date d'effet ne se corrige que tant qu'elle est à venir : cette démarche n'a pas de prise d'effet en attente."
     }
   }
 }

@@ -8,21 +8,28 @@ baseline confirmation shares (steps 5 and 6 of ``engine.routing``).
   none; a READY draft goes back to draft and its generated pieces go stale.
 - The draft is then recomputed: the plugin's variant (a converted July draft
   keeps its own), the reference GRD, the pieces, the next action.
+
+Where a change goes (``placements``): each procedure handling it; one per
+operation for an operation procedure fed by a community change (a new
+representative is notified for every operation); and for an operation, an
+absorbing procedure's open draft instead of the operation procedures (a new
+operation's first meters go into its authorisation request).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.regions import region_for_regulator
-from engine.catalogue import CatalogueEntry
+from engine.catalogue import Catalogue, CatalogueEntry
 from engine.contracts import (
     ChangeFact,
     PluginRegistry,
@@ -30,10 +37,11 @@ from engine.contracts import (
     RegulatorPlugin,
     plugin_for,
 )
-from engine.events import INVERSE, DetectedChange
+from engine.events import INVERSE, UNDO_ONLY, DetectedChange
 from engine.lifecycle import (
     LifecycleError,
     ProcedureContext,
+    cancel_if_emptied,
     context_for,
     mark_generated_stale,
     open_procedure,
@@ -54,7 +62,6 @@ from shared.const import (
 from shared.models.local_models import (
     ChangeModel,
     DocumentModel,
-    DocumentVersionModel,
     DossierModel,
     ProcedureDefinitionModel,
 )
@@ -66,6 +73,49 @@ OPEN = (int(ProcedureStatus.DRAFT), int(ProcedureStatus.READY))
 LIVE_STATUSES = (*OPEN, int(ProcedureStatus.SENT))
 
 RegionOf = Callable[[str], int | None]
+
+
+async def placements(
+    local: AsyncSession,
+    catalogue: Catalogue,
+    change: DetectedChange,
+    *,
+    id_community: int,
+    day: datetime.date,
+    operations: Sequence[int] = (),
+) -> list[tuple[CatalogueEntry, DetectedChange]]:
+    """The procedures a change is filed into, each with the change as it is
+    filed there. ``operations`` are the community's operations a community
+    change concerns (those holding meters): an operation procedure takes one
+    such change per operation."""
+    handlers = catalogue.handling(change.kind, day)
+    absorbers = catalogue.absorbing(change.kind, day)
+    placed = [
+        (e, change) for e in handlers if e.definition.procedure_scope == ProcedureScope.COMMUNITY
+    ]
+    per_operation = [
+        e for e in handlers if e.definition.procedure_scope == ProcedureScope.OPERATION
+    ]
+    if not per_operation and not absorbers:
+        return placed
+    if change.id_sharing_operation is not None:
+        filed = [(change.id_sharing_operation, change)]
+    else:
+        filed = [
+            (operation, dataclasses.replace(change, id_sharing_operation=operation))
+            for operation in dict.fromkeys(operations)
+        ]
+    for operation, operation_change in filed:
+        absorber = None
+        for entry in absorbers:
+            if await _open_draft(local, id_community, operation, entry.definition.family, None):
+                absorber = entry
+                break
+        if absorber is not None:
+            placed.append((absorber, operation_change))
+        else:
+            placed.extend((e, operation_change) for e in per_operation)
+    return placed
 
 
 async def file_change(
@@ -87,8 +137,7 @@ async def file_change(
     definition = entry.definition
     operation_scope = definition.procedure_scope == ProcedureScope.OPERATION
     if operation_scope and change.id_sharing_operation is None:
-        # A community event feeding a per-operation procedure means one per
-        # operation (a new representative). No such event has an emitter yet.
+        # ``placements`` gives a community change one operation per filing.
         logger.warning(
             "%s %s is per operation; community change %s not filed there",
             plugin.code,
@@ -98,6 +147,10 @@ async def file_change(
         return None
     operation = change.id_sharing_operation if operation_scope else None
     period_key = str(day.year) if definition.opens_annually else None
+
+    inverse = await _open_inverse(local, id_community, operation, change, definition.code)
+    if inverse is None and change.kind in UNDO_ONLY:
+        return None
 
     row = ChangeModel(
         id_community=id_community,
@@ -113,7 +166,6 @@ async def file_change(
     )
     local.add(row)
 
-    inverse = await _open_inverse(local, id_community, operation, change, definition.code)
     if inverse is not None:
         holding = await _dossier(local, inverse.id_dossier)
         inverse.status = int(ChangeStatus.CANCELLED)
@@ -265,28 +317,6 @@ async def content_changed(
         await take_automatic_edge(
             local, ctx, dossier, ProcedureStatus.DRAFT, day=day, context={"reason": "new_change"}
         )
-
-
-async def cancel_if_emptied(
-    local: AsyncSession, ctx: ProcedureContext, dossier: DossierModel, day: datetime.date
-) -> bool:
-    """A draft the system opened, left with no change and no file, is cancelled
-    (if the catalogue lets the engine take that edge). One a person opened, or
-    worked on, stays."""
-    if dossier.opened_by != int(OpenedBy.SYSTEM) or dossier.status != int(ProcedureStatus.DRAFT):
-        return False
-    if await _active_changes(local, dossier):
-        return False
-    versions = await local.scalar(
-        select(func.count(DocumentVersionModel.id))
-        .join(DocumentModel, DocumentModel.id == DocumentVersionModel.id_document)
-        .where(DocumentModel.id_dossier == dossier.id)
-    )
-    if versions:
-        return False
-    return await take_automatic_edge(
-        local, ctx, dossier, ProcedureStatus.CANCELLED, day=day, context={"reason": "compensated"}
-    )
 
 
 async def recompute(local: AsyncSession, ctx: ProcedureContext, dossier: DossierModel) -> None:

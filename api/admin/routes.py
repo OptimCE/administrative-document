@@ -25,6 +25,7 @@ from api.admin.schemas import (
     ChangeSummaryOut,
     CorrespondenceProposalOut,
     DeadlineItemOut,
+    EffectiveDateIn,
     EntrySheetOut,
     FinalizeOut,
     InboundAddressOut,
@@ -312,6 +313,20 @@ async def transition_procedure(dossier_id: int, body: TransitionIn, service: Pro
         )
     except EffectConflictError as exc:
         return _effect_conflict(exc)
+    return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.post(
+    "/dossiers/{dossier_id}/effective-date", response_model=ApiResponse[ProcedureDetailOut]
+)
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def correct_effective_date(dossier_id: int, body: EffectiveDateIn, service: ProceduresDep):
+    """Correct the effect date by hand, with its reason: the GRD took effect
+    from another day than the one counted. Only while the effect is still to
+    come (409, 2397, otherwise); the daily job applies it when it comes."""
+    view = await service.correct_effective_date(
+        _community(), dossier_id, on=body.on, reason=body.reason, actor=_actor()
+    )
     return ApiResponse(data=ProcedureDetailOut.model_validate(view))
 
 

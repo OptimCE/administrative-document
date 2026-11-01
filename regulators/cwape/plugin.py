@@ -20,8 +20,11 @@ never false):
 - ``community_info_changed``: the community's own data changed, so its update
   form travels with the sharing request ("actualisation jointe").
 - ``has_delegate``, ``statutes_changed``, ``internal_rules_changed``: CE pieces.
+  Without them, the last two come from the procedure's own changes: the CRM's
+  ``community.statutes_changed`` or ``community.roi_changed`` (phase 4).
 - ``operation_kind``: ``"community"`` or ``"same_building"``, which GRD
-  agreement applies.
+  agreement applies. Without it, the operation's type in the CRM, from the
+  ``operation_created`` change a v2 authorisation holds.
 - ``members``: the participants who sign a sworn declaration; by default the
   members of the meters the procedure adds.
 - ``legal_entity_members``: the members that are companies or associations
@@ -54,11 +57,11 @@ _MEMBER_LISTS = {
     "annex7_legal_entity": "legal_entity_members",
 }
 
-# The "sent" steps of PARTAGE_MODIF, the one procedure filing tracked changes:
-# with the GRD (sent, supplements, its completeness check), with the CWaPE (its
+# The "sent" steps of the procedures filing tracked changes, PARTAGE_MODIF and
+# (v2, absorbing a new operation's meters) PARTAGE_AUTORISATION: with the GRD
+# (sent, supplements, its completeness check), with the CWaPE (its
 # instruction, a non-conformity), then authorised (the decision, the GRD's
-# amendment, signed). PARTAGE_AUTORISATION's own steps, for when it files
-# changes (phase 4).
+# amendment or agreement, signed).
 _EPISODE_STATUS = {
     "sent": RegulatoryStatus.PENDING_GRD,
     "incomplete": RegulatoryStatus.PENDING_GRD,
@@ -69,6 +72,17 @@ _EPISODE_STATUS = {
     "accepted": RegulatoryStatus.AUTHORIZED,
     "amendment_signed": RegulatoryStatus.AUTHORIZED,
     "agreement_signed": RegulatoryStatus.AUTHORIZED,
+}
+
+
+# The CRM's sharing_operation.type: LOCAL (1) is a sharing in one building,
+# CER (2) and CEC (3) are a community's.
+_OPERATION_KINDS = {1: "same_building", 2: "community", 3: "community"}
+
+# Which CRM event says which community document changed.
+_DOCUMENT_EVENTS = {
+    "statutes_changed": "community.statutes_changed",
+    "internal_rules_changed": "community.roi_changed",
 }
 
 
@@ -83,12 +97,25 @@ def _known(context: Mapping[str, Any], key: str) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
+def _operation_kind(procedure: ProcedureFacts) -> str | None:
+    stated = procedure.context.get("operation_kind")
+    if stated is not None:
+        return str(stated)
+    for change in procedure.changes:
+        if change.kind == "operation_created":
+            try:
+                return _OPERATION_KINDS.get(int(change.payload["type"]))
+            except (KeyError, TypeError, ValueError):
+                return None
+    return None
+
+
 def _condition(name: str, procedure: ProcedureFacts) -> bool | None:
     """Whether a piece's condition holds: True, False, or None for unknown."""
     context = procedure.context
     kinds = {change.kind for change in procedure.changes}
     known_changes = bool(procedure.changes)
-    operation_kind = context.get("operation_kind")
+    operation_kind = _operation_kind(procedure)
 
     if name == "non_standard_key":
         standard = _known(context, "key_is_standard")
@@ -106,7 +133,15 @@ def _condition(name: str, procedure: ProcedureFacts) -> bool | None:
         return "representative_changed" in kinds if known_changes else None
     if name == "community_update_attached":
         return _known(context, "community_info_changed")
-    if name in ("has_delegate", "statutes_changed", "internal_rules_changed"):
+    if name in _DOCUMENT_EVENTS:
+        stated = _known(context, name)
+        if stated is not None or not known_changes:
+            return stated
+        return any(
+            change.payload.get("event_type") == _DOCUMENT_EVENTS[name]
+            for change in procedure.changes
+        )
+    if name == "has_delegate":
         return _known(context, name)
     if name == "community_operation":
         return None if operation_kind is None else operation_kind == "community"

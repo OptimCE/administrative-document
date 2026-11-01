@@ -189,6 +189,53 @@ bundles through `document-generation`. Read `README.md` for the domain.
   working state; the files and `inbound_mail_attachment` are evidence
   (append-only).
 
+## Triggers and completions (phase 4)
+- **Where a change goes** is `engine.filing.placements`, used by the router
+  AND the baseline. A community change feeds an operation procedure once per
+  operation holding meters (`EngineCrmRead.operations_in_use`; a new
+  representative is a PARTAGE_MODIF per operation plus a CE_ACTUALISATION),
+  hence the change index `uq_change_source_operation` (source event,
+  procedure, `COALESCE(id_sharing_operation, 0)`; migration 0006). A
+  definition's `absorbs_change_kinds` takes those changes of an operation
+  instead of their handlers while it has an OPEN draft there (PARTAGE_AUTORISATION
+  v2: a new operation's first meters, key, representative go into its
+  request; once sent, the next ones are a PARTAGE_MODIF). `operation_deleted`
+  is `UNDO_ONLY`: it compensates the `operation_created` a draft holds and
+  files nothing otherwise.
+- **CWaPE v2 files** (valid from 2026-11-01): PARTAGE_AUTORISATION
+  (`operation_created`, absorbs, asked), CE_NOTIFICATION (`community_created`,
+  asked), CE_ACTUALISATION (`representative_changed`, `statutes_changed`; the
+  event type says statutes or ROI, which picks the piece), PARTAGE_FIN
+  (`ends_operation`). The plugin reads `operation_kind` from the
+  `operation_created` change's CRM type when the context does not say it.
+- **Baseline asks** (`asked_at_baseline`, first activation only): one item per
+  operation (operation procedure) or one for the community, keyed
+  `ask:<CODE>:<op or 0>`, choices active (done; the default where a meter is
+  active) / not_notified (its draft opens, first, so meters said not notified
+  are absorbed) / in_progress (born sent; the operation's meters in progress
+  join it, on its date). No episode for them; `asked()` makes an
+  `operation.created` in flight ALREADY_REFLECTED. A community therefore
+  always has a baseline to confirm (its creation's notification): API tests
+  that want none use `tests/procedures.baseline_all_done`.
+- **Ending an operation** (`ends_operation`): `effects.go_in_force` first
+  cancels the operation's open drafts, files a `meter_removed` (reason
+  `operation_ended`) for every meter episode the core still holds there (2–6),
+  then plans as usual (each ends the day before the effect date), and ends the
+  active key with a direct write (no change carries a key's end). A later CRM
+  removal of such a meter is ALREADY_REFLECTED (a removal already filed or in
+  force, no addition since).
+- **A refused addition** excludes a removal of the same meter still in a
+  draft, or deferred (`addition_refused`); a system draft left empty is
+  cancelled (`lifecycle.cancel_if_emptied`, moved there from filing).
+- **The effect date by hand**: `POST /admin/dossiers/{id}/effective-date`
+  (2397 unless an EFFECT deadline is OPEN) moves the deadline and
+  `dossier.effective_date`, keeps the correction in
+  `metadata_json["effective_date_corrections"]` (thread kind
+  `effective_date`), audits `dossier.updated`; the daily job applies it.
+- **Pre-fill**: one operation's participants include its waiting meters (3, 4);
+  community-wide lists keep the active ones. `representative_name` comes from
+  the CRM's representative where the form has the field.
+
 ## Two DB-enforced invariants
 - **The journal writes the status.** `status_event` is append-only, and
   appending a row COPIES its `(to_status, to_step)` onto the subject

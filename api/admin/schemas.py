@@ -9,12 +9,18 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class BaselineItemOut(BaseModel):
-    """One meter or key of the starting state, and what was or may be said of it."""
+    """One meter or key of the starting state, or a procedure it asks about, and
+    what was or may be said of it."""
 
     key: str = Field(description="Stable id of the item, to send back with its choice")
-    subject_type: Literal["meter", "key"]
-    subject_ref: str = Field(description="The EAN, or the key's id")
-    id_sharing_operation: int
+    subject_type: Literal["meter", "key", "procedure"] = Field(
+        description=(
+            "procedure: was this procedure already done (active), not yet (not_notified), "
+            "or sent and waiting (in_progress)? Once per operation, or once for the community"
+        )
+    )
+    subject_ref: str = Field(description="The EAN, the key's id, the operation's or community's")
+    id_sharing_operation: int | None = None
     operation_name: str | None = None
     change: Literal["present", "added", "removed"]
     choices: list[str]
@@ -31,6 +37,8 @@ class BaselineItemOut(BaseModel):
             "the manager. A waiting meter called active needs its effective date"
         ),
     )
+    procedure_code: str | None = Field(default=None, description="A procedure asked about")
+    procedure_labels: dict[str, str] | None = None
     # Once confirmed: what the admin chose.
     chosen: str | None = None
     effective_date: datetime.date | None = None
@@ -370,7 +378,7 @@ class PieceFromInboundIn(BaseModel):
 
 class ThreadEntryOut(BaseModel):
     at: datetime.datetime
-    kind: Literal["step", "correspondence", "version", "inbound"]
+    kind: Literal["step", "correspondence", "version", "inbound", "effective_date"]
     actor: str | None = None
     # step
     from_step: str | None = None
@@ -387,6 +395,9 @@ class ThreadEntryOut(BaseModel):
     version_no: int | None = None
     # inbound
     id_inbound_mail: int | None = None
+    # effective_date: corrected by hand, from one day to another
+    effective_date: datetime.date | None = None
+    previous_effective_date: datetime.date | None = None
 
 
 class SendPreviewOut(BaseModel):
@@ -405,6 +416,10 @@ class ProcedureDetailOut(ProcedureItemOut):
     opened_by: int | None = None
     requested_effective_date: datetime.date | None = None
     effective_date: datetime.date | None = None
+    effective_date_correctable: bool = Field(
+        default=False,
+        description="An effect still to come: POST …/effective-date may correct its date",
+    )
     frozen_at: datetime.datetime | None = None
     effect_error: EffectErrorOut | None = None
     timeline: list[StepOut]
@@ -498,6 +513,13 @@ class RefileIn(BaseModel):
 class RefileOut(BaseModel):
     id_dossier: int = Field(description="The draft they were filed into")
     changes: list[int] = Field(description="The new changes, one per refiled change")
+
+
+class EffectiveDateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    on: datetime.date = Field(description="The day the change takes effect, as the GRD says")
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class TransitionIn(BaseModel):

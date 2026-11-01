@@ -38,11 +38,24 @@ class TestTheStartingState:
             "first",
             "BE-WAL-CWAPE",
         )
-        assert sorted(i["subject_ref"] for i in body["items"]) == [EAN[0], EAN[1]]
-        item = body["items"][0]
+        meters = [i for i in body["items"] if i["subject_type"] == "meter"]
+        assert sorted(i["subject_ref"] for i in meters) == [EAN[0], EAN[1]]
+        item = meters[0]
         assert item["choices"] == ["active", "not_notified", "in_progress"]
         assert item["default_choice"] == "active"
         assert item["operation_name"] == "Op Centre"
+        # Phase 4: the creation's notification and the operation's authorisation
+        # are asked about first, done by default where a meter is active.
+        asked = [
+            (i["procedure_code"], i["id_sharing_operation"], i["default_choice"])
+            for i in body["items"]
+            if i["subject_type"] == "procedure"
+        ]
+        assert asked == [
+            ("CE_NOTIFICATION", None, "active"),
+            ("PARTAGE_AUTORISATION", world.operation, "active"),
+        ]
+        assert body["items"][0]["procedure_labels"]["fr"] == "Notification de création de la CE"
 
     async def test_is_confirmed_with_the_choices_made(self, client, db_session):
         world = await _cwape_world(db_session)
@@ -59,7 +72,9 @@ class TestTheStartingState:
         assert response.status_code == 200, response.text
         body = response.json()["data"]
         assert body["status"] == "confirmed"
-        chosen = {i["subject_ref"]: i["chosen"] for i in body["items"]}
+        chosen = {
+            i["subject_ref"]: i["chosen"] for i in body["items"] if i["subject_type"] == "meter"
+        }
         assert chosen == {EAN[0]: "not_notified", EAN[1]: "active"}
 
     async def test_a_conflict_in_the_core_is_a_409_naming_the_meters(self, client, db_session):

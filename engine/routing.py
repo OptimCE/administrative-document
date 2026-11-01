@@ -9,7 +9,9 @@ For each event, in the caller's transaction:
 3. The event becomes a change (``engine.events``). One the core already
    reflects (a meter added that is already tracked) creates nothing.
 4. The community's regulator picks the plugin; its catalogue in force picks
-   the procedures the change feeds. No plugin, or no procedure: nothing.
+   the procedures the change feeds (``engine.filing.placements``: a community
+   change once per operation holding meters for an operation procedure, and
+   an open draft that absorbs it first). No plugin, or no procedure: nothing.
 5. Per target procedure: the change is recorded; if its inverse still sits in
    an open draft (added then removed before sending) both are cancelled, and a
    system draft left empty is cancelled too. Otherwise it joins the open draft
@@ -34,10 +36,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.regions import region_for_regulator
 from engine.activation import reconcile_activation
-from engine.baseline import ensure_baseline, photographed
+from engine.baseline import asked, ensure_baseline, photographed
 from engine.contracts import REMOVAL_KINDS, PluginRegistry, plugin_for
 from engine.events import CoreEvent, DetectedChange, change_of
-from engine.filing import LIVE_STATUSES, RegionOf, file_change
+from engine.filing import LIVE_STATUSES, RegionOf, file_change, placements
 from ports.crm_engine import EngineCrmRead
 from shared.const import ChangeStatus, ChangeSubjectType, EventOutcome, ProcedureStatus
 from shared.models.local_models import (
@@ -145,13 +147,30 @@ async def _route(
         return EventOutcome.ALREADY_REFLECTED
     if plugin is None:
         return EventOutcome.REGULATOR_NOT_SUPPORTED
-    targets = plugin.catalogue().handling(change.kind, event.day)
-    for entry in targets:
+    catalogue = plugin.catalogue()
+    operations: list[int] = []
+    if change.id_sharing_operation is None and any(
+        e.definition.scope == "operation"
+        for e in (
+            *catalogue.handling(change.kind, event.day),
+            *catalogue.absorbing(change.kind, event.day),
+        )
+    ):
+        operations = await crm.operations_in_use(event.id_community, on=event.day)
+    targets = await placements(
+        local,
+        catalogue,
+        change,
+        id_community=event.id_community,
+        day=event.day,
+        operations=operations,
+    )
+    for entry, placed in targets:
         filed = await file_change(
             local,
             plugin,
             entry,
-            change,
+            placed,
             id_community=event.id_community,
             day=event.day,
             at=event.occurred_at,
@@ -177,11 +196,15 @@ async def _already_reflected(
     flight are "comparés à la photo"), or when a live procedure already
     carries it (a refused, lapsed or cancelled one carries nothing).
 
-    A removal is skipped only on positive evidence that nothing was ever
-    authorised to leave: the meter's latest addition was refused (or its
-    procedure lapsed) and the core holds no live episode of it. Short of that
-    it is filed, because before the baseline is confirmed the annexe cannot
-    know the meter was absent (spec, "Rangement", step 2)."""
+    A removal is skipped only on positive evidence: the meter's removal is
+    already filed (a live procedure or a deferral carries it) or in force
+    with no addition since (the end of the operation removed it first), or
+    nothing was ever authorised to leave (the meter's latest addition was
+    refused, or its procedure lapsed, and the core holds no live episode of
+    it). Short of that it is filed, because before the baseline is confirmed
+    the annexe cannot know the meter was absent (spec, "Rangement", step 2)."""
+    if asked(period.baseline_json or {}, change.kind, change.id_sharing_operation):
+        return True  # the baseline asked whether it was done: its answer covers it
     if change.kind in REMOVAL_KINDS and change.id_sharing_operation is not None:
         return await _removal_reflected(local, crm, event, change)
     subject_type = _TRACKED_KINDS.get(change.kind)
@@ -228,6 +251,27 @@ async def _removal_reflected(
     local: AsyncSession, crm: EngineCrmRead, event: CoreEvent, change: DetectedChange
 ) -> bool:
     operation = int(change.id_sharing_operation or 0)
+    last = (
+        await local.execute(
+            select(ChangeModel.kind, ChangeModel.status, DossierModel.status)
+            .outerjoin(DossierModel, DossierModel.id == ChangeModel.id_dossier)
+            .where(
+                ChangeModel.id_community == event.id_community,
+                ChangeModel.id_sharing_operation == operation,
+                ChangeModel.subject_type == int(ChangeSubjectType.METER),
+                ChangeModel.subject_ref == change.subject_ref,
+                ChangeModel.kind.in_([*_METER_ADDITIONS, *REMOVAL_KINDS]),
+            )
+            .order_by(ChangeModel.id.desc())
+            .limit(1)
+        )
+    ).first()
+    if last is not None and last[0] in REMOVAL_KINDS:
+        kind_status, holder = last[1], last[2]
+        if kind_status in (int(ChangeStatus.APPLIED), int(ChangeStatus.DEFERRED)) or (
+            kind_status == int(ChangeStatus.ATTACHED) and holder in LIVE_STATUSES
+        ):
+            return True
     latest = (
         await local.execute(
             select(ChangeModel.status, DossierModel.status)

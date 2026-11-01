@@ -249,6 +249,33 @@ class TestScopingAndWarnings:
 
         assert result.participants == () and result.warnings == ()
 
+    @pytest.mark.parametrize("status", [3, 4])  # waiting for the GRD, for the manager
+    async def test_a_waiting_meter_is_listed_for_its_operation_only(
+        self, db_session, community, sharing_operation, status
+    ):
+        """Phase 4 (one status per meter): a meter being added waits until its
+        procedure makes it active, and it is what that procedure's forms list.
+        The community-wide lists (the annual report) keep the active ones."""
+        bob = await f.create_member(
+            db_session, id_community=community.id, name="Martin", member_type=1
+        )
+        await f.create_meter(db_session, ean="541448000000000006", id_community=community.id)
+        await f.attribute_meter(
+            db_session,
+            ean="541448000000000006",
+            id_community=community.id,
+            id_sharing_operation=sharing_operation,
+            id_member=bob,
+            status=status,
+        )
+        read = SqlAlchemyCrmCoreRead(db_session)
+
+        in_operation = await read.get_operation_participants(community.id, sharing_operation)
+        community_wide = await read.get_operation_participants(community.id, None)
+
+        assert [p.name for p in in_operation.participants] == ["Martin"]
+        assert community_wide.participants == ()
+
     async def test_an_unowned_meter_is_reported_not_silently_dropped(
         self, db_session, community, sharing_operation
     ):
