@@ -179,6 +179,64 @@ class TestConfirmation:
         assert row.entity_id == str(origin)
         assert len(row.payload["episodes"]) == 3
 
+    async def test_a_meter_the_crm_has_waiting_is_listed_not_notified(self, db_session):
+        """One status per meter (2026-11-01): without its own episode a waiting
+        meter would have no status once the module is on."""
+        world, _key = await _world(db_session)
+        await add_meter(world, EAN[2], member=7, status=3)
+        await add_meter(world, EAN[3], member=8, status=4)
+
+        view = await _service(world).baseline(world.id_community)
+
+        listed = {
+            i["subject_ref"]: (i["crm_status"], i["default_choice"])
+            for i in view["items"]
+            if i["subject_type"] == "meter"
+        }
+        assert listed == {
+            EAN[0]: (1, "active"),
+            EAN[1]: (1, "active"),
+            EAN[2]: (3, "not_notified"),
+            EAN[3]: (4, "not_notified"),
+        }
+
+    async def test_a_waiting_meter_confirmed_active_needs_its_date(self, db_session):
+        world, _key = await _world(db_session)
+        await add_meter(world, EAN[2], member=7, status=3)
+        service = _service(world)
+        view = await service.baseline(world.id_community)
+
+        with pytest.raises(BaselineError, match="became active"):
+            await service.confirm_baseline(
+                world.id_community, [ChoiceIn(_key_of(view, EAN[2]), Choice.ACTIVE)], actor="user-1"
+            )
+
+    async def test_confirmed_active_the_crm_status_follows(self, db_session):
+        """The core's alignment: the episode written ACTIVE from its date turns
+        the CRM's own waiting status ACTIVE from that date."""
+        world, _key = await _world(db_session)
+        await add_meter(world, EAN[2], member=7, status=3, start=D(2026, 3, 1))
+        service = _service(world)
+        view = await service.baseline(world.id_community)
+
+        await service.confirm_baseline(
+            world.id_community,
+            [ChoiceIn(_key_of(view, EAN[2]), Choice.ACTIVE, effective_date=D(2026, 5, 1))],
+            actor="user-1",
+        )
+
+        rows = await db_session.execute(
+            text(
+                "SELECT start_date, end_date, status FROM meter_data "
+                "WHERE ean = :ean ORDER BY start_date"
+            ),
+            {"ean": EAN[2]},
+        )
+        assert [tuple(r) for r in rows] == [
+            (D(2026, 3, 1), D(2026, 4, 30), 3),
+            (D(2026, 5, 1), None, 1),
+        ]
+
     async def test_each_choice_has_its_consequence(self, db_session):
         world, key = await _world(db_session)
         service = _service(world)

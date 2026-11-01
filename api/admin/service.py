@@ -159,6 +159,7 @@ def _view(period: ModuleActivationModel) -> dict[str, Any]:
                 "grd": item.get("grd"),
                 "injection_status": item.get("injection_status"),
                 "start_date": item.get("start_date"),
+                "crm_status": item.get("crm_status"),
                 "chosen": chosen.get("choice"),
                 "effective_date": chosen.get("effective_date"),
                 "sent_date": chosen.get("sent_date"),

@@ -10,7 +10,11 @@ current meters and approved keys, and opens the plugin's baseline procedure
 - **First activation**: every meter and key is listed, ``present``. For each the
   admin says ``active`` (the default, with its effective date if known),
   ``not_notified`` (a change in a draft) or ``in_progress`` (already sent,
-  with its sending date: a procedure in step "sent").
+  with its sending date: a procedure in step "sent"). A meter the CRM still
+  has waiting (for the GRD or the manager) is listed too, with its CRM status
+  and ``not_notified`` by default; called ``active``, it needs the date it
+  became active, which the core's alignment then writes into the CRM's own
+  status (one status per meter, 2026-11-01).
 - **Reactivation**: only the difference with what is still known (the core's
   episodes, the changes already filed) is listed: ``added`` (the same three
   choices, ``not_notified`` by default) or ``removed`` (``ended`` when the GRD
@@ -60,6 +64,7 @@ from shared.models.local_models import ChangeModel, DossierModel, ModuleActivati
 
 _METER = int(ChangeSubjectType.METER)
 _KEY = int(ChangeSubjectType.KEY)
+_CRM_ACTIVE = 1  # meter_data.status; 3 and 4 are waiting
 _ADD_KINDS = ("meter_added", "installation_added", "key_changed")
 
 
@@ -148,6 +153,14 @@ def _iso(day: datetime.date | None) -> str | None:
     return day.isoformat() if day else None
 
 
+def _meter_default(change: ItemChange, crm_status: int) -> Choice:
+    # A meter the CRM still has waiting was not active for the GRD: filing it
+    # is the choice that cannot under-notify, as for what changed while off.
+    if change == ItemChange.PRESENT and crm_status != _CRM_ACTIVE:
+        return Choice.NOT_NOTIFIED
+    return DEFAULT[change]
+
+
 def _meter_items(photo: CommunityPhoto, change: ItemChange, keep) -> list[dict[str, Any]]:
     return [
         {
@@ -157,7 +170,8 @@ def _meter_items(photo: CommunityPhoto, change: ItemChange, keep) -> list[dict[s
             "id_sharing_operation": m.id_sharing_operation,
             "operation_name": photo.operations.get(m.id_sharing_operation),
             "change": str(change),
-            "default": str(DEFAULT[change]),
+            "default": str(_meter_default(change, m.status)),
+            "crm_status": m.status,
             "id_member": m.id_member,
             "grd": m.grd,
             "injection_status": m.injection_status,
@@ -353,6 +367,14 @@ def resolve(baseline: Mapping[str, Any], submitted: Sequence[ChoiceIn]) -> list[
             raise BaselineError(f"{choice.key} is {change}: {choice.choice} is not an option")
         if choice.choice == Choice.IN_PROGRESS and choice.sent_date is None:
             raise BaselineError(f"{choice.key}: in progress needs the date it was sent")
+        if (
+            choice.choice == Choice.ACTIVE
+            and choice.effective_date is None
+            and items[choice.key].get("crm_status", _CRM_ACTIVE) != _CRM_ACTIVE
+        ):
+            raise BaselineError(
+                f"{choice.key}: the CRM has it waiting; active needs the date it became active"
+            )
         given[choice.key] = choice
     decisions = []
     for key, item in items.items():

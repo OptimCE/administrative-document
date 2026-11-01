@@ -24,6 +24,13 @@ class BaselineItemOut(BaseModel):
     grd: str | None = None
     injection_status: int | None = None
     start_date: datetime.date | None = None
+    crm_status: int | None = Field(
+        default=None,
+        description=(
+            "A meter's own status in the CRM: 1 active, 3 waiting for the GRD, 4 waiting for "
+            "the manager. A waiting meter called active needs its effective date"
+        ),
+    )
     # Once confirmed: what the admin chose.
     chosen: str | None = None
     effective_date: datetime.date | None = None

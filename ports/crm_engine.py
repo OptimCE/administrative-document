@@ -53,6 +53,10 @@ class PhotoMeter:
     grd: str | None
     injection_status: int | None
     start_date: datetime.date | None
+    # The CRM's own status (meter_data.status): 1 active, 3 waiting for the
+    # GRD, 4 waiting for the manager. A waiting meter is photographed too, or
+    # it would have no episode, so no status, once the module is on.
+    status: int = 1
 
 
 @dataclass(frozen=True)
@@ -178,18 +182,19 @@ _OPERATIONS_SQL = text(
 )
 
 # One row per meter: its attribution on day `on`, to an operation of the same
-# community. meter_data is a dated history; the latest slice covering `on` wins.
+# community, active or waiting (for the GRD or the manager). meter_data is a
+# dated history; the latest slice covering `on` wins.
 _PHOTO_METERS_SQL = text(
     "SELECT DISTINCT ON (md.ean) md.id_sharing_operation, md.ean, md.id_member, md.grd, "
-    "       md.injection_status, md.start_date "
+    "       md.injection_status, md.start_date, md.status "
     "FROM meter_data md "
     "JOIN sharing_operation so "
     "  ON so.id = md.id_sharing_operation AND so.id_community = md.id_community "
-    "WHERE md.id_community = :id_community AND md.status = :active "
+    "WHERE md.id_community = :id_community AND md.status IN :in_operation "
     "  AND (md.start_date IS NULL OR md.start_date <= :on) "
     "  AND (md.end_date IS NULL OR md.end_date >= :on) "
     "ORDER BY md.ean, md.start_date DESC NULLS LAST, md.id DESC"
-)
+).bindparams(bindparam("in_operation", expanding=True))
 
 # The approved key of each operation on day `on` (sharing_operation_key.status 1).
 _PHOTO_KEYS_SQL = text(
@@ -241,9 +246,9 @@ _ACTIVE_KEYS_SQL = text(
     "ORDER BY id"
 )
 
-# meter_data.status of an active attribution (MeterDataStatus.ACTIVE), and of
-# one the meter left (MeterDataStatus.INACTIVE).
-_ACTIVE_METER_DATA = 1
+# meter_data.status of a meter in its operation (MeterDataStatus ACTIVE,
+# WAITING_GRD, WAITING_MANAGER), and of one the meter left (INACTIVE).
+_IN_OPERATION_METER_DATA = [1, 3, 4]
 _INACTIVE_METER_DATA = 2
 
 _IN_OPERATION_SQL = text(
@@ -327,10 +332,11 @@ class SqlEngineCrmRead:
                 grd=row.grd,
                 injection_status=row.injection_status,
                 start_date=row.start_date,
+                status=int(row.status),
             )
             for row in await self._session.execute(
                 _PHOTO_METERS_SQL,
-                {"id_community": id_community, "on": on, "active": _ACTIVE_METER_DATA},
+                {"id_community": id_community, "on": on, "in_operation": _IN_OPERATION_METER_DATA},
             )
         )
         keys = tuple(

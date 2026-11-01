@@ -182,8 +182,11 @@ async def add_meter(
     start: datetime.date = datetime.date(2025, 6, 1),
     end: datetime.date | None = None,
     operation: int | None = None,
+    status: int = 1,
 ) -> None:
-    """A meter in the CRM, attributed to the world's operation."""
+    """A meter in the CRM, attributed to the world's operation. ``status`` is
+    the CRM's own (meter_data.status): 1 active, 3 waiting for the GRD, 4 for
+    the manager."""
     await world.session.execute(
         text(
             "INSERT INTO meter (ean, id_community) VALUES (:ean, :c) ON CONFLICT (ean) DO NOTHING"
@@ -194,10 +197,11 @@ async def add_meter(
         text(
             "INSERT INTO meter_data (ean, id_member, id_sharing_operation, status, "
             " injection_status, grd, start_date, end_date, id_community) "
-            "VALUES (:ean, :member, :op, 1, :injection, :grd, :start, :end, :c)"
+            "VALUES (:ean, :member, :op, :status, :injection, :grd, :start, :end, :c)"
         ),
         {
             "ean": ean,
+            "status": status,
             "member": member,
             "op": operation or world.operation,
             "injection": injection,

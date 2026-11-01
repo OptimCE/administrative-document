@@ -70,7 +70,9 @@ bundles through `document-generation`. Read `README.md` for the domain.
   scans every `emit(topic=...)` here. Clients branch on `hint.status` only.
 - **Baseline** (`engine/baseline.py`, `/admin/baseline`): a period opening
   (worker or API, serialised by advisory xact lock `0x0AD30003` per community)
-  photographs operations/meters/keys into `module_activation.baseline_json` and
+  photographs operations/meters/keys into `module_activation.baseline_json` (a
+  meter the CRM has waiting too, `not_notified` by default, and called active
+  only with its date) and
   opens the plugin's `purpose: baseline` procedure (the one task). Confirming
   is core FIRST (`ports/core_effects_sqlalchemy.py`: upsert by (origin,
   subject), EXCLUDE pre-checked so a 409 lists every EAN, audit row written
@@ -147,6 +149,13 @@ bundles through `document-generation`. Read `README.md` for the domain.
   /admin/dossiers/{id}/refile` files the refused changes again as NEW changes
   (`source_event_id` NULL, `refiled_from`) into the family's open draft.
 - `valid_to` is the last day in the operation (like `meter_data.end_date`).
+- **One status per meter** (2026-11-01): the CRM shows the procedure's status
+  in place of its own, and its own follows. An episode written ACTIVE turns
+  the meter's waiting `meter_data` rows of that operation ACTIVE from
+  `valid_from` — a crm-backend trigger (`align_meter_data_on_activation`,
+  SECURITY DEFINER; mirrored in `tests/sql/crm_test_schema.sql`), not this
+  service, which still cannot write `meter_data`. crm-backend refuses a hand
+  status change while the procedure drives it (409).
 
 ## Two DB-enforced invariants
 - **The journal writes the status.** `status_event` is append-only, and
