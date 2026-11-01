@@ -21,6 +21,7 @@ from api.admin.schemas import (
     BaselineConfirmIn,
     BaselineOut,
     ChangeExcludeIn,
+    ChangeSummaryOut,
     CorrespondenceProposalOut,
     DeadlineItemOut,
     EntrySheetOut,
@@ -35,6 +36,7 @@ from api.admin.schemas import (
     RegenerateIn,
     RegenerateOut,
     StatusOut,
+    SummaryOut,
     TransitionIn,
     VerifyAccepted,
 )
@@ -150,6 +152,23 @@ async def list_procedure_definitions(service: ProceduresDep):
     pieces and their labels in four languages."""
     rows = await service.definitions(_community())
     return ApiResponse(data=[ProcedureDefinitionOut.model_validate(r) for r in rows])
+
+
+@admin_routes.get("/summary", response_model=ApiResponse[SummaryOut])
+@with_default_error(errors.admin.GET_PROCEDURES)
+async def get_summary(service: ProceduresDep):
+    """The navigation's badge: how many procedures wait for the community,
+    how many deadlines are past due. Read on every page, so counts only."""
+    return ApiResponse(data=SummaryOut.model_validate(await service.summary(_community())))
+
+
+@admin_routes.get("/changes/{change_id}", response_model=ApiResponse[ChangeSummaryOut])
+@with_default_error(errors.admin.GET_PROCEDURES)
+async def get_change(change_id: int, service: ProceduresDep):
+    """One change and where it was filed, for the CRM's toast (« À notifier à
+    ORES : ajouté au brouillon … »). 404 for another community's change."""
+    view = await service.change_summary(_community(), change_id)
+    return ApiResponse(data=ChangeSummaryOut.model_validate(view))
 
 
 @admin_routes.get("/inbox", response_model=ApiResponse[InboxOut])

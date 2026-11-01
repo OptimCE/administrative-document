@@ -148,6 +148,34 @@ class InboxOut(BaseModel):
     groups: InboxGroupsOut
 
 
+class SummaryOut(BaseModel):
+    """What the navigation's badge says (spec, Notifications)."""
+
+    todo: int = Field(description="Procedures whose next action is the community's (bucket todo)")
+    overdue: int = Field(
+        description="Deadlines past due and unresolved: the community's missed ones and the "
+        "third parties' late answers, of procedures still open"
+    )
+
+
+class ChangeSummaryOut(BaseModel):
+    """One change, for the CRM's toast: what it is and where it was filed."""
+
+    id: int
+    kind: str
+    subject_type: int
+    subject_ref: str
+    status: int = Field(description="ChangeStatus")
+    id_dossier: int | None = None
+    procedure_code: str | None = None
+    procedure_labels: dict[str, str] | None = None
+    procedure_status: int | None = Field(default=None, description="ProcedureStatus")
+    recipient: str | None = Field(default=None, description="The catalogue's recipient code")
+    grd_ref: str | None = Field(default=None, description="The procedure's DSO id ('ores')")
+    id_sharing_operation: int | None = None
+    operation_name: str | None = None
+
+
 class StatusOut(BaseModel):
     active: bool
     regulator: str | None = None

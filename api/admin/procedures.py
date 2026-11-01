@@ -337,6 +337,86 @@ class ProcedureService:
         today = brussels_today(self._now())
         return [views.definition_out(e, today=today) for e in plugin.catalogue().entries]
 
+    async def summary(self, id_community: int) -> dict[str, int]:
+        """The navigation's badge: the procedures to do, the deadlines past due.
+        Cheap counts, no labels: it is read on every page."""
+        today = brussels_today(self._now())
+        plugin, _ = await self._plugin(id_community)
+        if plugin is None:
+            return {"todo": 0, "overdue": 0}
+        rows = await self._local.execute(
+            select(DossierModel.id_procedure_definition, DossierModel.step, func.count())
+            .where(
+                DossierModel.id_community == id_community,
+                DossierModel.id_procedure_definition.is_not(None),
+                DossierModel.regulator == plugin.code,
+                DossierModel.status.not_in(views.FINISHED),
+            )
+            .group_by(DossierModel.id_procedure_definition, DossierModel.step)
+        )
+        counted = list(rows.tuples())
+        definitions = await self._definitions([d or 0 for d, _step, _n in counted])
+        todo = 0
+        for definition_id, step, count in counted:
+            definition = self._definition(plugin, definitions.get(definition_id or 0))
+            if definition is not None and str(definition.step(str(step)).bucket) == "todo":
+                todo += int(count)
+        overdue = await self._local.scalar(
+            select(func.count())
+            .select_from(DeadlineModel)
+            .join(DossierModel, DossierModel.id == DeadlineModel.id_dossier)
+            .where(
+                DeadlineModel.id_community == id_community,
+                DeadlineModel.status.in_(UNRESOLVED),
+                DeadlineModel.kind != int(DeadlineKind.EFFECT),
+                DeadlineModel.due_date < today,
+                DossierModel.status.not_in(views.FINISHED),
+            )
+        )
+        return {"todo": todo, "overdue": int(overdue or 0)}
+
+    async def change_summary(self, id_community: int, change_id: int) -> dict[str, Any]:
+        """One change and the procedure it sits in, for the CRM's toast."""
+        change = await self._local.scalar(
+            select(ChangeModel).where(
+                ChangeModel.id == change_id, ChangeModel.id_community == id_community
+            )
+        )
+        if change is None:
+            raise ErrorException(errors.admin.CHANGE_NOT_FOUND, status_code=404)
+        out: dict[str, Any] = {
+            "id": change.id,
+            "kind": change.kind,
+            "subject_type": change.subject_type,
+            "subject_ref": change.subject_ref,
+            "status": change.status,
+            "id_dossier": change.id_dossier,
+            "id_sharing_operation": change.id_sharing_operation,
+        }
+        if change.id_sharing_operation is not None:
+            names = await self._operation_names(id_community)
+            out["operation_name"] = names.get(change.id_sharing_operation)
+        if change.id_dossier is None:
+            return out
+        dossier = await self._local.scalar(
+            select(DossierModel).where(
+                DossierModel.id == change.id_dossier, DossierModel.id_community == id_community
+            )
+        )
+        plugin, _ = await self._plugin(id_community)
+        if dossier is None or plugin is None:
+            return out
+        definitions = await self._definitions([dossier.id_procedure_definition or 0])
+        definition = self._definition(plugin, definitions.get(dossier.id_procedure_definition or 0))
+        out.update(
+            procedure_status=dossier.status,
+            grd_ref=dossier.grd_ref,
+            procedure_code=definition.code if definition else None,
+            procedure_labels=definition.labels if definition else None,
+            recipient=str(definition.recipient) if definition else None,
+        )
+        return out
+
     async def inbox(
         self,
         id_community: int,
