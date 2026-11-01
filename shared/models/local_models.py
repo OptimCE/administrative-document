@@ -567,6 +567,11 @@ class DeadlineModel(_TimestampMixin, LocalBase):
     reminded_at: Mapped[datetime.datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+    # The reminder ladder's rungs already told (14, 7, 2 days before). Assign a
+    # new list: an in-place append is not tracked.
+    reminders_sent: Mapped[list[int]] = mapped_column(
+        ARRAY(SmallInteger), nullable=False, default=list, server_default=text("'{}'")
+    )
     party: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # DeadlineParty
     kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # DeadlineKind
     derived_from_correspondence_id: Mapped[int | None] = mapped_column(

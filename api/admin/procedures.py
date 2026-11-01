@@ -39,6 +39,7 @@ from api.administrative_document.service import AdministrativeDocumentService
 from core.audit_log import AuditActions, AuditLogInput, AuditLogService
 from core.config import settings
 from core.errors.errors import ErrorException
+from core.notifications import NotificationService
 from core.realtime import CommunityAudience, Tier, emit
 from core.storage import build_s3_uri, download, parse_s3_uri, upload
 from domain.regions import region_for_regulator
@@ -109,6 +110,7 @@ from shared.models.local_models import (
     StatusEventModel,
     VersionCheckModel,
 )
+from shared.procedure_notifications import correspondence_recorded, effect_applied
 
 if TYPE_CHECKING:  # the worker image has no starlette; this module is API-only anyway
     from fastapi import UploadFile
@@ -1126,12 +1128,17 @@ class ProcedureService:
             raise _conflict(errors.admin.TRANSITION_NOT_ALLOWED) from None
         if refused:
             raise EffectConflictError(refused)
+        # The managers and the members whose meters it made active, in the audit
+        # row's CRM transaction.
+        notify = NotificationService(self._crm)
+        await effect_applied(notify, self._local, self._crm, dossier_id, effective_date=effective)
         await self._audit_ids(
             AuditActions.DOSSIER_STATUS_CHANGED,
             id_community,
             dossier_id,
             {"to_step": to_step, "reason": reason, "effective_date": effective.isoformat()},
         )
+        await notify.flush_realtime()
         await self._after(id_community, [dossier_id])
         return await self.procedure(id_community, dossier_id)
 
@@ -1552,9 +1559,20 @@ class ProcedureService:
         except IntegrityError:
             await self._local.rollback()
             raise _conflict(errors.admin.DUPLICATE_EXTERNAL_REF) from None
+        # The other managers are told, in the audit row's CRM transaction.
+        notify = NotificationService(self._crm)
+        await correspondence_recorded(
+            notify,
+            id_community=id_community,
+            dossier_id=dossier_id,
+            procedure_code=definition.code,
+            response=response.code,
+            actor=actor,
+        )
         await self._audit(
             AuditActions.DOSSIER_UPDATED, dossier, {"response": response.code, "on": str(day)}
         )
+        await notify.flush_realtime()
         await self._after(id_community, [dossier_id, *released])
         return await self.procedure(id_community, dossier_id)
 

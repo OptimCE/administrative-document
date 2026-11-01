@@ -81,13 +81,13 @@ class Settings(BaseSettings):
     # permanently, with nothing in the UI able to clear it.
     RENDER_STALE_AFTER_SECONDS: int = 1800
 
-    # ---- Deadline sweep ----
-    # How far ahead `sweep_deadlines` looks when emitting `admin_deadline.due_soon`.
-    # A single window, not a ladder: `reminded_at` makes the reminder at-most-once
-    # per occurrence, so a second window would need a second marker column.
-    DEADLINE_REMINDER_DAYS: int = 14
-    # The sweep is driven from the worker rather than by a caller. 0 disables it,
-    # which is what the test environment uses.
+    # ---- Daily jobs (worker/engine_jobs.py) ----
+    # The reminder ladder for a deadline of the community: in-app reminders at
+    # these many days before the due date, each once (`deadline.reminders_sent`),
+    # then MISSED. The emails go in one summary per manager per day.
+    DEADLINE_REMINDER_RUNGS: list[int] = [14, 7, 2]
+    # The hour the scheduler runs the day; DEADLINE_SWEEP_ENABLED switches it
+    # off (the test environment does).
     DEADLINE_SWEEP_HOUR_LOCAL: int = 6
     DEADLINE_SWEEP_ENABLED: bool = True
 

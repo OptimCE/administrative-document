@@ -855,6 +855,9 @@ CREATE TABLE IF NOT EXISTS deadline (
     -- nothing protects the in-app notification, so a daily pass would otherwise
     -- create a duplicate bell entry every day until the due date.
     reminded_at           TIMESTAMPTZ,
+    -- The rungs of the reminder ladder already told (days before the due
+    -- date: 14, 7, 2), for a deadline of the community. Phase 4, migration 0006.
+    reminders_sent        SMALLINT[]   NOT NULL DEFAULT '{}',
     -- Who must act and what kind of clock this is.
     party                 SMALLINT     NOT NULL,   -- DeadlineParty: 1=community, 2=grd, 3=regulator
     kind                  SMALLINT     NOT NULL,   -- DeadlineKind: 1=submission, 2=response, 3=lapse, 4=effect
@@ -868,6 +871,7 @@ CREATE TABLE IF NOT EXISTS deadline (
 -- CREATE TABLE IF NOT EXISTS never adds a column, so an added column needs an
 -- idempotent ALTER beside it or re-applying this file silently does nothing.
 ALTER TABLE deadline ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
+ALTER TABLE deadline ADD COLUMN IF NOT EXISTS reminders_sent SMALLINT[] NOT NULL DEFAULT '{}';
 
 -- The dashboard read: everything open, soonest first.
 CREATE INDEX IF NOT EXISTS ix_deadline_dashboard

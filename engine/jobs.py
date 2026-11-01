@@ -12,8 +12,9 @@ works in the caller's transaction.
    deadline the new procedure takes over (unlinked, same rule code, party and
    kind) is cancelled.
 2. **Deadlines** (``chase_deadlines``). A community's deadline past due becomes
-   MISSED, once, and is notified; it stays unresolved (``lifecycle``). One due
-   within the reminder window is reminded, once (``reminded_at``). A third
+   MISSED, once, and is notified; it stays unresolved (``lifecycle``). One
+   coming is reminded at each rung of the ladder it reaches (J-14, J-7, J-2),
+   each rung once (``reminders_sent``). A third
    party's deadline past due stays OPEN (the answer is still awaited) and the
    community is told once, ``reminded_at`` marking it. An effect date is not a
    deadline to miss: it is the effect job's. A finished procedure's deadline
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
@@ -55,7 +57,7 @@ from shared.models.local_models import DeadlineModel, DossierModel
 
 logger = logging.getLogger(__name__)
 
-_FINISHED = (
+FINISHED = (
     int(ProcedureStatus.IN_FORCE),
     int(ProcedureStatus.REFUSED),
     int(ProcedureStatus.CANCELLED),
@@ -185,26 +187,40 @@ class Chase:
     """What the deadline pass changed, for the caller to notify."""
 
     missed: list[DeadlineModel] = field(default_factory=list)  # the community's, now MISSED
-    reminded: list[DeadlineModel] = field(default_factory=list)  # due soon
+    reminded: list[DeadlineModel] = field(default_factory=list)  # due soon: a rung reached
     late_answers: list[DeadlineModel] = field(default_factory=list)  # a third party's, past due
     expired: int = 0  # of a finished procedure, silently
+    # deadline id -> the rung its reminder is for (days before the due date)
+    rungs: dict[int, int] = field(default_factory=dict)
+
+
+def reached_rung(rungs: Sequence[int], days_left: int) -> tuple[int, list[int]] | None:
+    """The tightest rung ``days_left`` has reached, and every rung reached:
+    a deadline born 5 days out is told once, at the J-7 rung, and J-14 is
+    marked told with it. None before the widest rung."""
+    reached = sorted((r for r in rungs if days_left <= r), reverse=True)
+    return (reached[-1], reached) if reached else None
 
 
 async def chase_deadlines(
-    local: AsyncSession, id_community: int, *, today: datetime.date, reminder_days: int
+    local: AsyncSession, id_community: int, *, today: datetime.date, rungs: Sequence[int]
 ) -> Chase:
     """Flip and mark what the day changes. The marks are the idempotency: a
-    second run the same day finds nothing (MISSED is no longer OPEN, and
-    ``reminded_at`` is set)."""
+    second run the same day finds nothing (MISSED is no longer OPEN, a rung
+    told is in ``reminders_sent``, a late answer has ``reminded_at``).
+
+    The reminder ladder (spec, Notifications: J-14, J-7, J-2, then overdue):
+    each rung of a deadline of the community is told once."""
     chase = Chase()
     now = datetime.datetime.now(datetime.UTC)
+    window = max(rungs, default=0)
     rows = await local.execute(
         select(DeadlineModel, DossierModel)
         .join(DossierModel, DossierModel.id == DeadlineModel.id_dossier)
         .where(
             DeadlineModel.id_community == id_community,
             DeadlineModel.status == int(DeadlineStatus.OPEN),
-            DeadlineModel.due_date <= today + datetime.timedelta(days=reminder_days),
+            DeadlineModel.due_date <= today + datetime.timedelta(days=window),
             DossierModel.id_procedure_definition.is_not(None),
         )
         .order_by(DeadlineModel.due_date, DeadlineModel.id)
@@ -213,7 +229,7 @@ async def chase_deadlines(
         if deadline.kind == int(DeadlineKind.EFFECT):
             continue  # the effect job's
         past_due = deadline.due_date < today
-        if dossier.status in _FINISHED:
+        if dossier.status in FINISHED:
             if past_due:
                 deadline.status = int(DeadlineStatus.CANCELLED)
                 deadline.resolved_at = now
@@ -224,9 +240,16 @@ async def chase_deadlines(
             deadline.status = int(DeadlineStatus.MISSED)
             deadline.resolved_at = now
             chase.missed.append(deadline)
-        elif ours and deadline.reminded_at is None:
-            deadline.reminded_at = now
+        elif ours:
+            rung = reached_rung(rungs, (deadline.due_date - today).days)
+            told = set(deadline.reminders_sent or ())
+            if rung is None or rung[0] in told:
+                continue
+            deadline.reminders_sent = sorted(told | set(rung[1]), reverse=True)
+            if deadline.reminded_at is None:
+                deadline.reminded_at = now
             chase.reminded.append(deadline)
+            chase.rungs[deadline.id] = rung[0]
         elif not ours and past_due and deadline.reminded_at is None:
             deadline.reminded_at = now
             chase.late_answers.append(deadline)
@@ -250,7 +273,7 @@ async def due_effects(
             DeadlineModel.status == int(DeadlineStatus.OPEN),
             DeadlineModel.kind == int(DeadlineKind.EFFECT),
             DeadlineModel.due_date <= today,
-            DossierModel.status.not_in(_FINISHED),
+            DossierModel.status.not_in(FINISHED),
         )
         .order_by(DeadlineModel.due_date)
     )

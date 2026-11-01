@@ -15,12 +15,12 @@ that community's day (the next run retries; every step is idempotent):
    nobody has looked at), and this year's calendar procedures. Committed
    LOCALLY FIRST: these rows are journaled, and a deferred journal check failing
    at a local commit must not leave notifications behind in the CRM.
-3. The deadline pass and its notifications, CRM FIRST. A deadline flipped to
-   MISSED is never matched again, so a local commit followed by a lost CRM one
-   would lose its notification for good; this way a crash in between leaves it
-   OPEN and the next run re-sends (``dedupe_key`` collapses the duplicate email).
-   Safe because this transaction writes deadlines only, which carry no deferred
-   check.
+3. The deadline pass and its in-app notifications (one per rung of the
+   reminder ladder, J-14, J-7, J-2, and one when missed), CRM FIRST. A deadline
+   flipped to MISSED is never matched again, so a local commit followed by a
+   lost CRM one would lose its notification for good; this way a crash in
+   between leaves it OPEN and the next run re-sends. Safe because this
+   transaction writes deadlines only, which carry no deferred check.
 4. The effects due: each procedure whose effect date has come goes in force,
    the core first (``engine.effects.go_in_force``). One the core refuses (an
    EAN in another operation) stays where it is with the reason, and is tried
@@ -29,6 +29,9 @@ that community's day (the next run retries; every step is idempotent):
    badges re-planned (``engine.effects.sync``): what a failed sync, or a crash
    between two commits, left behind is caught up here. Planning writes only
    what differs, so a quiet day writes nothing.
+
+Then, once every community is done, the summary email (``worker/digest.py``):
+at most one per manager per day, across communities (criterion 4.1).
 
 Realtime hints go out after the commits.
 
@@ -80,7 +83,9 @@ from shared.models.local_models import (
     ModuleActivationModel,
     ProcedureDefinitionModel,
 )
+from shared.procedure_notifications import effect_applied
 from worker.context import with_tenant
+from worker.digest import CommunityDay, News, send_digests
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +106,7 @@ class DailyReport:
     effects_applied: int = 0
     effects_blocked: int = 0
     reconciled: int = 0
+    digests: int = 0
     failed: int = 0
 
 
@@ -133,12 +139,13 @@ async def run_daily_jobs(
     crm = crm_session or AsyncSessionCRMFactory()
     now = now or datetime.datetime.now(datetime.UTC)
     report = DailyReport()
+    days: list[CommunityDay] = []
     try:
         for id_community in await _communities_unscoped(local, SqlEngineCrmRead(crm)):
             report.communities += 1
             try:
                 with with_tenant(id_community):
-                    await _run_for(
+                    day = await _run_for(
                         id_community,
                         local=local,
                         crm=crm,
@@ -147,11 +154,14 @@ async def run_daily_jobs(
                         region_of=region_of,
                         report=report,
                     )
+                if day is not None:
+                    days.append(day)
             except Exception:
                 logger.exception("daily jobs failed for community %s", id_community)
                 await local.rollback()
                 await crm.rollback()
                 report.failed += 1
+        report.digests = await _digests(local, crm, days, today=brussels_today(now))
         logger.info(
             "daily jobs: %s",
             report,
@@ -174,7 +184,9 @@ async def _run_for(
     now: datetime.datetime,
     region_of: RegionOf,
     report: DailyReport,
-) -> None:
+) -> CommunityDay | None:
+    """The community's day; what it told, for the summary email (None: the
+    module is off, or the regulator has no plugin)."""
     today = brussels_today(now)
     crm_read = SqlEngineCrmRead(crm)
     state = await crm_read.module_state(id_community)
@@ -183,7 +195,7 @@ async def _run_for(
     if period is None or plugin is None:
         await local.commit()
         await crm.commit()  # its reads
-        return
+        return None
 
     # 2. Journaled writes, local first.
     await ensure_baseline(local, crm_read, plugin, period, now=now, region_of=region_of)
@@ -195,7 +207,7 @@ async def _run_for(
 
     # 3. Deadlines, CRM first; 4. the effects due, read in the same pass.
     chase = await chase_deadlines(
-        local, id_community, today=today, reminder_days=settings.DEADLINE_REMINDER_DAYS
+        local, id_community, today=today, rungs=settings.DEADLINE_REMINDER_RUNGS
     )
     notify = NotificationService(crm)
     await _notify(notify, local, crm, id_community, chase, today=today)
@@ -203,6 +215,15 @@ async def _run_for(
     # Plain values: nothing after the commits reads ORM state, which a
     # rollback anywhere on these sessions would have expired.
     due = [d.id for d in (*chase.missed, *chase.reminded, *chase.late_answers)]
+    day = CommunityDay(
+        id_community=id_community,
+        plugin=plugin,
+        news=[
+            *(News(d.id, "missed") for d in chase.missed),
+            *(News(d.id, "reminder", chase.rungs.get(d.id)) for d in chase.reminded),
+            *(News(d.id, "late") for d in chase.late_answers),
+        ],
+    )
     await crm.commit()
     await local.commit()
     report.missed += len(chase.missed)
@@ -244,6 +265,7 @@ async def _run_for(
         else:
             report.effects_applied += 1
             applied.append(procedure_id)
+            await _told_in_force(local, crm, procedure_id, effective)
 
     # 5. The reconciliation of the badges, procedure by procedure.
     for procedure_id in await tracked_dossiers(local, id_community):
@@ -261,6 +283,42 @@ async def _run_for(
 
     await notify.flush_realtime()
     await _hint(id_community, [*opened, *applied], due)
+    return day
+
+
+async def _told_in_force(
+    local: AsyncSession, crm: AsyncSession, procedure_id: int, effective: datetime.date
+) -> None:
+    """In-app: the managers, and the members whose meters it made active.
+    After the procedure's own commits; a failure costs the notice only."""
+    notify = NotificationService(crm)
+    try:
+        await effect_applied(notify, local, crm, procedure_id, effective_date=effective)
+        await crm.commit()
+    except Exception:
+        logger.exception("in-force notice of procedure %s not sent", procedure_id)
+        await crm.rollback()
+        return
+    await notify.flush_realtime()
+
+
+async def _digests(
+    local: AsyncSession, crm: AsyncSession, days: list[CommunityDay], *, today: datetime.date
+) -> int:
+    """The summary emails, once every community is done. A failure costs the
+    emails of the day only (the in-app notices are already out)."""
+    notify = NotificationService(crm)
+    try:
+        sent = await send_digests(local, crm, notify, days, today=today)
+        await crm.commit()
+        await local.commit()  # its reads
+    except Exception:
+        logger.exception("daily summaries not sent")
+        await crm.rollback()
+        await local.rollback()
+        return 0
+    await notify.flush_realtime()
+    return sent
 
 
 async def _notify(
@@ -272,17 +330,19 @@ async def _notify(
     *,
     today: datetime.date,
 ) -> None:
-    """Stage the notifications and the audit row on the CRM session."""
+    """Stage the in-app notifications and the audit row on the CRM session.
+    In-app only: the email of the day is the summary (``worker/digest.py``),
+    at most one per manager whatever the number of deadlines."""
     target = CommunityTarget(community_id=id_community, roles=MANAGER_ROLES)
     codes = await _procedure_codes(local, chase)
     for deadline in chase.missed:
         # TRANSACTIONAL: a missed regulatory deadline has legal consequences,
-        # not something a manager may opt out of.
+        # not something a manager may mute in-app.
         await notify.publish(
             type=NotificationTypes.ADMIN_DEADLINE_MISSED,
             target=target,
             category=NotificationCategory.TRANSACTIONAL,
-            channels=(Channel.INAPP, Channel.EMAIL),
+            channels=(Channel.INAPP,),
             data=_data(deadline, codes),
         )
     for deadline in chase.reminded:
@@ -291,14 +351,13 @@ async def _notify(
             target=target,
             # INFORMATIONAL: a reminder is what a manager may mute.
             category=NotificationCategory.INFORMATIONAL,
-            channels=(Channel.INAPP, Channel.EMAIL),
-            data={**_data(deadline, codes), "as_of": today.isoformat()},
-            # The occurrence date is in the key: reminding does not change what
-            # the derived key hashes, so it could not tell two occurrences apart.
-            dedupe_key=(
-                f"{NotificationTypes.ADMIN_DEADLINE_DUE_SOON}:"
-                f"{deadline.id}:{deadline.due_date.isoformat()}"
-            ),
+            channels=(Channel.INAPP,),
+            data={
+                **_data(deadline, codes),
+                "as_of": today.isoformat(),
+                "rung": chase.rungs.get(deadline.id),
+                "days_left": (deadline.due_date - today).days,
+            },
         )
     for deadline in chase.late_answers:
         # A third party is late: in-app only, for the manager to chase them

@@ -30,6 +30,7 @@ from shared.const import (
 from shared.models.local_models import ChangeModel, DeadlineModel, DossierModel
 from tests.conftest import create_sharing_operation, gateway_headers
 from tests.engine.world import EAN, add_meter, make_world, meter
+from tests.notifications import notifications_of, seed_roster
 from worker.engine_jobs import run_daily_jobs
 
 pytestmark = pytest.mark.asyncio
@@ -49,10 +50,10 @@ async def _headers(db_session, world) -> dict[str, str]:
     return gateway_headers(str(auth_id), role="MANAGER")
 
 
-async def _file(world, event_type: str, ean: str) -> int:
+async def _file(world, event_type: str, ean: str, *, member: int = 5) -> int:
     when = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=5)
     result = await route_event(
-        meter(world, event_type, ean, at=when),
+        meter(world, event_type, ean, at=when, member=member),
         local=world.session,
         crm=SqlEngineCrmRead(world.session),
         registry=world.registry,
@@ -231,10 +232,10 @@ def _morning(day: datetime.date) -> datetime.datetime:
     return datetime.datetime.combine(day, datetime.time(6), BRUSSELS)
 
 
-async def _signed(client, db_session, world) -> int:
+async def _signed(client, db_session, world, *, member: int = 5) -> int:
     """A meter added, sent and taken to the signed amendment, all in the past."""
     headers = await _headers(db_session, world)
-    dossier_id = await _file(world, "operation.meter_added", EAN[0])
+    dossier_id = await _file(world, "operation.meter_added", EAN[0], member=member)
     await _complete_and_send(client, headers, dossier_id, on=SENT)
     for type_ in (
         "completeness_ack",
@@ -395,6 +396,110 @@ class TestCriterion32:
 
         assert (await _procedure(db_session, dossier_id)).step == "in_force"
         assert await _audits(db_session, world) == 1  # the core was not written twice
+
+
+async def _member_with_a_user(db_session, world, auth_id: str) -> int:
+    """A member of the community, and an app user linked to it."""
+    member = await db_session.scalar(
+        text(
+            "INSERT INTO member (name, member_type, status, id_community) "
+            "VALUES ('Mia', 1, 1, :c) RETURNING id"
+        ),
+        {"c": world.id_community},
+    )
+    user = await db_session.scalar(
+        text("INSERT INTO app_user (auth_user_id, email) VALUES (:a, :e) RETURNING id"),
+        {"a": auth_id, "e": f"{auth_id}@example.be"},
+    )
+    await db_session.execute(
+        text("INSERT INTO user_member_link (id_user, id_member) VALUES (:u, :m)"),
+        {"u": user, "m": member},
+    )
+    return int(member)
+
+
+class TestTheNotices:
+    """Phase 4 (spec, Notifications): « Prise d'effet appliquée » to the
+    managers then the participants concerned, « Réponse enregistrée » to the
+    other managers. In-app."""
+
+    async def test_in_force_tells_the_managers_and_the_member_whose_meter_it_is(
+        self, client, db_session, admin_storage
+    ):
+        world = await _world(db_session)
+        await seed_roster(
+            db_session, type("C", (), {"id": world.id_community})(), {"boss": "MANAGER"}
+        )
+        member = await _member_with_a_user(db_session, world, "mia")
+        dossier_id = await _signed(client, db_session, world, member=member)
+
+        await _day(world, EFFECTIVE)
+
+        (applied,) = await notifications_of(db_session, "admin_effect.applied")
+        assert applied.data == {
+            "dossier_id": dossier_id,
+            "procedure_code": "PARTAGE_MODIF",
+            "effective_date": EFFECTIVE.isoformat(),
+        }
+        (active,) = await notifications_of(db_session, "admin_meter.active")
+        assert (active.data["ean"], active.data["effective_date"]) == (
+            EAN[0],
+            EFFECTIVE.isoformat(),
+        )
+        assert active.data["operation"] == "Op Centre"
+        recipients = {
+            n.type: await db_session.scalar(
+                text("SELECT auth_user_id FROM app_user WHERE id = :id"), {"id": n.id_user}
+            )
+            for n in (applied, active)
+        }
+        assert recipients == {"admin_effect.applied": "boss", "admin_meter.active": "mia"}
+
+    async def test_by_hand_into_force_tells_them_too(self, client, db_session, admin_storage):
+        world = await _world(db_session)
+        await seed_roster(
+            db_session, type("C", (), {"id": world.id_community})(), {"boss": "MANAGER"}
+        )
+        member = await _member_with_a_user(db_session, world, "mia")
+        dossier_id = await _signed(client, db_session, world, member=member)
+
+        response = await client.post(
+            f"/admin/dossiers/{dossier_id}/transition",
+            json={"to_step": "in_force", "reason": "GRD confirmed", "on": EFFECTIVE.isoformat()},
+            headers=await _headers(db_session, world),
+        )
+
+        assert response.status_code == 200, response.text
+        assert len(await notifications_of(db_session, "admin_effect.applied")) == 1
+        assert len(await notifications_of(db_session, "admin_meter.active")) == 1
+
+    async def test_a_recorded_answer_tells_the_other_managers(
+        self, client, db_session, admin_storage
+    ):
+        world = await _world(db_session)
+        await seed_roster(
+            db_session,
+            type("C", (), {"id": world.id_community})(),
+            {"auth-user-1": "MANAGER", "colleague": "MANAGER"},
+        )
+        headers = await _headers(db_session, world)  # acts as auth-user-1
+        dossier_id = await _file(world, "operation.meter_added", EAN[0])
+        await _complete_and_send(client, headers, dossier_id, on=SENT)
+
+        await _respond(client, headers, dossier_id, "completeness_ack", on=SENT)
+
+        (told,) = await notifications_of(db_session, "admin_correspondence.recorded")
+        assert told.data == {
+            "dossier_id": dossier_id,
+            "procedure_code": "PARTAGE_MODIF",
+            "response": "completeness_ack",
+        }
+        assert (
+            await db_session.scalar(
+                text("SELECT auth_user_id FROM app_user WHERE id = :id"), {"id": told.id_user}
+            )
+            == "colleague"
+        )
 
 
 class TestIntoForceByHand:

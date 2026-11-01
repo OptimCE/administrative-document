@@ -102,8 +102,16 @@ bundles through `document-generation`. Read `README.md` for the domain.
   plugin = nothing, no notification. Per community: baseline + calendar
   procedures (once per family and `period_key` year, only between
   `opens_annually` and the annual due date) committed LOCAL first (journaled);
-  then the deadline pass and its notifications CRM first (deadline rows only, no
-  deferred check). A community's past-due deadline goes MISSED but stays
+  then the deadline pass and its in-app notifications CRM first (deadline rows
+  only, no deferred check): one per rung of the reminder ladder J-14, J-7, J-2
+  (`deadline.reminders_sent`, `DEADLINE_REMINDER_RUNGS`), one when missed. The
+  email is NOT per deadline: once every community is done, `worker/digest.py`
+  sends ONE `admin_digest.summary` per manager per day across communities
+  (criterion 4.1; `dedupe_key` = user + day; daily by default, weekly on
+  Mondays with preference mode 4, none with OFF). A procedure in force tells
+  its managers and the members whose meter it made active, an answer recorded
+  tells the other managers (`shared/procedure_notifications.py`, in-app; used
+  by the worker AND the API). A community's past-due deadline goes MISSED but stays
   UNRESOLVED (`lifecycle.UNRESOLVED`: still overdue on the dashboard, still met
   late, superseded by a new clock); a third party's stays OPEN and is told once
   (`reminded_at`, in-app only); a finished procedure's closes CANCELLED

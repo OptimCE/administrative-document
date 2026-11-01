@@ -196,10 +196,12 @@ class TestNotifications:
         assert notified[soon.id].type == "admin_deadline.due_soon"
         assert notified[late.id].type == "admin_deadline.missed"
         assert notified[late.id].data["party"] == "grd"
-        emailed = set(await world.session.scalars(select(OutboundMessageModel.id_notification)))
-        assert notified[missed.id].id in emailed
-        # A third party's lateness is in-app only: the manager chases them.
-        assert notified[late.id].id not in emailed
+        # In-app per deadline; the email is the day's ONE summary (criterion
+        # 4.1), linked to no in-app row.
+        emails = list(await world.session.scalars(select(OutboundMessageModel)))
+        assert [(m.type, m.id_notification) for m in emails] == [("admin_digest.summary", None)]
+        (section,) = emails[0].data["communities"]
+        assert sorted(n["news"] for n in section["news"]) == ["late", "missed", "reminder"]
 
         await _run(world, APRIL_15 + datetime.timedelta(hours=2))
         assert len(await notifications_of(world.session)) == 3

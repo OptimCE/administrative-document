@@ -271,7 +271,9 @@ CREATE TABLE IF NOT EXISTS notification_preference (
     id_user     INTEGER      NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
     type_prefix VARCHAR(128) NOT NULL,
     channel     SMALLINT     NOT NULL CHECK (channel IN (1, 2)),
-    mode        SMALLINT     NOT NULL CHECK (mode IN (1, 3)),
+    -- 1 IMMEDIATE, 3 OFF, 4 WEEKLY (a summary type only; crm-backend
+    -- database_script/2026-11-01_notification_preference_weekly.sql)
+    mode        SMALLINT     NOT NULL CHECK (mode IN (1, 3, 4)),
 
     PRIMARY KEY (id_user, type_prefix, channel)
 );

@@ -235,9 +235,9 @@ TODAY = D(2026, 5, 4)  # a Monday
 
 
 class TestDeadlineChase:
-    async def _chase(self, world: World):
+    async def _chase(self, world: World, today: datetime.date = TODAY):
         return await chase_deadlines(
-            world.session, world.id_community, today=TODAY, reminder_days=14
+            world.session, world.id_community, today=today, rungs=(14, 7, 2)
         )
 
     async def test_the_communitys_deadline_past_due_is_missed_once_and_stays_unresolved(
@@ -262,7 +262,7 @@ class TestDeadlineChase:
         again = await self._chase(world)
         assert (again.missed, again.reminded, again.late_answers) == ([], [], [])
 
-    async def test_one_due_within_the_window_is_reminded_once(self, db_session):
+    async def test_one_due_within_the_window_is_reminded_once_per_rung(self, db_session):
         world = await make_world(db_session)
         dossier = await _procedure(world)
         soon = await _deadline(world, dossier, D(2026, 5, 18))  # today + 14
@@ -272,11 +272,46 @@ class TestDeadlineChase:
         chase = await self._chase(world)
 
         assert sorted(d.id for d in chase.reminded) == sorted([soon.id, today.id])
+        assert chase.rungs == {soon.id: 14, today.id: 2}
         assert chase.missed == []
         assert (await _fresh(world, soon)).reminded_at is not None
+        assert (await _fresh(world, soon)).reminders_sent == [14]
+        # Due today: every rung reached at once, told once.
+        assert (await _fresh(world, today)).reminders_sent == [14, 7, 2]
         assert (await _fresh(world, soon)).status == int(DeadlineStatus.OPEN)
         assert (await _fresh(world, far)).reminded_at is None
         assert (await self._chase(world)).reminded == []
+
+    async def test_the_ladder_tells_j14_j7_j2_then_missed(self, db_session):
+        """Spec, Notifications: J-14, J-7, J-2, then overdue. Each once."""
+        world = await make_world(db_session)
+        due = await _deadline(world, await _procedure(world), D(2026, 5, 18))
+
+        told = []
+        for offset in range(16):
+            day = D(2026, 5, 4) + datetime.timedelta(days=offset)
+            chase = await self._chase(world, day)
+            told += [(day, chase.rungs[d.id]) for d in chase.reminded]
+            told += [(day, "missed") for d in chase.missed]
+
+        assert told == [
+            (D(2026, 5, 4), 14),
+            (D(2026, 5, 11), 7),
+            (D(2026, 5, 16), 2),
+            (D(2026, 5, 19), "missed"),
+        ]
+        assert (await _fresh(world, due)).reminders_sent == [14, 7, 2]
+
+    async def test_a_deadline_born_close_is_told_at_its_rung_only(self, db_session):
+        """Born 5 days out: told once at J-7 (J-14 marked with it), then J-2."""
+        world = await make_world(db_session)
+        due = await _deadline(world, await _procedure(world), D(2026, 5, 9))
+
+        first = await self._chase(world)
+        assert first.rungs == {due.id: 7}
+        assert (await _fresh(world, due)).reminders_sent == [14, 7]
+        assert (await self._chase(world, D(2026, 5, 6))).reminded == []
+        assert (await self._chase(world, D(2026, 5, 7))).rungs == {due.id: 2}
 
     async def test_a_third_partys_late_answer_stays_open_and_is_told_once(self, db_session):
         world = await make_world(db_session)

@@ -10,11 +10,13 @@ class NotificationTypes:
     and a title in all four ``crm-frontend/src/assets/i18n/*.json`` files, or it
     renders to the user as a raw i18n key with no error anywhere.
 
-    ``admin_deadline.due_soon`` is the one INFORMATIONAL type here, so it is the
-    only one a manager may mute. It is also the only producer anywhere that
-    passes an explicit ``dedupe_key``: its sweep re-selects the same rows every
-    day, so the payload alone cannot distinguish two occurrences and the
-    occurrence date has to be in the key.
+    The deadlines are told in-app, one notification per rung of the reminder
+    ladder (J-14, J-7, J-2; ``admin_deadline.due_soon``) and when missed. Their
+    email is ``admin_digest.summary``: at most one per manager per day, across
+    communities, built by the daily job (``worker/digest.py``) with an explicit
+    ``dedupe_key`` holding the user and the day. A manager picks daily, weekly
+    or none for it (``notification_preference`` mode 4 = weekly, on the
+    ``admin_digest`` prefix).
 
     This is the ONLY per-service module in ``core/notifications``; the other five
     are byte-identical across producers so Phase 2's extraction is a move rather
@@ -24,3 +26,8 @@ class NotificationTypes:
     ADMIN_DEADLINE_DUE_SOON = "admin_deadline.due_soon"
     ADMIN_DEADLINE_MISSED = "admin_deadline.missed"
     ADMIN_DOSSIER_ACKNOWLEDGED = "admin_dossier.acknowledged"
+    # Phase 4 (2026-11-01).
+    ADMIN_DIGEST_SUMMARY = "admin_digest.summary"
+    ADMIN_EFFECT_APPLIED = "admin_effect.applied"
+    ADMIN_METER_ACTIVE = "admin_meter.active"
+    ADMIN_CORRESPONDENCE_RECORDED = "admin_correspondence.recorded"
