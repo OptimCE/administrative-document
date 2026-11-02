@@ -4,6 +4,7 @@ override one (``app.dependency_overrides``) without the rest."""
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.admin.digest import DigestSettingsService
 from api.admin.inbound import InboundService
 from api.admin.procedures import ProcedureService
 from api.admin.service import AdminService
@@ -38,6 +39,13 @@ def get_inbound_service(
     local_session: AsyncSession = Depends(get_local_session),
 ) -> InboundService:
     return InboundService(local_session=local_session)
+
+
+def get_digest_settings_service(
+    local_session: AsyncSession = Depends(get_local_session),
+    crm_session: AsyncSession = Depends(get_crm_session),
+) -> DigestSettingsService:
+    return DigestSettingsService(local_session=local_session, crm_session=crm_session)
 
 
 def get_procedure_service(

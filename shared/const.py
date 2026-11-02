@@ -185,6 +185,15 @@ class InboundMailStatus(IntEnum):
     DISCARDED = 4  # not a procedure's (spam, a mistake)
 
 
+class DigestCadence(IntEnum):
+    """How often a community's summary email goes out (``digest_setting``)."""
+
+    WORKING_DAYS = 1  # Monday to Friday; Monday's covers the weekend
+    WEEKLY = 2  # on ``weekday``
+    BIWEEKLY = 3  # on ``weekday``, every other week from ``first_on``
+    MONTHLY = 4  # on the month's first ``weekday``
+
+
 class ChangeStatus(IntEnum):
     """Lifecycle of a ``change``."""
 

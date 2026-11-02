@@ -117,6 +117,9 @@ class _AdminErrors:
     # Phase 4: the effect date is corrected only while it is still to come (an
     # open effect deadline). -> 409.
     EFFECTIVE_DATE_NOT_OPEN = Error(code=2397, key="ERRORS.ADMIN.EFFECTIVE_DATE_NOT_OPEN")
+    # Phase 4: the summary email's setting does not hold together (rhythm,
+    # weekday, first send, or a recipient who is no admin or manager). -> 422.
+    DIGEST_SETTING_INVALID = Error(code=2398, key="ERRORS.ADMIN.DIGEST_SETTING_INVALID")
 
 
 class _Errors:

@@ -30,11 +30,11 @@ that community's day (the next run retries; every step is idempotent):
    between two commits, left behind is caught up here. Planning writes only
    what differs, so a quiet day writes nothing.
 
-Then, once every community is done, the summary email (``worker/digest.py``):
-at most one per manager per day, across communities (criterion 4.1). Its news
-is what steps 3 and 4 told (the rungs, the deadlines missed, the third parties
-late, the procedures put in force) and the day's answers, which it reads
-itself: most are recorded through the API.
+Then, once every community is done, the summary email (``worker/digest.py``)
+of the communities whose admin turned it on and whose scheduled date has come:
+at most one per recipient per day, across communities (criterion 4.1). It
+reads its news from the database (what steps 3 and 4 recorded included), so
+the jobs hand it only the communities they ran.
 
 Realtime hints go out after the commits.
 
@@ -73,7 +73,7 @@ from core.realtime import CommunityAudience, Tier, emit
 from domain.regions import region_for_regulator
 from engine.activation import reconcile_activation
 from engine.baseline import brussels_today, ensure_baseline
-from engine.contracts import PluginRegistry, plugin_for
+from engine.contracts import PluginRegistry, RegulatorPlugin, plugin_for
 from engine.effects import InForceError, go_in_force, sync, tracked_dossiers
 from engine.filing import RegionOf
 from engine.jobs import Chase, chase_deadlines, due_effects, open_calendar_procedures
@@ -88,7 +88,7 @@ from shared.models.local_models import (
 )
 from shared.procedure_notifications import effect_applied
 from worker.context import with_tenant
-from worker.digest import CommunityDay, News, send_digests
+from worker.digest import send_digests
 
 logger = logging.getLogger(__name__)
 
@@ -142,13 +142,13 @@ async def run_daily_jobs(
     crm = crm_session or AsyncSessionCRMFactory()
     now = now or datetime.datetime.now(datetime.UTC)
     report = DailyReport()
-    days: list[CommunityDay] = []
+    ran: dict[int, RegulatorPlugin] = {}
     try:
         for id_community in await _communities_unscoped(local, SqlEngineCrmRead(crm)):
             report.communities += 1
             try:
                 with with_tenant(id_community):
-                    day = await _run_for(
+                    plugin = await _run_for(
                         id_community,
                         local=local,
                         crm=crm,
@@ -157,14 +157,14 @@ async def run_daily_jobs(
                         region_of=region_of,
                         report=report,
                     )
-                if day is not None:
-                    days.append(day)
+                if plugin is not None:
+                    ran[id_community] = plugin
             except Exception:
                 logger.exception("daily jobs failed for community %s", id_community)
                 await local.rollback()
                 await crm.rollback()
                 report.failed += 1
-        report.digests = await _digests(local, crm, days, now=now)
+        report.digests = await _digests(local, crm, ran, now=now)
         logger.info(
             "daily jobs: %s",
             report,
@@ -187,8 +187,8 @@ async def _run_for(
     now: datetime.datetime,
     region_of: RegionOf,
     report: DailyReport,
-) -> CommunityDay | None:
-    """The community's day; what it told, for the summary email (None: the
+) -> RegulatorPlugin | None:
+    """The community's day; its plugin, for the summary email (None: the
     module is off, or the regulator has no plugin)."""
     today = brussels_today(now)
     crm_read = SqlEngineCrmRead(crm)
@@ -218,18 +218,6 @@ async def _run_for(
     # Plain values: nothing after the commits reads ORM state, which a
     # rollback anywhere on these sessions would have expired.
     due = [d.id for d in (*chase.missed, *chase.reminded, *chase.late_answers)]
-    day = CommunityDay(
-        id_community=id_community,
-        plugin=plugin,
-        news=[
-            *(News("missed", deadline_id=d.id) for d in chase.missed),
-            *(
-                News("reminder", deadline_id=d.id, rung=chase.rungs.get(d.id))
-                for d in chase.reminded
-            ),
-            *(News("late", deadline_id=d.id) for d in chase.late_answers),
-        ],
-    )
     await crm.commit()
     await local.commit()
     report.missed += len(chase.missed)
@@ -271,7 +259,6 @@ async def _run_for(
         else:
             report.effects_applied += 1
             applied.append(procedure_id)
-            day.news.append(News("in_force", dossier_id=procedure_id, effective_date=effective))
             await _told_in_force(local, crm, procedure_id, effective)
 
     # 5. The reconciliation of the badges, procedure by procedure.
@@ -290,7 +277,7 @@ async def _run_for(
 
     await notify.flush_realtime()
     await _hint(id_community, [*opened, *applied], due)
-    return day
+    return plugin
 
 
 async def _told_in_force(
@@ -310,15 +297,22 @@ async def _told_in_force(
 
 
 async def _digests(
-    local: AsyncSession, crm: AsyncSession, days: list[CommunityDay], *, now: datetime.datetime
+    local: AsyncSession,
+    crm: AsyncSession,
+    ran: dict[int, RegulatorPlugin],
+    *,
+    now: datetime.datetime,
 ) -> int:
-    """The summary emails, once every community is done. A failure costs the
-    emails of the day only (the in-app notices are already out)."""
+    """The summary emails, once every community is done. The CRM first: an
+    email published then a lost local commit is sent again (the setting not
+    moved on) rather than lost; the same day, the dedupe stops it. A failure
+    costs the summaries only (the in-app notices are already out), and the
+    next run tries them again."""
     notify = NotificationService(crm)
     try:
-        sent = await send_digests(local, crm, notify, days, now=now)
+        sent = await send_digests(local, crm, notify, ran, now=now)
         await crm.commit()
-        await local.commit()  # its reads
+        await local.commit()  # the settings moved on
     except Exception:
         logger.exception("daily summaries not sent")
         await crm.rollback()

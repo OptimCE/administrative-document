@@ -696,6 +696,36 @@ class InboundMailAttachmentModel(LocalBase):
     )
 
 
+class DigestSettingModel(LocalBase):
+    """A community's summary email (phase 4): off unless an admin turned it
+    on. ``cadence`` is ``DigestCadence``; the schedule is
+    ``engine/digest_schedule.py``."""
+
+    __tablename__ = "digest_setting"
+
+    id_community: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("FALSE")
+    )
+    cadence: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    weekday: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    first_on: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    recipient_ids: Mapped[list[int]] = mapped_column(
+        ARRAY(Integer), nullable=False, default=list, server_default=text("'{}'")
+    )
+    enabled_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    period_from: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    last_due_on: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 # ---------------------------------------------------------------------------
 # Procedures engine
 # ---------------------------------------------------------------------------

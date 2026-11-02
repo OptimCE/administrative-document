@@ -12,11 +12,11 @@ class NotificationTypes:
 
     The deadlines are told in-app, one notification per rung of the reminder
     ladder (J-14, J-7, J-2; ``admin_deadline.due_soon``) and when missed. Their
-    email is ``admin_digest.summary``: at most one per manager per day, across
-    communities, built by the daily job (``worker/digest.py``) with an explicit
-    ``dedupe_key`` holding the user and the day. A manager picks daily, weekly
-    or none for it (``notification_preference`` mode 4 = weekly, on the
-    ``admin_digest`` prefix).
+    email is ``admin_digest.summary``, off unless a community's admin turned it
+    on (``digest_setting``: its rhythm and its recipients), built by the daily
+    job (``worker/digest.py``): at most one per recipient per day, across
+    communities, with an explicit ``dedupe_key`` holding the user and the day.
+    A recipient stops it in their profile (``admin_digest`` email OFF).
 
     This is the ONLY per-service module in ``core/notifications``; the other five
     are byte-identical across producers so Phase 2's extraction is a move rather

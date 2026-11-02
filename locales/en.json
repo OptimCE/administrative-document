@@ -60,7 +60,8 @@
       "INBOUND_DISABLED": "The reception address is not configured on this instance.",
       "INBOUND_MAIL_NOT_FOUND": "This received mail cannot be found.",
       "INBOUND_MAIL_HANDLED": "This received mail was already recorded or discarded.",
-      "EFFECTIVE_DATE_NOT_OPEN": "The effective date can only be corrected while it is still to come: this procedure has no effect pending."
+      "EFFECTIVE_DATE_NOT_OPEN": "The effective date can only be corrected while it is still to come: this procedure has no effect pending.",
+      "DIGEST_SETTING_INVALID": "This summary setting is not valid: check the rhythm, the day, the first send and the recipients (admins or managers of the community) (code: 2398)"
     }
   }
 }

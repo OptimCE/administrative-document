@@ -16,6 +16,8 @@
 --     so UNIQUE (source_event_id, procedure_code) becomes an index on the
 --     operation too. Every existing row has one change per (event, procedure),
 --     so the new index holds them all.
+--   * digest_setting: the summary email, per community. Off by default; an
+--     admin turns it on and picks the rhythm and the recipients.
 --
 -- Idempotent and forward-only. On a fresh install (schema.sql already has all
 -- of this) it changes nothing.
@@ -121,13 +123,53 @@ CREATE TRIGGER trg_inbound_mail_attachment_immutable
     BEFORE UPDATE OR DELETE ON inbound_mail_attachment
     FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
 
+-- ---- digest_setting: the summary email, per community (phase 4) ----------
+-- Off by default (no row, or `enabled` false). An admin turns it on, picks
+-- the rhythm and who receives it; the daily job sends it on the scheduled
+-- dates (engine/digest_schedule.py, worker/digest.py).
+--   cadence        1 working days (Monday to Friday), 2 weekly on `weekday`,
+--                  3 every two weeks on `weekday` from `first_on`,
+--                  4 monthly, on the month's first `weekday`
+--   weekday        ISO, 1 Monday … 7 Sunday; NULL for working days
+--   recipient_ids  CRM user ids (another database: no FK), admins or managers
+--                  of the community when saved, checked again when sent
+--   enabled_at     when the rhythm took effect (turned on, or changed): no
+--                  date whose run came before it is sent
+--   period_from    where the next summary's period starts: when turned on,
+--                  then the end of each run that handled a date
+--   last_due_on    the last scheduled date handled (sent, or nothing to tell)
+CREATE TABLE IF NOT EXISTS digest_setting (
+    id_community   INTEGER       PRIMARY KEY,
+    enabled        BOOLEAN       NOT NULL DEFAULT FALSE,
+    cadence        SMALLINT      NOT NULL,
+    weekday        SMALLINT,
+    first_on       DATE,
+    recipient_ids  INTEGER[]     NOT NULL DEFAULT '{}',
+    enabled_at     TIMESTAMPTZ,
+    period_from    TIMESTAMPTZ,
+    last_due_on    DATE,
+    updated_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_by     VARCHAR(255),
+    CONSTRAINT ck_digest_setting_cadence CHECK (COALESCE(cadence IN (1, 2, 3, 4), FALSE)),
+    CONSTRAINT ck_digest_setting_weekday CHECK (COALESCE(
+        CASE WHEN cadence = 1 THEN weekday IS NULL ELSE weekday BETWEEN 1 AND 7 END,
+        FALSE)),
+    CONSTRAINT ck_digest_setting_first_on CHECK (COALESCE(
+        CASE WHEN cadence = 3 THEN EXTRACT(ISODOW FROM first_on) = weekday
+             ELSE first_on IS NULL END,
+        FALSE)),
+    CONSTRAINT ck_digest_setting_enabled CHECK (
+        NOT enabled
+        OR (cardinality(recipient_ids) > 0 AND enabled_at IS NOT NULL AND period_from IS NOT NULL))
+);
+
 -- ---- change: one per event, procedure and operation ------------------------
 ALTER TABLE change DROP CONSTRAINT IF EXISTS uq_change_source;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_change_source_operation
     ON change (source_event_id, procedure_code, COALESCE(id_sharing_operation, 0));
 
 INSERT INTO schema_version (version, description)
-VALUES (6, 'Phase 4: reminder ladder, reception address')
+VALUES (6, 'Phase 4: reminder ladder, reception address, summary setting')
 ON CONFLICT DO NOTHING;
 
 COMMIT;

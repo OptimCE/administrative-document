@@ -105,16 +105,26 @@ bundles through `document-generation`. Read `README.md` for the domain.
   then the deadline pass and its in-app notifications CRM first (deadline rows
   only, no deferred check): one per rung of the reminder ladder J-14, J-7, J-2
   (`deadline.reminders_sent`, `DEADLINE_REMINDER_RUNGS`), one when missed. The
-  email is NOT per deadline: once every community is done, `worker/digest.py`
-  sends ONE `admin_digest.summary` per manager per day across communities
-  (criterion 4.1; `dedupe_key` = user + day; daily by default, weekly on
-  Mondays with preference mode 4, none with OFF). Its news (`digest.News`): the
-  deadline pass's rungs, missed and late; the procedures the effects pass put
-  in force (`in_force`); and the answers (`answer`), which the summary READS
-  when it is built, since most are recorded through the API: inbound
-  `correspondence` created, and mails attached to a procedure and not
-  qualified yet, from yesterday's tick (`DEADLINE_SWEEP_HOUR_LOCAL`, Brussels)
-  to the run. A procedure in force tells
+  email is NOT per deadline: it is the summary (`admin_digest.summary`), OFF
+  unless a community's admin turned it on (`digest_setting`, one row per
+  community; `api/admin/digest.py`, GET for managers, PUT for admins, 2398).
+  The admin picks the rhythm (`DigestCadence`: working days, weekly, every two
+  weeks from `first_on`, monthly first weekday) and the recipients, admins or
+  managers. Once every community is done, `worker/digest.py` handles each
+  community whose scheduled date has come since `last_due_on`
+  (`engine/digest_schedule.py`, pure, shared with the API's « Prochain envoi »;
+  no date whose run came before `enabled_at`, which moves when it is turned on
+  or its rhythm changes). Its period is `[period_from, now of the build)`, NOT
+  the run's `now`: what this run recorded (missed, late, in force) is stamped
+  after it. News READ from the database: `status_event` to IN_FORCE with
+  `reason: effect_date` or `manual: true` (not the baseline's), inbound
+  `correspondence` and attached mails to qualify, MISSED by `resolved_at`,
+  third parties late by `reminded_at`; plus overdue, and upcoming up to the
+  next summary (at least 14 days). Nothing to tell: skipped, the period still
+  moves on. Recipients still admin/manager, minus an `admin_digest` email OFF
+  in their profile. ONE email per recipient per day across the communities due
+  (criterion 4.1; `dedupe_key` = user + day); CRM committed first, then the
+  setting (a lost local commit re-sends the same message, deduped). A procedure in force tells
   its managers and the members whose meter it made active, an answer recorded
   tells the other managers (`shared/procedure_notifications.py`, in-app; used
   by the worker AND the API). A community's past-due deadline goes MISSED but stays

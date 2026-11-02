@@ -38,6 +38,19 @@ COLUMNS = {
         "id_correspondence",
     ),
     "inbound_mail_attachment": ("id_inbound_mail", "position", "content_sha256", "file_ref"),
+    "digest_setting": (
+        "id_community",
+        "enabled",
+        "cadence",
+        "weekday",
+        "first_on",
+        "recipient_ids",
+        "enabled_at",
+        "period_from",
+        "last_due_on",
+        "updated_at",
+        "updated_by",
+    ),
 }
 
 

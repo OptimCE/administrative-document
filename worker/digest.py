@@ -1,35 +1,39 @@
-"""One summary email per manager per day (spec, Notifications; criterion 4.1).
+"""The summary email, per community, when its admin turned it on (spec,
+Notifications; criterion 4.1).
 
 The deadline pass tells each rung of the reminder ladder in-app, one
 notification per deadline. Email would multiply that by every deadline and
-every community a manager follows; instead the daily job ends with ONE email
-per manager (``admin_digest.summary``), across every community they manage:
+every community a manager follows; instead a community's admin may turn on a
+summary (``digest_setting``, off by default), choose its rhythm (every working
+day, a weekday every week or every two weeks, or the month's first such
+weekday) and who receives it among the community's admins and managers.
 
-- what is new today: the rungs reached (J-14, J-7, J-2), the deadlines that
-  went missed, the third parties found late (the deadline pass), the
-  procedures the effects pass put in force, and the answers of the day;
-- what stays open: the community's overdue deadlines, the third parties late,
-  and the deadlines due within 14 days.
+The daily job ends here. A community is due when a scheduled date has come
+since the last one it handled (``engine/digest_schedule.py``); its part of
+the email tells:
 
-The answers are read here, when the summary is built, not told by the jobs: a
-manager records most of them through the API. They are the inbound
-correspondence created since yesterday's scheduled run
-(``DEADLINE_SWEEP_HOUR_LOCAL``, Brussels) up to this run, and the mails the
-reception address attached to a procedure in that time that nobody has
-qualified yet (one qualified is its correspondence). Windows that start at
-each tick lose nothing between two runs; a late run (a catch-up) tells what
-came since the tick, which the next morning may tell again.
+- what is new over its period, read from the database: the procedures put in
+  force (by the effects pass or by hand), the answers recorded and the mails
+  attached to a procedure to qualify, the deadlines that went missed and the
+  third parties found late;
+- what stays open: the overdue deadlines and the third parties late;
+- what is coming: the community's deadlines due before the next summary, and
+  at least the next 14 days.
 
-Each manager chooses (profile, notification preferences, ``admin_digest``):
-daily (the default: sent on a day with news), weekly (Mondays: everything open
-and the day's news) or none (``mode`` OFF, which ``publish`` honours anyway).
-The ``dedupe_key`` holds the user and the day, so a second run of the day, or
-a crash and a rerun, cannot send a second email: at most one per day, whatever
-the number of deadlines.
+The period runs from where the last one ended (or from when the summary was
+turned on) to the moment the summary is built: what this run recorded is in
+it. A community with nothing to tell is skipped; its period moves on all the
+same, since it held nothing.
+
+Each recipient gets ONE email (``admin_digest.summary``) with a part per
+community due that day, if they are still an admin or a manager of it and did
+not turn the summary off in their profile (``admin_digest`` email OFF). The
+``dedupe_key`` holds the user and the day, so a second run of the day, or a
+crash and a rerun, cannot send a second email.
 
 Labels come from each procedure's own catalogue version, in the four
 languages; the template of each locale picks its own. Nothing here commits:
-the caller owns the CRM transaction.
+the caller owns both transactions, the CRM's first.
 """
 
 from __future__ import annotations
@@ -37,7 +41,7 @@ from __future__ import annotations
 import datetime
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select, text
@@ -56,6 +60,7 @@ from core.notifications.repository import NotificationRepository
 from engine.baseline import brussels_today
 from engine.catalogue import ProcedureDefinition
 from engine.contracts import RegulatorPlugin
+from engine.digest_schedule import Schedule, due_on, next_on
 from engine.events import BRUSSELS
 from engine.jobs import FINISHED
 from ports.crm_core_sqlalchemy import SqlAlchemyCrmCoreRead
@@ -64,140 +69,149 @@ from shared.const import (
     DeadlineKind,
     DeadlineParty,
     DeadlineStatus,
+    DigestCadence,
     InboundMailStatus,
+    ProcedureStatus,
+    SubjectType,
 )
 from shared.models.local_models import (
     CorrespondenceModel,
     DeadlineModel,
+    DigestSettingModel,
     DossierModel,
     InboundMailModel,
     ProcedureDefinitionModel,
+    StatusEventModel,
 )
 
 logger = logging.getLogger(__name__)
 
-#: The preference prefix of the summary (``admin_digest.summary``).
+#: The preference prefix of the summary (``admin_digest.summary``): a
+#: recipient's email OFF there stops it for them.
 DIGEST_PREFIX = "admin_digest"
-#: ``notification_preference.mode`` for a weekly summary (crm-backend
-#: ``PreferenceMode.WEEKLY``); 3 is OFF, anything else daily.
-WEEKLY = 4
 _OFF = 3
-#: How far ahead the summary lists what is coming, in calendar days.
+#: How far ahead the summary lists what is coming, at least, in calendar days.
 HORIZON_DAYS = 14
-_MONDAY = 1
 _LANGUAGES = ("fr", "en", "nl", "de")
 
 
 @dataclass(frozen=True)
 class News:
-    """Something new for a community today. A deadline the day's pass told
-    (``deadline_id``: reminder, with its rung; missed; late), or a procedure
-    (``dossier_id``) that went in force (``in_force``, with its effect date)
-    or got an answer (``answer``, with its response type's code; None for a
+    """Something new for a procedure of the community: in force (with its
+    effect date), or an answer (with its response type's code; None for a
     mail attached to it and not qualified yet)."""
 
-    kind: str  # "reminder" | "missed" | "late" | "in_force" | "answer"
-    deadline_id: int | None = None
-    rung: int | None = None
-    dossier_id: int | None = None
+    kind: str  # "in_force" | "answer"
+    dossier_id: int
     effective_date: datetime.date | None = None
     response: str | None = None
 
 
-@dataclass
-class CommunityDay:
-    """One community's day, as the daily job leaves it for the summary."""
+@dataclass(frozen=True)
+class Period:
+    """What a community's summary covers: the news in [since, until), what is
+    due up to ``horizon``."""
 
-    id_community: int
-    plugin: RegulatorPlugin
-    news: list[News] = field(default_factory=list)
+    since: datetime.datetime
+    until: datetime.datetime
+    horizon: datetime.date
 
 
-def wants_summary(mode: int | None, *, today: datetime.date, has_news: bool) -> bool:
-    """Whether a manager gets a summary today, by their ``admin_digest`` email
-    preference: weekly on Mondays, none never, daily (the default) when the day
-    brought news."""
-    if mode == _OFF:
-        return False
-    if mode == WEEKLY:
-        return today.isoweekday() == _MONDAY
-    return has_news
+def schedule_of(setting: DigestSettingModel) -> Schedule:
+    return Schedule(
+        cadence=DigestCadence(setting.cadence),
+        weekday=setting.weekday,
+        first_on=setting.first_on,
+    )
+
+
+def horizon_of(schedule: Schedule, today: datetime.date) -> datetime.date:
+    """Up to the next summary, and at least ``HORIZON_DAYS`` ahead."""
+    floor = today + datetime.timedelta(days=HORIZON_DAYS)
+    following = next_on(schedule, today)
+    return max(floor, following) if following is not None else floor
 
 
 async def send_digests(
     local: AsyncSession,
     crm: AsyncSession,
     notify: NotificationService,
-    days: Sequence[CommunityDay],
+    communities: Mapping[int, RegulatorPlugin],
     *,
     now: datetime.datetime,
+    until: datetime.datetime | None = None,
 ) -> int:
-    """Publish the day's summaries on ``notify`` (the CRM session). Returns
-    how many were published; the caller commits, then flushes."""
-    if not days:
+    """Publish the summaries due today on ``notify`` (the CRM session), and
+    move each due community's setting on. Returns how many were published;
+    the caller commits, the CRM first, then flushes. ``until`` ends the
+    periods: the clock, unless a test holds it."""
+    if not communities:
         return 0
     today = brussels_today(now)
-    answers = await _answers(
-        local, [day.id_community for day in days], since=answers_since(today), until=now
-    )
-    by_id = {
-        day.id_community: replace(day, news=[*day.news, *answers.get(day.id_community, [])])
-        for day in days
-    }
-    repository = NotificationRepository(crm)
-    managers: dict[int, list[int]] = {}
-    for id_community in by_id:
-        for user_id in await repository.find_community_recipient_ids(
-            id_community, roles=MANAGER_ROLES
-        ):
-            managers.setdefault(user_id, []).append(id_community)
-    if not managers:
+    until = until or datetime.datetime.now(datetime.UTC)
+    due = await _due_settings(local, communities, today=today)
+    if not due:
         return 0
-    modes = {
-        user_id: mode
+    repository = NotificationRepository(crm)
+    names = await _community_names(crm, [setting.id_community for setting, _ in due])
+    recipients: dict[int, list[dict[str, Any]]] = {}
+    for setting, due_date in due:
+        id_community = setting.id_community
+        schedule = schedule_of(setting)
+        period = Period(
+            since=setting.period_from or setting.enabled_at or until,
+            until=until,
+            horizon=horizon_of(schedule, today),
+        )
+        # Handled, sent or not: the next period starts here.
+        setting.last_due_on = due_date
+        setting.period_from = until
+        section = await _section(
+            local,
+            crm,
+            id_community,
+            communities[id_community],
+            name=names.get(id_community),
+            period=period,
+            today=today,
+        )
+        if not (section["news"] or section["overdue"] or section["upcoming"]):
+            continue
+        current = set(
+            await repository.find_community_recipient_ids(id_community, roles=MANAGER_ROLES)
+        )
+        for user_id in setting.recipient_ids:
+            if user_id in current:
+                recipients.setdefault(user_id, []).append(section)
+    await local.flush()
+    if not recipients:
+        return 0
+    off = {
+        user_id
         for (user_id, channel), mode in (
-            await repository.find_preferences(list(managers), DIGEST_PREFIX)
+            await repository.find_preferences(list(recipients), DIGEST_PREFIX)
         ).items()
-        if channel == int(Channel.EMAIL)
+        if channel == int(Channel.EMAIL) and mode == _OFF
     }
-    names = await _community_names(crm, by_id)
-    sections: dict[int, dict[str, Any]] = {}
     sent = 0
-    for user_id in sorted(managers):
-        mode = modes.get(user_id)
-        if mode == _OFF:
+    for user_id in sorted(recipients):
+        if user_id in off:
             continue
-        weekly = mode == WEEKLY
-        communities = []
-        for id_community in sorted(managers[user_id], key=lambda c: (names.get(c, ""), c)):
-            day = by_id[id_community]
-            if not weekly and not day.news:
-                continue
-            if id_community not in sections:
-                sections[id_community] = await _section(
-                    local, crm, day, name=names.get(id_community), today=today
-                )
-            section = sections[id_community]
-            if section["news"] or section["overdue"] or section["upcoming"]:
-                communities.append(section)
-        has_news = any(section["news"] for section in communities)
-        if not communities or not wants_summary(mode, today=today, has_news=has_news):
-            continue
+        sections = sorted(recipients[user_id], key=lambda s: (s["name"] or "", s["id"]))
         await notify.publish(
             type=NotificationTypes.ADMIN_DIGEST_SUMMARY,
             target=UserTarget(user_id=user_id),
-            # INFORMATIONAL: the manager chose this email, and may stop it.
+            # INFORMATIONAL: the recipient may stop it in their profile.
             category=NotificationCategory.INFORMATIONAL,
             channels=(Channel.EMAIL,),
             data={
                 "as_of": today.isoformat(),
                 "as_of_display": _display(today),
-                "period": "weekly" if weekly else "daily",
                 "counts": {
-                    key: sum(len(section[key]) for section in communities)
+                    key: sum(len(section[key]) for section in sections)
                     for key in ("news", "overdue", "upcoming")
                 },
-                "communities": communities,
+                "communities": sections,
             },
             # One per user and day, whatever reruns the day.
             dedupe_key=f"{NotificationTypes.ADMIN_DIGEST_SUMMARY}:u{user_id}:{today.isoformat()}",
@@ -206,33 +220,49 @@ async def send_digests(
     return sent
 
 
-def answers_since(today: datetime.date) -> datetime.datetime:
-    """Where the day's answers start: yesterday's scheduled run."""
-    return datetime.datetime.combine(
-        today - datetime.timedelta(days=1),
-        datetime.time(settings.DEADLINE_SWEEP_HOUR_LOCAL),
-        BRUSSELS,
+async def _due_settings(
+    local: AsyncSession, communities: Iterable[int], *, today: datetime.date
+) -> list[tuple[DigestSettingModel, datetime.date]]:
+    """The settings turned on whose scheduled date has come, with that date."""
+    rows = await local.scalars(
+        select(DigestSettingModel)
+        .where(
+            DigestSettingModel.id_community.in_(list(communities)),
+            DigestSettingModel.enabled.is_(True),
+        )
+        .order_by(DigestSettingModel.id_community)
     )
+    due = []
+    for setting in rows:
+        if setting.enabled_at is None:
+            continue
+        on = due_on(
+            schedule_of(setting),
+            today,
+            since=setting.enabled_at,
+            last_due_on=setting.last_due_on,
+            hour=settings.DEADLINE_SWEEP_HOUR_LOCAL,
+        )
+        if on is not None:
+            due.append((setting, on))
+    return due
 
 
 async def _answers(
     local: AsyncSession,
-    communities: Sequence[int],
+    id_community: int,
     *,
     since: datetime.datetime,
     until: datetime.datetime,
-) -> dict[int, list[News]]:
-    """Each community's answers in [since, until): the inbound correspondence
+) -> list[News]:
+    """The community's answers in [since, until): the inbound correspondence
     recorded (by hand or from a mail), then the mails attached to a procedure
-    and still to qualify, each in the order it came."""
+    and still to qualify (one qualified is its correspondence), each in the
+    order it came."""
     recorded = await local.execute(
-        select(
-            CorrespondenceModel.id_community,
-            CorrespondenceModel.id_dossier,
-            CorrespondenceModel.type,
-        )
+        select(CorrespondenceModel.id_dossier, CorrespondenceModel.type)
         .where(
-            CorrespondenceModel.id_community.in_(communities),
+            CorrespondenceModel.id_community == id_community,
             CorrespondenceModel.direction == int(CorrespondenceDirection.INBOUND),
             CorrespondenceModel.created_at >= since,
             CorrespondenceModel.created_at < until,
@@ -241,10 +271,10 @@ async def _answers(
     )
     # Attached by the worker on reception, or by a manager (``handled_at``).
     attached_at = func.coalesce(InboundMailModel.handled_at, InboundMailModel.received_at)
-    received = await local.execute(
-        select(InboundMailModel.id_community, InboundMailModel.id_dossier)
+    received = await local.scalars(
+        select(InboundMailModel.id_dossier)
         .where(
-            InboundMailModel.id_community.in_(communities),
+            InboundMailModel.id_community == id_community,
             InboundMailModel.status == int(InboundMailStatus.ATTACHED),
             InboundMailModel.id_dossier.is_not(None),
             attached_at >= since,
@@ -252,14 +282,46 @@ async def _answers(
         )
         .order_by(attached_at, InboundMailModel.id)
     )
-    answers: dict[int, list[News]] = {}
-    for id_community, dossier_id, response in recorded.tuples():
-        answers.setdefault(int(id_community), []).append(
+    return [
+        *(
             News("answer", dossier_id=int(dossier_id), response=str(response))
+            for dossier_id, response in recorded.tuples()
+        ),
+        *(News("answer", dossier_id=int(dossier_id)) for dossier_id in received if dossier_id),
+    ]
+
+
+async def _in_force(
+    local: AsyncSession,
+    id_community: int,
+    *,
+    since: datetime.datetime,
+    until: datetime.datetime,
+) -> list[News]:
+    """The procedures put in force in [since, until), by the effects pass or
+    by hand, as the journal recorded them. Not the baseline, nor what its
+    confirmation recorded as already done: the starting state, no news."""
+    context = StatusEventModel.context_json
+    rows = await local.execute(
+        select(StatusEventModel.subject_id, DossierModel.effective_date)
+        .join(DossierModel, DossierModel.id == StatusEventModel.subject_id)
+        .where(
+            StatusEventModel.id_community == id_community,
+            StatusEventModel.subject_type == int(SubjectType.DOSSIER),
+            StatusEventModel.to_status == int(ProcedureStatus.IN_FORCE),
+            StatusEventModel.occurred_at >= since,
+            StatusEventModel.occurred_at < until,
+            or_(
+                context["reason"].as_string() == "effect_date",
+                context["manual"].as_boolean().is_(True),
+            ),
         )
-    for community, attached_to in received.tuples():
-        answers.setdefault(int(community), []).append(News("answer", dossier_id=attached_to))
-    return answers
+        .order_by(StatusEventModel.occurred_at, StatusEventModel.id)
+    )
+    return [
+        News("in_force", dossier_id=int(dossier_id), effective_date=effective)
+        for dossier_id, effective in rows.tuples()
+    ]
 
 
 async def _community_names(crm: AsyncSession, ids: Iterable[int]) -> dict[int, str]:
@@ -269,19 +331,24 @@ async def _community_names(crm: AsyncSession, ids: Iterable[int]) -> dict[int, s
     return {int(row.id): str(row.name) for row in rows}
 
 
+def _within(at: datetime.datetime | None, period: Period) -> bool:
+    return at is not None and period.since <= at < period.until
+
+
 async def _section(
     local: AsyncSession,
     crm: AsyncSession,
-    day: CommunityDay,
+    id_community: int,
+    plugin: RegulatorPlugin,
     *,
     name: str | None,
+    period: Period,
     today: datetime.date,
 ) -> dict[str, Any]:
     """One community's part of the summary: its news (the deadlines', then the
     procedures'), its overdue and its coming deadlines, each with its labels."""
-    horizon = today + datetime.timedelta(days=HORIZON_DAYS)
     community = int(DeadlineParty.COMMUNITY)
-    news_of = {n.deadline_id: n for n in day.news if n.deadline_id is not None}
+    open_, missed = int(DeadlineStatus.OPEN), int(DeadlineStatus.MISSED)
     rows = await local.execute(
         select(DeadlineModel, DossierModel, ProcedureDefinitionModel)
         .join(DossierModel, DossierModel.id == DeadlineModel.id_dossier)
@@ -290,54 +357,79 @@ async def _section(
             ProcedureDefinitionModel.id == DossierModel.id_procedure_definition,
         )
         .where(
-            DeadlineModel.id_community == day.id_community,
+            DeadlineModel.id_community == id_community,
             DeadlineModel.kind != int(DeadlineKind.EFFECT),
-            DossierModel.status.not_in(FINISHED),
             or_(
-                DeadlineModel.status == int(DeadlineStatus.MISSED),
                 and_(
-                    DeadlineModel.status == int(DeadlineStatus.OPEN),
-                    DeadlineModel.due_date <= horizon,
+                    DossierModel.status.not_in(FINISHED),
+                    or_(
+                        DeadlineModel.status == missed,
+                        and_(
+                            DeadlineModel.status == open_,
+                            DeadlineModel.due_date <= period.horizon,
+                        ),
+                    ),
                 ),
-                DeadlineModel.id.in_(list(news_of)),
+                and_(
+                    DeadlineModel.status == missed,
+                    DeadlineModel.resolved_at >= period.since,
+                    DeadlineModel.resolved_at < period.until,
+                ),
+                and_(
+                    func.coalesce(DeadlineModel.party, community) != community,
+                    DeadlineModel.reminded_at >= period.since,
+                    DeadlineModel.reminded_at < period.until,
+                ),
             ),
         )
         .order_by(DeadlineModel.due_date, DeadlineModel.id)
     )
     operations = {
         op.id: op.name
-        for op in await SqlAlchemyCrmCoreRead(crm).list_sharing_operations(day.id_community)
+        for op in await SqlAlchemyCrmCoreRead(crm).list_sharing_operations(id_community)
     }
     section: dict[str, Any] = {
-        "id": day.id_community,
+        "id": id_community,
         "name": name,
+        "since": period.since.isoformat(),
+        "since_display": _display(period.since.astimezone(BRUSSELS).date()),
+        "until": period.horizon.isoformat(),
+        "until_display": _display(period.horizon),
         "news": [],
         "overdue": [],
         "upcoming": [],
     }
     for deadline, dossier, definition_row in rows.tuples():
-        entry = day.plugin.catalogue().get(definition_row.code, definition_row.version)
+        entry = plugin.catalogue().get(definition_row.code, definition_row.version)
         definition = entry.definition if entry else None
         item = _item(deadline, dossier, definition, operations, today=today)
-        if (news := news_of.get(deadline.id)) is not None:
-            section["news"].append({**item, "news": news.kind, "rung": news.rung})
         ours = deadline.party in (None, community)
-        if deadline.status == int(DeadlineStatus.MISSED) or (
-            not ours and deadline.due_date < today
+        if deadline.status == missed and _within(deadline.resolved_at, period):
+            section["news"].append({**item, "news": "missed"})
+        elif not ours and _within(deadline.reminded_at, period):
+            section["news"].append({**item, "news": "late"})
+        if dossier.status in FINISHED:
+            continue
+        if deadline.status == missed or (
+            not ours and deadline.status == open_ and deadline.due_date < today
         ):
             section["overdue"].append(item)
-        elif ours and deadline.status == int(DeadlineStatus.OPEN) and deadline.due_date >= today:
+        elif ours and deadline.status == open_ and deadline.due_date >= today:
             section["upcoming"].append(item)
-    section["news"].extend(
-        await _procedure_news(
-            local, day, [n for n in day.news if n.dossier_id is not None], operations
-        )
-    )
+    news = [
+        *await _in_force(local, id_community, since=period.since, until=period.until),
+        *await _answers(local, id_community, since=period.since, until=period.until),
+    ]
+    section["news"].extend(await _procedure_news(local, id_community, plugin, news, operations))
     return section
 
 
 async def _procedure_news(
-    local: AsyncSession, day: CommunityDay, news: list[News], operations: Mapping[int, str]
+    local: AsyncSession,
+    id_community: int,
+    plugin: RegulatorPlugin,
+    news: Sequence[News],
+    operations: Mapping[int, str],
 ) -> list[dict[str, Any]]:
     """The procedures' news, in force first, then the answers, each with the
     labels of the procedure's own catalogue version. Finished or not: in force
@@ -351,7 +443,7 @@ async def _procedure_news(
             ProcedureDefinitionModel.id == DossierModel.id_procedure_definition,
         )
         .where(
-            DossierModel.id_community == day.id_community,
+            DossierModel.id_community == id_community,
             DossierModel.id.in_({n.dossier_id for n in news}),
         )
     )
@@ -361,7 +453,7 @@ async def _procedure_news(
         if n.dossier_id not in procedures:
             continue
         operation, definition_row = procedures[n.dossier_id]
-        entry = day.plugin.catalogue().get(definition_row.code, definition_row.version)
+        entry = plugin.catalogue().get(definition_row.code, definition_row.version)
         definition = entry.definition if entry else None
         response = (
             next((r for r in definition.response_types if r.code == n.response), None)

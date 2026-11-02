@@ -337,6 +337,47 @@ class InboundAddressOut(BaseModel):
     address: str | None = Field(default=None, description="The community's reception address")
 
 
+DigestCadenceName = Literal["working_days", "weekly", "biweekly", "monthly"]
+
+
+class DigestSettingIn(BaseModel):
+    """The summary email, as an admin saves it."""
+
+    enabled: bool
+    cadence: DigestCadenceName = Field(
+        description="working_days (Monday to Friday), weekly, biweekly or monthly (the "
+        "month's first such weekday)"
+    )
+    weekday: int | None = Field(
+        default=None, description="ISO weekday, 1 Monday … 7 Sunday; none for working_days"
+    )
+    first_on: datetime.date | None = Field(
+        default=None, description="biweekly: the first send, one of first_dates[weekday - 1]"
+    )
+    recipient_ids: list[int] = Field(
+        default_factory=list, description="CRM user ids, admins or managers of the community"
+    )
+
+
+class DigestSettingOut(BaseModel):
+    enabled: bool = Field(description="Off by default")
+    cadence: DigestCadenceName
+    weekday: int | None = None
+    first_on: datetime.date | None = None
+    recipient_ids: list[int]
+    opted_out: list[int] = Field(
+        description="The recipients who turned the summary off in their profile"
+    )
+    next_on: datetime.date | None = Field(
+        default=None, description="The next scheduled send while it is on"
+    )
+    first_dates: list[list[datetime.date]] = Field(
+        description="Per ISO weekday (index 0 Monday), the two first sends biweekly may start on"
+    )
+    updated_at: datetime.datetime | None = None
+    updated_by: str | None = None
+
+
 class InboundAttachmentOut(BaseModel):
     id: int
     filename: str

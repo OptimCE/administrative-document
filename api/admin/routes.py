@@ -15,7 +15,13 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from fastapi.responses import JSONResponse
 
-from api.admin.deps import get_admin_service, get_inbound_service, get_procedure_service
+from api.admin.deps import (
+    get_admin_service,
+    get_digest_settings_service,
+    get_inbound_service,
+    get_procedure_service,
+)
+from api.admin.digest import DigestSettingsService
 from api.admin.inbound import InboundService
 from api.admin.procedures import ProcedureService
 from api.admin.schemas import (
@@ -25,6 +31,8 @@ from api.admin.schemas import (
     ChangeSummaryOut,
     CorrespondenceProposalOut,
     DeadlineItemOut,
+    DigestSettingIn,
+    DigestSettingOut,
     EffectiveDateIn,
     EntrySheetOut,
     FinalizeOut,
@@ -551,6 +559,40 @@ async def rotate_inbound_address(service: InboundDep):
     from now on."""
     view = await service.rotate(_community(), actor=_actor())
     return ApiResponse(data=InboundAddressOut.model_validate(view))
+
+
+DigestDep = Annotated[DigestSettingsService, Depends(get_digest_settings_service)]
+
+
+@admin_routes.get("/digest-settings", response_model=ApiResponse[DigestSettingOut])
+@with_default_error(errors.admin.GET_PROCEDURES)
+async def get_digest_settings(service: DigestDep):
+    """The community's summary email: off by default; when on, its rhythm,
+    its recipients (and who of them stopped it in their profile) and the next
+    send."""
+    view = await service.get(_community())
+    return ApiResponse(data=DigestSettingOut.model_validate(view))
+
+
+@admin_routes.put(
+    "/digest-settings",
+    response_model=ApiResponse[DigestSettingOut],
+    dependencies=[Depends(require_min_role(Role.ADMIN))],
+)
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def put_digest_settings(body: DigestSettingIn, service: DigestDep):
+    """Turn the summary email on or off, set its rhythm and its recipients
+    (admins). 422 (2398) when the setting does not hold together."""
+    view = await service.save(
+        _community(),
+        enabled=body.enabled,
+        cadence=body.cadence,
+        weekday=body.weekday,
+        first_on=body.first_on,
+        recipient_ids=body.recipient_ids,
+        actor=_actor(),
+    )
+    return ApiResponse(data=DigestSettingOut.model_validate(view))
 
 
 @admin_routes.get("/inbound-mail", response_model=ApiResponse[list[InboundMailOut]])

@@ -10,6 +10,7 @@ ALL IMMEDIATE`` forces the check to happen where the test can observe it — thi
 is the standard way to test a deferred constraint.
 """
 
+import datetime
 import itertools
 
 import pytest
@@ -758,3 +759,61 @@ class TestConsumerIdempotency:
         await db_session.execute(insert)
         with pytest.raises(DBAPIError):
             await db_session.execute(insert)
+
+
+class TestDigestSetting:
+    """The summary email's setting (phase 4): its rhythm holds together, and
+    it cannot be on with nobody to send it to."""
+
+    _INSERT = text(
+        "INSERT INTO digest_setting (id_community, enabled, cadence, weekday, first_on, "
+        " recipient_ids, enabled_at, period_from) "
+        "VALUES (1, :enabled, :cadence, :weekday, :first_on, :recipients, :at, :at)"
+    )
+
+    async def _insert(self, session, **values) -> None:
+        # 2026-04-14 is a Tuesday (ISO 2).
+        row = {
+            "enabled": True,
+            "cadence": 2,
+            "weekday": 2,
+            "first_on": None,
+            "recipients": [7],
+            "at": "now",
+            **values,
+        }
+        if row["at"] is not None:
+            row["at"] = datetime.datetime.now(datetime.UTC)
+        await session.execute(self._INSERT, row)
+
+    @pytest.mark.parametrize(
+        "values",
+        [
+            {"cadence": 1, "weekday": None},  # working days
+            {"cadence": 2, "weekday": 2},
+            {"cadence": 3, "weekday": 2, "first_on": datetime.date(2026, 4, 14)},
+            {"cadence": 4, "weekday": 2},
+            {"enabled": False, "recipients": [], "at": None},  # off, never set
+        ],
+    )
+    async def test_a_coherent_setting_is_kept(self, db_session, values):
+        await self._insert(db_session, **values)
+
+    @pytest.mark.parametrize(
+        "values",
+        [
+            {"cadence": 5},
+            {"cadence": None},
+            {"cadence": 1, "weekday": 2},  # working days take no weekday
+            {"cadence": 2, "weekday": None},
+            {"cadence": 2, "weekday": 8},
+            {"cadence": 3, "weekday": 2, "first_on": None},
+            {"cadence": 3, "weekday": 2, "first_on": datetime.date(2026, 4, 15)},  # Wednesday
+            {"cadence": 2, "weekday": 2, "first_on": datetime.date(2026, 4, 14)},  # weekly
+            {"recipients": []},  # on, to nobody
+            {"at": None},  # on, with no period
+        ],
+    )
+    async def test_an_incoherent_setting_is_refused(self, db_session, values):
+        with pytest.raises(DBAPIError, match="ck_digest_setting|null value"):
+            await self._insert(db_session, **values)

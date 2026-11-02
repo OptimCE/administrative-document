@@ -196,12 +196,9 @@ class TestNotifications:
         assert notified[soon.id].type == "admin_deadline.due_soon"
         assert notified[late.id].type == "admin_deadline.missed"
         assert notified[late.id].data["party"] == "grd"
-        # In-app per deadline; the email is the day's ONE summary (criterion
-        # 4.1), linked to no in-app row.
-        emails = list(await world.session.scalars(select(OutboundMessageModel)))
-        assert [(m.type, m.id_notification) for m in emails] == [("admin_digest.summary", None)]
-        (section,) = emails[0].data["communities"]
-        assert sorted(n["news"] for n in section["news"]) == ["late", "missed", "reminder"]
+        # In-app per deadline, and no email: the summary is off until an
+        # admin turns it on (tests/test_digest.py).
+        assert list(await world.session.scalars(select(OutboundMessageModel))) == []
 
         await _run(world, APRIL_15 + datetime.timedelta(hours=2))
         assert len(await notifications_of(world.session)) == 3

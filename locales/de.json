@@ -60,7 +60,8 @@
       "INBOUND_DISABLED": "Die Empfangsadresse ist auf dieser Instanz nicht eingerichtet.",
       "INBOUND_MAIL_NOT_FOUND": "Diese empfangene E-Mail wurde nicht gefunden.",
       "INBOUND_MAIL_HANDLED": "Diese empfangene E-Mail wurde bereits erfasst oder verworfen.",
-      "EFFECTIVE_DATE_NOT_OPEN": "Das Datum des Inkrafttretens kann nur korrigiert werden, solange es noch bevorsteht: Für dieses Verfahren steht kein Inkrafttreten aus."
+      "EFFECTIVE_DATE_NOT_OPEN": "Das Datum des Inkrafttretens kann nur korrigiert werden, solange es noch bevorsteht: Für dieses Verfahren steht kein Inkrafttreten aus.",
+      "DIGEST_SETTING_INVALID": "Diese Einstellung der Zusammenfassung ist ungültig: Prüfen Sie den Rhythmus, den Tag, den ersten Versand und die Empfänger (Administratoren oder Verwalter der Gemeinschaft) (Code: 2398)"
     }
   }
 }
