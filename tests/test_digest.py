@@ -1,24 +1,48 @@
 """The summary email (``worker/digest.py``), through the real daily job.
 
 Criterion 4.1: a manager receives at most one email per day, even with ten
-deadlines close. Frozen dates; one Postgres serves as both sessions.
+deadlines close. A day's news is the deadline pass's, the procedures the
+effects pass put in force, and the answers recorded or received since
+yesterday's run (écart 6 of the phase-4 recap). Frozen dates; one Postgres
+serves as both sessions.
 """
 
 from __future__ import annotations
 
 import datetime
+import hashlib
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select, text
 
+from engine.events import BRUSSELS
 from engine.lifecycle import context_for, open_procedure
-from shared.const import DeadlineKind, DeadlineParty, DeadlineStatus, OpenedBy
+from shared.const import (
+    Channel,
+    CorrespondenceDirection,
+    Counterparty,
+    DeadlineKind,
+    DeadlineParty,
+    DeadlineStatus,
+    InboundMailStatus,
+    OpenedBy,
+)
 from shared.models.crm_notification_models import OutboundMessageModel
-from shared.models.local_models import DeadlineModel, DossierModel
+from shared.models.local_models import (
+    CorrespondenceModel,
+    DeadlineModel,
+    DossierModel,
+    InboundAddressModel,
+    InboundMailModel,
+)
+from tests.api.admin.test_effects_routes import EFFECTIVE
+from tests.api.admin.test_effects_routes import _day as cwape_day
+from tests.api.admin.test_effects_routes import _signed as signed_amendment
+from tests.api.admin.test_effects_routes import _world as cwape_world
 from tests.engine.world import World, make_world
 from tests.notifications import notifications_of, seed_roster
-from worker.digest import WEEKLY, wants_summary
+from worker.digest import WEEKLY, answers_since, wants_summary
 from worker.engine_jobs import run_daily_jobs
 
 pytestmark = pytest.mark.asyncio
@@ -27,6 +51,8 @@ UTC = datetime.UTC
 D = datetime.date
 WEDNESDAY = datetime.datetime(2026, 4, 15, 4, 0, tzinfo=UTC)  # 06:00 in Brussels
 MONDAY = datetime.datetime(2026, 4, 20, 4, 0, tzinfo=UTC)
+# Tuesday 15:00 in Brussels: after Tuesday's run, so Wednesday's news.
+TUESDAY_AFTERNOON = datetime.datetime(2026, 4, 14, 13, 0, tzinfo=UTC)
 DIGEST = "admin_digest.summary"
 
 
@@ -106,6 +132,66 @@ async def _summaries(world: World) -> list[OutboundMessageModel]:
 
 async def _recipients(world: World) -> list[str]:
     return sorted(m.recipient for m in await _summaries(world))
+
+
+async def _answer(
+    world: World,
+    dossier: DossierModel,
+    at: datetime.datetime,
+    *,
+    type_: str = "confirmation",
+    direction: CorrespondenceDirection = CorrespondenceDirection.INBOUND,
+) -> CorrespondenceModel:
+    """A message recorded on the procedure ``at``, as the API records one."""
+    row = CorrespondenceModel(
+        id_community=world.id_community,
+        id_dossier=dossier.id,
+        direction=int(direction),
+        counterparty=int(Counterparty.REGULATOR),
+        channel=int(Channel.EMAIL),
+        type=type_,
+        occurred_at=at,
+        recorded_by="anna",
+        context_json={},
+        created_at=at,
+    )
+    world.session.add(row)
+    await world.session.flush()
+    return row
+
+
+async def _mail(
+    world: World,
+    dossier: DossierModel | None,
+    at: datetime.datetime,
+    status: InboundMailStatus = InboundMailStatus.ATTACHED,
+    *,
+    correspondence: CorrespondenceModel | None = None,
+) -> None:
+    """A mail the reception address received ``at``."""
+    address = await world.session.scalar(
+        select(InboundAddressModel.id).where(InboundAddressModel.id_community == world.id_community)
+    )
+    if address is None:
+        row = InboundAddressModel(id_community=world.id_community, token=f"t{world.id_community}")
+        world.session.add(row)
+        await world.session.flush()
+        address = row.id
+    world.session.add(
+        InboundMailModel(
+            id_community=world.id_community,
+            id_inbound_address=address,
+            content_sha256=hashlib.sha256(f"{at}{status}".encode()).hexdigest(),
+            file_ref="s3://test/message.eml",
+            byte_size=1,
+            received_at=at,
+            status=int(status),
+            id_dossier=dossier.id if dossier else None,
+            id_correspondence=correspondence.id if correspondence else None,
+            handled_at=at if correspondence else None,
+        )
+    )
+    await world.session.flush()
 
 
 class TestCriterion41:
@@ -226,6 +312,167 @@ class TestTheContent:
         assert set(news["procedure"]) == {"fr", "en", "nl", "de"}
         assert all(news["procedure"].values())
         assert summary.data["as_of_display"] == "15/04/2026"
+
+
+class TestTheDaysOtherNews:
+    """Écart 6 of the phase-4 recap: a day whose only news is a procedure in
+    force, or an answer, sends its summary too, still one per manager."""
+
+    async def test_an_effect_applied_alone_sends_one_summary_per_manager(
+        self, client, db_session, fake_storage
+    ):
+        world = await cwape_world(db_session)
+        ids = await seed_roster(
+            db_session,
+            SimpleNamespace(id=world.id_community),
+            {"anna": "ADMIN", "bram": "MANAGER"},
+        )
+        dossier_id = await signed_amendment(client, db_session, world)
+
+        day = await cwape_day(world, EFFECTIVE)
+        await cwape_day(world, EFFECTIVE)  # the day again: no second email
+
+        assert day.effects_applied == 1
+        summaries = await _summaries(world)
+        assert sorted(m.recipient for m in summaries) == ["anna@example.be", "bram@example.be"]
+        anna = next(m for m in summaries if m.recipient == "anna@example.be")
+        assert anna.dedupe_key == f"{DIGEST}:u{ids['anna']}:{EFFECTIVE.isoformat()}"
+        (section,) = anna.data["communities"]
+        (news,) = section["news"]  # the effect, and nothing else that day
+        assert news == {
+            "dossier_id": dossier_id,
+            "path": f"/administrative-document/procedures/{dossier_id}",
+            "procedure": news["procedure"],
+            "operation": "Op Centre",
+            "news": "in_force",
+            "effective_date": EFFECTIVE.isoformat(),
+            "effective_display": EFFECTIVE.strftime("%d/%m/%Y"),
+            "response": None,
+        }
+        assert set(news["procedure"]) == {"fr", "en", "nl", "de"}
+        assert all(news["procedure"].values())
+
+    async def test_an_answer_recorded_alone_sends_one_summary_per_manager(self, db_session):
+        world = await make_world(db_session)
+        await seed_roster(
+            world.session,
+            SimpleNamespace(id=world.id_community),
+            {"anna": "ADMIN", "bram": "MANAGER", "member": "MEMBER"},
+        )
+        dossier = await _procedure(world)
+        await _answer(world, dossier, TUESDAY_AFTERNOON)
+
+        await _run(world, WEDNESDAY)
+        await _run(world, WEDNESDAY + datetime.timedelta(hours=3))  # sees it again
+
+        summaries = await _summaries(world)
+        assert sorted(m.recipient for m in summaries) == ["anna@example.be", "bram@example.be"]
+        (section,) = summaries[0].data["communities"]
+        (news,) = section["news"]
+        assert (news["news"], news["dossier_id"], news["effective_date"]) == (
+            "answer",
+            dossier.id,
+            None,
+        )
+        # The response type's labels, from the procedure's own catalogue version.
+        assert news["response"] == {
+            "fr": "Confirmation",
+            "en": "Confirmation",
+            "nl": "Bevestiging",
+            "de": "Bestätigung",
+        }
+        assert news["path"] == f"/administrative-document/procedures/{dossier.id}"
+        assert summaries[0].data["counts"]["news"] == 1
+
+    async def test_a_mail_attached_and_not_qualified_is_an_answer_too(self, db_session):
+        world = await make_world(db_session)
+        await seed_roster(world.session, SimpleNamespace(id=world.id_community), {"anna": "ADMIN"})
+        dossier = await _procedure(world)
+        await _mail(world, dossier, TUESDAY_AFTERNOON)
+
+        await _run(world, WEDNESDAY)
+
+        (summary,) = await _summaries(world)
+        (news,) = summary.data["communities"][0]["news"]
+        assert (news["news"], news["dossier_id"], news["response"]) == ("answer", dossier.id, None)
+
+    async def test_a_mail_qualified_counts_once_as_its_answer(self, db_session):
+        world = await make_world(db_session)
+        await seed_roster(world.session, SimpleNamespace(id=world.id_community), {"anna": "ADMIN"})
+        dossier = await _procedure(world)
+        recorded = await _answer(world, dossier, TUESDAY_AFTERNOON)
+        await _mail(
+            world, dossier, TUESDAY_AFTERNOON, InboundMailStatus.RECORDED, correspondence=recorded
+        )
+
+        await _run(world, WEDNESDAY)
+
+        (summary,) = await _summaries(world)
+        (news,) = summary.data["communities"][0]["news"]
+        assert news["response"] is not None
+
+    async def test_what_is_not_an_answer_of_the_day_sends_nothing(self, db_session):
+        world = await make_world(db_session)
+        await seed_roster(world.session, SimpleNamespace(id=world.id_community), {"anna": "ADMIN"})
+        dossier = await _procedure(world)
+        before_tuesdays_run = datetime.datetime(2026, 4, 14, 3, 30, tzinfo=UTC)  # 05:30
+        await _answer(world, dossier, before_tuesdays_run)  # Tuesday's news
+        await _answer(
+            world,
+            dossier,
+            TUESDAY_AFTERNOON,
+            type_="sent",
+            direction=CorrespondenceDirection.OUTBOUND,
+        )
+        await _mail(world, None, TUESDAY_AFTERNOON, InboundMailStatus.UNMATCHED)
+        await _mail(
+            world,
+            dossier,
+            TUESDAY_AFTERNOON + datetime.timedelta(minutes=1),
+            InboundMailStatus.DISCARDED,
+        )
+
+        await _run(world, WEDNESDAY)
+
+        assert await _summaries(world) == []
+
+    async def test_answers_and_deadlines_of_two_communities_make_one_email(self, db_session):
+        world = await make_world(db_session)
+        other = await make_world(db_session, plugin=world.plugin)
+        ids = await seed_roster(
+            world.session,
+            SimpleNamespace(id=world.id_community),
+            {"anna": "ADMIN", "bram": "MANAGER"},
+        )
+        await _also_manager(other, ids["bram"])
+        await _deadline(world, await _procedure(world), D(2026, 4, 20))  # J-7 rung
+        await _answer(other, await _procedure(other), TUESDAY_AFTERNOON)
+
+        await _run(world, WEDNESDAY)
+        await _run(world, WEDNESDAY + datetime.timedelta(hours=3))
+
+        summaries = await _summaries(world)
+        assert sorted(m.recipient for m in summaries) == ["anna@example.be", "bram@example.be"]
+        bram = next(m for m in summaries if m.recipient == "bram@example.be")
+        news = {c["id"]: [n["news"] for n in c["news"]] for c in bram.data["communities"]}
+        assert news == {world.id_community: ["reminder"], other.id_community: ["answer"]}
+        assert bram.data["counts"]["news"] == 2
+        anna = next(m for m in summaries if m.recipient == "anna@example.be")
+        assert [c["id"] for c in anna.data["communities"]] == [world.id_community]
+
+
+@pytest.mark.parametrize(
+    ("today", "expected"),
+    [
+        (D(2026, 4, 15), datetime.datetime(2026, 4, 14, 4, 0, tzinfo=UTC)),
+        # The day after the clocks went forward: still 06:00 in Brussels.
+        (D(2026, 3, 30), datetime.datetime(2026, 3, 29, 4, 0, tzinfo=UTC)),
+        (D(2026, 3, 29), datetime.datetime(2026, 3, 28, 5, 0, tzinfo=UTC)),
+    ],
+)
+def test_the_days_answers_start_at_yesterdays_run(today, expected):
+    assert answers_since(today) == expected
+    assert answers_since(today).astimezone(BRUSSELS).hour == 6
 
 
 @pytest.mark.parametrize(

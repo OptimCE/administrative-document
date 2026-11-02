@@ -6,9 +6,19 @@ every community a manager follows; instead the daily job ends with ONE email
 per manager (``admin_digest.summary``), across every community they manage:
 
 - what is new today: the rungs reached (J-14, J-7, J-2), the deadlines that
-  went missed, the third parties found late;
+  went missed, the third parties found late (the deadline pass), the
+  procedures the effects pass put in force, and the answers of the day;
 - what stays open: the community's overdue deadlines, the third parties late,
   and the deadlines due within 14 days.
+
+The answers are read here, when the summary is built, not told by the jobs: a
+manager records most of them through the API. They are the inbound
+correspondence created since yesterday's scheduled run
+(``DEADLINE_SWEEP_HOUR_LOCAL``, Brussels) up to this run, and the mails the
+reception address attached to a procedure in that time that nobody has
+qualified yet (one qualified is its correspondence). Windows that start at
+each tick lose nothing between two runs; a late run (a catch-up) tells what
+came since the tick, which the next morning may tell again.
 
 Each manager chooses (profile, notification preferences, ``admin_digest``):
 daily (the default: sent on a day with news), weekly (Mondays: everything open
@@ -27,12 +37,13 @@ from __future__ import annotations
 import datetime
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
-from sqlalchemy import and_, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.config import settings
 from core.notifications import (
     MANAGER_ROLES,
     Channel,
@@ -42,12 +53,26 @@ from core.notifications import (
     UserTarget,
 )
 from core.notifications.repository import NotificationRepository
+from engine.baseline import brussels_today
 from engine.catalogue import ProcedureDefinition
 from engine.contracts import RegulatorPlugin
+from engine.events import BRUSSELS
 from engine.jobs import FINISHED
 from ports.crm_core_sqlalchemy import SqlAlchemyCrmCoreRead
-from shared.const import DeadlineKind, DeadlineParty, DeadlineStatus
-from shared.models.local_models import DeadlineModel, DossierModel, ProcedureDefinitionModel
+from shared.const import (
+    CorrespondenceDirection,
+    DeadlineKind,
+    DeadlineParty,
+    DeadlineStatus,
+    InboundMailStatus,
+)
+from shared.models.local_models import (
+    CorrespondenceModel,
+    DeadlineModel,
+    DossierModel,
+    InboundMailModel,
+    ProcedureDefinitionModel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +90,18 @@ _LANGUAGES = ("fr", "en", "nl", "de")
 
 @dataclass(frozen=True)
 class News:
-    """Something the day's deadline pass told a community."""
+    """Something new for a community today. A deadline the day's pass told
+    (``deadline_id``: reminder, with its rung; missed; late), or a procedure
+    (``dossier_id``) that went in force (``in_force``, with its effect date)
+    or got an answer (``answer``, with its response type's code; None for a
+    mail attached to it and not qualified yet)."""
 
-    deadline_id: int
-    kind: str  # "reminder" | "missed" | "late"
+    kind: str  # "reminder" | "missed" | "late" | "in_force" | "answer"
+    deadline_id: int | None = None
     rung: int | None = None
+    dossier_id: int | None = None
+    effective_date: datetime.date | None = None
+    response: str | None = None
 
 
 @dataclass
@@ -98,13 +130,20 @@ async def send_digests(
     notify: NotificationService,
     days: Sequence[CommunityDay],
     *,
-    today: datetime.date,
+    now: datetime.datetime,
 ) -> int:
     """Publish the day's summaries on ``notify`` (the CRM session). Returns
     how many were published; the caller commits, then flushes."""
     if not days:
         return 0
-    by_id = {day.id_community: day for day in days}
+    today = brussels_today(now)
+    answers = await _answers(
+        local, [day.id_community for day in days], since=answers_since(today), until=now
+    )
+    by_id = {
+        day.id_community: replace(day, news=[*day.news, *answers.get(day.id_community, [])])
+        for day in days
+    }
     repository = NotificationRepository(crm)
     managers: dict[int, list[int]] = {}
     for id_community in by_id:
@@ -167,6 +206,62 @@ async def send_digests(
     return sent
 
 
+def answers_since(today: datetime.date) -> datetime.datetime:
+    """Where the day's answers start: yesterday's scheduled run."""
+    return datetime.datetime.combine(
+        today - datetime.timedelta(days=1),
+        datetime.time(settings.DEADLINE_SWEEP_HOUR_LOCAL),
+        BRUSSELS,
+    )
+
+
+async def _answers(
+    local: AsyncSession,
+    communities: Sequence[int],
+    *,
+    since: datetime.datetime,
+    until: datetime.datetime,
+) -> dict[int, list[News]]:
+    """Each community's answers in [since, until): the inbound correspondence
+    recorded (by hand or from a mail), then the mails attached to a procedure
+    and still to qualify, each in the order it came."""
+    recorded = await local.execute(
+        select(
+            CorrespondenceModel.id_community,
+            CorrespondenceModel.id_dossier,
+            CorrespondenceModel.type,
+        )
+        .where(
+            CorrespondenceModel.id_community.in_(communities),
+            CorrespondenceModel.direction == int(CorrespondenceDirection.INBOUND),
+            CorrespondenceModel.created_at >= since,
+            CorrespondenceModel.created_at < until,
+        )
+        .order_by(CorrespondenceModel.created_at, CorrespondenceModel.id)
+    )
+    # Attached by the worker on reception, or by a manager (``handled_at``).
+    attached_at = func.coalesce(InboundMailModel.handled_at, InboundMailModel.received_at)
+    received = await local.execute(
+        select(InboundMailModel.id_community, InboundMailModel.id_dossier)
+        .where(
+            InboundMailModel.id_community.in_(communities),
+            InboundMailModel.status == int(InboundMailStatus.ATTACHED),
+            InboundMailModel.id_dossier.is_not(None),
+            attached_at >= since,
+            attached_at < until,
+        )
+        .order_by(attached_at, InboundMailModel.id)
+    )
+    answers: dict[int, list[News]] = {}
+    for id_community, dossier_id, response in recorded.tuples():
+        answers.setdefault(int(id_community), []).append(
+            News("answer", dossier_id=int(dossier_id), response=str(response))
+        )
+    for community, attached_to in received.tuples():
+        answers.setdefault(int(community), []).append(News("answer", dossier_id=attached_to))
+    return answers
+
+
 async def _community_names(crm: AsyncSession, ids: Iterable[int]) -> dict[int, str]:
     rows = await crm.execute(
         text("SELECT id, name FROM community WHERE id = ANY(:ids)"), {"ids": list(ids)}
@@ -182,10 +277,11 @@ async def _section(
     name: str | None,
     today: datetime.date,
 ) -> dict[str, Any]:
-    """One community's part of the summary: its news, its overdue and its
-    coming deadlines, each with its labels."""
+    """One community's part of the summary: its news (the deadlines', then the
+    procedures'), its overdue and its coming deadlines, each with its labels."""
     horizon = today + datetime.timedelta(days=HORIZON_DAYS)
     community = int(DeadlineParty.COMMUNITY)
+    news_of = {n.deadline_id: n for n in day.news if n.deadline_id is not None}
     rows = await local.execute(
         select(DeadlineModel, DossierModel, ProcedureDefinitionModel)
         .join(DossierModel, DossierModel.id == DeadlineModel.id_dossier)
@@ -203,7 +299,7 @@ async def _section(
                     DeadlineModel.status == int(DeadlineStatus.OPEN),
                     DeadlineModel.due_date <= horizon,
                 ),
-                DeadlineModel.id.in_([n.deadline_id for n in day.news]),
+                DeadlineModel.id.in_(list(news_of)),
             ),
         )
         .order_by(DeadlineModel.due_date, DeadlineModel.id)
@@ -212,7 +308,6 @@ async def _section(
         op.id: op.name
         for op in await SqlAlchemyCrmCoreRead(crm).list_sharing_operations(day.id_community)
     }
-    news_of = {n.deadline_id: n for n in day.news}
     section: dict[str, Any] = {
         "id": day.id_community,
         "name": name,
@@ -233,7 +328,65 @@ async def _section(
             section["overdue"].append(item)
         elif ours and deadline.status == int(DeadlineStatus.OPEN) and deadline.due_date >= today:
             section["upcoming"].append(item)
+    section["news"].extend(
+        await _procedure_news(
+            local, day, [n for n in day.news if n.dossier_id is not None], operations
+        )
+    )
     return section
+
+
+async def _procedure_news(
+    local: AsyncSession, day: CommunityDay, news: list[News], operations: Mapping[int, str]
+) -> list[dict[str, Any]]:
+    """The procedures' news, in force first, then the answers, each with the
+    labels of the procedure's own catalogue version. Finished or not: in force
+    is finished."""
+    if not news:
+        return []
+    rows = await local.execute(
+        select(DossierModel.id, DossierModel.id_sharing_operation, ProcedureDefinitionModel)
+        .join(
+            ProcedureDefinitionModel,
+            ProcedureDefinitionModel.id == DossierModel.id_procedure_definition,
+        )
+        .where(
+            DossierModel.id_community == day.id_community,
+            DossierModel.id.in_({n.dossier_id for n in news}),
+        )
+    )
+    procedures = {int(i): (operation, row) for i, operation, row in rows.tuples()}
+    items = []
+    for n in sorted(news, key=lambda n: n.kind != "in_force"):
+        if n.dossier_id not in procedures:
+            continue
+        operation, definition_row = procedures[n.dossier_id]
+        entry = day.plugin.catalogue().get(definition_row.code, definition_row.version)
+        definition = entry.definition if entry else None
+        response = (
+            next((r for r in definition.response_types if r.code == n.response), None)
+            if definition is not None and n.response is not None
+            else None
+        )
+        items.append(
+            {
+                "dossier_id": n.dossier_id,
+                "path": f"/administrative-document/procedures/{n.dossier_id}",
+                "procedure": _labels(
+                    definition.labels if definition else None, definition_row.code
+                ),
+                "operation": operations.get(operation or 0),
+                "news": n.kind,
+                "effective_date": n.effective_date.isoformat() if n.effective_date else None,
+                "effective_display": _display(n.effective_date) if n.effective_date else None,
+                "response": (
+                    _labels(response.labels if response else None, n.response)
+                    if n.response is not None
+                    else None
+                ),
+            }
+        )
+    return items
 
 
 def _labels(labels: Mapping[str, str] | None, fallback: str) -> dict[str, str]:

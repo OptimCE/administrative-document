@@ -108,7 +108,13 @@ bundles through `document-generation`. Read `README.md` for the domain.
   email is NOT per deadline: once every community is done, `worker/digest.py`
   sends ONE `admin_digest.summary` per manager per day across communities
   (criterion 4.1; `dedupe_key` = user + day; daily by default, weekly on
-  Mondays with preference mode 4, none with OFF). A procedure in force tells
+  Mondays with preference mode 4, none with OFF). Its news (`digest.News`): the
+  deadline pass's rungs, missed and late; the procedures the effects pass put
+  in force (`in_force`); and the answers (`answer`), which the summary READS
+  when it is built, since most are recorded through the API: inbound
+  `correspondence` created, and mails attached to a procedure and not
+  qualified yet, from yesterday's tick (`DEADLINE_SWEEP_HOUR_LOCAL`, Brussels)
+  to the run. A procedure in force tells
   its managers and the members whose meter it made active, an answer recorded
   tells the other managers (`shared/procedure_notifications.py`, in-app; used
   by the worker AND the API). A community's past-due deadline goes MISSED but stays

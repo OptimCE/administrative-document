@@ -9,7 +9,9 @@
 
 The worker (the effect job) and the API (a step by hand, an answer) both send
 them, so they live here and not in ``api/``, which the worker image does not
-ship. Each function stages on the caller's ``NotificationService``: the caller
+ship. The day's summary email tells the effects pass's procedures in force and
+the answers too (``worker/digest.py``), from its own reads: nothing here feeds
+it. Each function stages on the caller's ``NotificationService``: the caller
 commits the CRM session, then calls ``flush_realtime``. Reads use plain
 columns, never ORM objects a commit may have expired.
 """

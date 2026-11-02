@@ -31,7 +31,10 @@ that community's day (the next run retries; every step is idempotent):
    what differs, so a quiet day writes nothing.
 
 Then, once every community is done, the summary email (``worker/digest.py``):
-at most one per manager per day, across communities (criterion 4.1).
+at most one per manager per day, across communities (criterion 4.1). Its news
+is what steps 3 and 4 told (the rungs, the deadlines missed, the third parties
+late, the procedures put in force) and the day's answers, which it reads
+itself: most are recorded through the API.
 
 Realtime hints go out after the commits.
 
@@ -161,7 +164,7 @@ async def run_daily_jobs(
                 await local.rollback()
                 await crm.rollback()
                 report.failed += 1
-        report.digests = await _digests(local, crm, days, today=brussels_today(now))
+        report.digests = await _digests(local, crm, days, now=now)
         logger.info(
             "daily jobs: %s",
             report,
@@ -219,9 +222,12 @@ async def _run_for(
         id_community=id_community,
         plugin=plugin,
         news=[
-            *(News(d.id, "missed") for d in chase.missed),
-            *(News(d.id, "reminder", chase.rungs.get(d.id)) for d in chase.reminded),
-            *(News(d.id, "late") for d in chase.late_answers),
+            *(News("missed", deadline_id=d.id) for d in chase.missed),
+            *(
+                News("reminder", deadline_id=d.id, rung=chase.rungs.get(d.id))
+                for d in chase.reminded
+            ),
+            *(News("late", deadline_id=d.id) for d in chase.late_answers),
         ],
     )
     await crm.commit()
@@ -265,6 +271,7 @@ async def _run_for(
         else:
             report.effects_applied += 1
             applied.append(procedure_id)
+            day.news.append(News("in_force", dossier_id=procedure_id, effective_date=effective))
             await _told_in_force(local, crm, procedure_id, effective)
 
     # 5. The reconciliation of the badges, procedure by procedure.
@@ -303,13 +310,13 @@ async def _told_in_force(
 
 
 async def _digests(
-    local: AsyncSession, crm: AsyncSession, days: list[CommunityDay], *, today: datetime.date
+    local: AsyncSession, crm: AsyncSession, days: list[CommunityDay], *, now: datetime.datetime
 ) -> int:
     """The summary emails, once every community is done. A failure costs the
     emails of the day only (the in-app notices are already out)."""
     notify = NotificationService(crm)
     try:
-        sent = await send_digests(local, crm, notify, days, today=today)
+        sent = await send_digests(local, crm, notify, days, now=now)
         await crm.commit()
         await local.commit()  # its reads
     except Exception:
