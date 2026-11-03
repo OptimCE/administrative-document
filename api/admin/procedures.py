@@ -41,6 +41,7 @@ from core.audit_log import AuditActions, AuditLogInput, AuditLogService
 from core.config import settings
 from core.errors.errors import ErrorException
 from core.notifications import NotificationService
+from core.queue.helper import Event
 from core.realtime import CommunityAudience, Tier, emit
 from core.storage import build_s3_uri, download, parse_s3_uri, upload
 from domain.regions import region_for_regulator
@@ -77,12 +78,24 @@ from engine.lifecycle import (
     start_rules,
     supply_piece,
 )
+from engine.signatures import (
+    idempotency_key,
+    latest_by_piece,
+    live_request,
+    next_attempt,
+    request_payload,
+    signable,
+)
 from engine.templates import template_in_force
 from ports.core_effects import CoreEffectsPort, EffectConflictError
 from ports.crm_core_sqlalchemy import SqlAlchemyCrmCoreRead
 from ports.crm_engine import EngineCrmRead, Episode
+from ports.events import EventPublisher
 from shared.const import (
+    LIVE_SIGNATURE_STATUSES,
+    SIGNATURE_FEATURE,
     STORAGE_KEY_PREFIX,
+    SUBJECT_SIGNATURE_REQUEST,
     UPLOAD_MAX_BODY_BYTES,
     ChangeStatus,
     ChangeSubjectType,
@@ -95,6 +108,7 @@ from shared.const import (
     DocumentKind,
     InboundMailStatus,
     OpenedBy,
+    PieceSignatureStatus,
     ProcedureDocumentStatus,
     ProcedureStatus,
     SubjectType,
@@ -111,6 +125,7 @@ from shared.models.local_models import (
     DocumentVersionModel,
     DossierModel,
     InboundMailModel,
+    PieceSignatureModel,
     ProcedureDefinitionModel,
     StatusEventModel,
     VersionCheckModel,
@@ -172,6 +187,10 @@ def deterministic_zip(files: Sequence[tuple[str, bytes, str]]) -> bytes:
             info.external_attr = 0o644 << 16
             archive.writestr(info, content)
     return buffer.getvalue()
+
+
+# The signer's role on the stamp, in the request's language.
+_PARTICIPANT = {"fr": "Participant", "en": "Participant", "nl": "Deelnemer", "de": "Teilnehmer"}
 
 
 def _not_found(error=errors.admin.PROCEDURE_NOT_FOUND) -> ErrorException:
@@ -777,7 +796,41 @@ class ProcedureService:
             facts.member_names = await SqlAlchemyCrmCoreRead(self._crm).member_names(
                 dossier.id_community, members
             )
+        await self._signature_facts(dossier, pieces, facts)
         return facts
+
+    async def _signature_facts(
+        self, dossier: DossierModel, pieces: Sequence[DocumentModel], facts: views.PieceFacts
+    ) -> None:
+        """Each piece's latest signature request, and which ones a manager may ask now."""
+        facts.signatures = await latest_by_piece(self._local, [p.id for p in pieces])
+        plugin = plugin_for(self._registry, dossier.regulator)
+        if plugin is None:
+            return
+        candidates = [
+            p
+            for p in pieces
+            if signable(
+                dossier,
+                p,
+                facts.current.get(p.id),
+                plugin.signature_layout(p.requirement_code or ""),
+            )
+            and (
+                p.id not in facts.signatures
+                or facts.signatures[p.id].status not in (int(s) for s in LIVE_SIGNATURE_STATUSES)
+            )
+        ]
+        if not candidates:
+            return
+        crm = SqlAlchemyCrmCoreRead(self._crm)
+        if not await crm.feature_active(dossier.id_community, SIGNATURE_FEATURE):
+            return
+        with_account = await crm.members_with_account(
+            dossier.id_community, sorted({p.id_member for p in candidates if p.id_member})
+        )
+        for piece in candidates:
+            facts.signature_requestable[piece.id] = piece.id_member in with_account
 
     async def entry_sheets(self, id_community: int, dossier_id: int) -> list[dict[str, Any]]:
         """The fiches de saisie of the procedure's form pieces, filled from each
@@ -1461,6 +1514,91 @@ class ProcedureService:
         return await self._supply_bytes(
             dossier, ctx, piece, content, file.content_type, file.filename, actor=actor
         )
+
+    async def request_signature(
+        self,
+        id_community: int,
+        dossier_id: int,
+        document_id: int,
+        *,
+        actor: str,
+        locale: str,
+        publisher: EventPublisher,
+    ) -> dict[str, Any]:
+        """Ask the signature annexe for the participant's signature of a piece.
+
+        The row is committed BEFORE the publish, and marked failed if the broker
+        refuses it: published first, a lost commit would leave the participant
+        invited to sign a request this annexe never hears about.
+        """
+        dossier, plugin, ctx = await self._load(id_community, dossier_id)
+        piece = await self._local.scalar(
+            select(DocumentModel).where(
+                DocumentModel.id == document_id,
+                DocumentModel.id_dossier == dossier.id,
+                DocumentModel.requirement_code.is_not(None),
+            )
+        )
+        if piece is None:
+            raise _not_found(errors.admin.PIECE_NOT_FOUND)
+        version = (
+            await self._local.get(DocumentVersionModel, piece.current_version_id)
+            if piece.current_version_id is not None
+            else None
+        )
+        layout = plugin.signature_layout(piece.requirement_code or "")
+        if layout is None or version is None or not signable(dossier, piece, version, layout):
+            raise _conflict(errors.admin.SIGNATURE_NOT_APPLICABLE)
+        crm = SqlAlchemyCrmCoreRead(self._crm)
+        if not await crm.feature_active(id_community, SIGNATURE_FEATURE):
+            raise _conflict(errors.admin.SIGNATURE_MODULE_OFF)
+        member = int(piece.id_member or 0)
+        if member not in await crm.members_with_account(id_community, [member]):
+            raise _conflict(errors.admin.SIGNATURE_NO_ACCOUNT)
+        if await live_request(self._local, piece) is not None:
+            raise _conflict(errors.admin.SIGNATURE_ALREADY_REQUESTED)
+        language = (locale or "fr")[:2].lower()
+        docs = {d.code: d for d in ctx.definition.documents}
+        labels = docs[piece.requirement_code].labels if piece.requirement_code in docs else {}
+        label = (labels or {}).get(language) or (labels or {}).get("fr") or piece.requirement_code
+        name = (await crm.member_names(id_community, [member])).get(member)
+        key = idempotency_key(piece, version, await next_attempt(self._local, piece, version))
+        payload = request_payload(
+            dossier=dossier,
+            piece=piece,
+            version=version,
+            layout=layout,
+            key=key,
+            title=f"{label} — {name}" if name else str(label),
+            locale=language,
+            requested_by=actor,
+            role_label=_PARTICIPANT.get(language, _PARTICIPANT["fr"]),
+        )
+        row = PieceSignatureModel(
+            id_community=id_community,
+            id_document=piece.id,
+            id_version=version.id,
+            idempotency_key=key,
+            status=int(PieceSignatureStatus.REQUESTED),
+            requested_by=actor,
+        )
+        self._local.add(row)
+        try:
+            await self._local.commit()
+        except IntegrityError:
+            await self._local.rollback()
+            raise _conflict(errors.admin.SIGNATURE_ALREADY_REQUESTED) from None
+        try:
+            await publisher.publish(
+                SUBJECT_SIGNATURE_REQUEST, Event(type=SUBJECT_SIGNATURE_REQUEST, data=payload)
+            )
+        except Exception as exc:
+            row.status = int(PieceSignatureStatus.FAILED)
+            row.reason = "the broker did not take the request"
+            await self._local.commit()
+            raise ErrorException(errors.admin.SIGNATURE_UNAVAILABLE, status_code=503) from exc
+        await self._after(id_community, [dossier.id])
+        return {"status": "requested", "idempotency_key": key}
 
     async def piece_from_inbound(
         self,

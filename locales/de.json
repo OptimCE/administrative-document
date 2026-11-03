@@ -61,7 +61,12 @@
       "INBOUND_MAIL_NOT_FOUND": "Diese empfangene E-Mail wurde nicht gefunden.",
       "INBOUND_MAIL_HANDLED": "Diese empfangene E-Mail wurde bereits erfasst oder verworfen.",
       "EFFECTIVE_DATE_NOT_OPEN": "Das Datum des Inkrafttretens kann nur korrigiert werden, solange es noch bevorsteht: Für dieses Verfahren steht kein Inkrafttreten aus.",
-      "DIGEST_SETTING_INVALID": "Diese Einstellung der Zusammenfassung ist ungültig: Prüfen Sie den Rhythmus, den Tag, den ersten Versand und die Empfänger (Administratoren oder Verwalter der Gemeinschaft) (Code: 2398)"
+      "DIGEST_SETTING_INVALID": "Diese Einstellung der Zusammenfassung ist ungültig: Prüfen Sie den Rhythmus, den Tag, den ersten Versand und die Empfänger (Administratoren oder Verwalter der Gemeinschaft) (Code: 2398)",
+      "SIGNATURE_MODULE_OFF": "Die elektronische Signatur ist für diese Gemeinschaft nicht aktiviert (code: 2600)",
+      "SIGNATURE_NOT_APPLICABLE": "Dieses Dokument kann jetzt nicht elektronisch unterzeichnet werden (code: 2601)",
+      "SIGNATURE_NO_ACCOUNT": "Dieser Teilnehmer hat kein OptimCE-Konto und kann daher nicht in der Anwendung unterzeichnen (code: 2602)",
+      "SIGNATURE_ALREADY_REQUESTED": "Eine Unterschrift dieses Dokuments wurde bereits angefordert (code: 2603)",
+      "SIGNATURE_UNAVAILABLE": "Der Signaturdienst ist vorübergehend nicht verfügbar (code: 2604)"
     }
   }
 }

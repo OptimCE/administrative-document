@@ -61,7 +61,12 @@
       "INBOUND_MAIL_NOT_FOUND": "Ce courrier reçu est introuvable.",
       "INBOUND_MAIL_HANDLED": "Ce courrier reçu a déjà été enregistré ou écarté.",
       "EFFECTIVE_DATE_NOT_OPEN": "La date d'effet ne se corrige que tant qu'elle est à venir : cette démarche n'a pas de prise d'effet en attente.",
-      "DIGEST_SETTING_INVALID": "Ce réglage du récapitulatif n'est pas valable : vérifiez le rythme, le jour, le premier envoi et les destinataires (administrateurs ou gestionnaires de la communauté) (code : 2398)"
+      "DIGEST_SETTING_INVALID": "Ce réglage du récapitulatif n'est pas valable : vérifiez le rythme, le jour, le premier envoi et les destinataires (administrateurs ou gestionnaires de la communauté) (code : 2398)",
+      "SIGNATURE_MODULE_OFF": "La signature électronique n'est pas activée pour cette communauté (code: 2600)",
+      "SIGNATURE_NOT_APPLICABLE": "Cette pièce ne peut pas être signée électroniquement maintenant (code: 2601)",
+      "SIGNATURE_NO_ACCOUNT": "Ce participant n'a pas de compte OptimCE : il ne peut pas signer dans l'application (code: 2602)",
+      "SIGNATURE_ALREADY_REQUESTED": "Une signature de cette pièce est déjà demandée (code: 2603)",
+      "SIGNATURE_UNAVAILABLE": "Le service de signature est momentanément indisponible (code: 2604)"
     }
   }
 }

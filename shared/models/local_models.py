@@ -834,3 +834,38 @@ class WorkingCalendarModel(LocalBase):
     region: Mapped[str] = mapped_column(String(8), primary_key=True)
     day: Mapped[datetime.date] = mapped_column(Date, primary_key=True)
     label: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
+class PieceSignatureModel(LocalBase):
+    """A per-member collected piece sent to the signature annexe (2026-11-03).
+
+    ``status`` is ``PieceSignatureStatus``; it follows the service's events. A
+    working state: the evidence lives in the signature service.
+    """
+
+    __tablename__ = "piece_signature"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id_community: Mapped[int] = mapped_column(Integer, nullable=False)
+    id_document: Mapped[int] = mapped_column(Integer, ForeignKey("document.id"), nullable=False)
+    id_version: Mapped[int] = mapped_column(
+        Integer, ForeignKey("document_version.id"), nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    request_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    status: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    id_signed_version: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("document_version.id"), nullable=True
+    )
+    final_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    final_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evidence_pdf_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_json_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    requested_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )

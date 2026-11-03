@@ -252,6 +252,32 @@ bundles through `document-generation`. Read `README.md` for the domain.
   community-wide lists keep the active ones. `representative_name` comes from
   the CRM's representative where the form has the field.
 
+## Signing a piece in the app (signature annexe, 2026-11-03)
+- A per-member COLLECTED piece whose current version is TO_SIGN can be signed
+  in the app when its plugin says where (`RegulatorPlugin.signature_layout(code)`
+  -> `SignatureLayout`: the PDF's own signature field and the form fields the
+  signer fills; CWaPE: annexe 8, `Champ de signature 1`, « Fait à » 21
+  required, « le » 22). The fake plugin has `member_declaration`.
+- `POST /admin/dossiers/{id}/documents/{doc}/signature-request` (manager, 202)
+  needs the community's `signature` module (2600), a signable piece (2601), an
+  account linked to the member (2602) and no live request (2603). It commits a
+  `piece_signature` row (status REQUESTED), THEN publishes
+  `signature.request.create`; a broker that refuses turns the row FAILED and
+  answers 503 (2604), so the piece stays askable. Idempotency key
+  `admin-doc-{piece}-v{n}-{attempt}`: a declined or expired request is followed
+  by a new attempt, never a reused key.
+- `worker/signature_events.py` binds the durable
+  `worker-administrative-document-signature` to the signature service's
+  `SIGNATURE_EVENTS` (`signature.event.administrative_document.>`, declared by
+  that service, never here). Events are correlated by OUR idempotency key only.
+  `completed` downloads the sealed PDF, checks its sha256, stores it under our
+  own content-addressed key as a FINAL version (`generated_by = "signature"`)
+  and runs `supply_piece` with SIGNED, as an upload would; on a procedure
+  already sent it only records the request signed (`signed_after_sending`).
+  The evidence stays with the signature service (`evidence_*_key` on the row).
+- `piece_signature` (migration 0006, unreleased) is a working state, not
+  evidence: one live row per piece (`uq_piece_signature_live`).
+
 ## Two DB-enforced invariants
 - **The journal writes the status.** `status_event` is append-only, and
   appending a row COPIES its `(to_status, to_step)` onto the subject

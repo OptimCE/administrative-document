@@ -18,6 +18,8 @@
 --     so the new index holds them all.
 --   * digest_setting: the summary email, per community. Off by default; an
 --     admin turns it on and picks the rhythm and the recipients.
+--   * piece_signature: a collected piece signed in the app through the
+--     signature annexe (2026-11-03).
 --
 -- Idempotent and forward-only. On a fresh install (schema.sql already has all
 -- of this) it changes nothing.
@@ -167,6 +169,47 @@ CREATE TABLE IF NOT EXISTS digest_setting (
 ALTER TABLE change DROP CONSTRAINT IF EXISTS uq_change_source;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_change_source_operation
     ON change (source_event_id, procedure_code, COALESCE(id_sharing_operation, 0));
+
+-- ---- piece_signature: a collected piece signed in the app (2026-11-03) ---
+-- One row per request this annexe made to the signature service for a
+-- per-member collected piece (annexe 8). Its status follows the service's
+-- events (signature.event.administrative_document.*); the evidence itself (the
+-- event log, the sealed report) lives in the signature service. A working
+-- state, not evidence: it changes. A new request for the same piece is a new
+-- row (a new idempotency key); one live at a time.
+--   status  1 requested (published, not yet accepted), 2 open, 3 signed,
+--           4 declined, 5 expired, 6 cancelled, 7 failed
+CREATE TABLE IF NOT EXISTS piece_signature (
+    id                 BIGSERIAL     PRIMARY KEY,
+    id_community       INTEGER       NOT NULL,
+    id_document        INTEGER       NOT NULL REFERENCES document (id) ON DELETE CASCADE,
+    id_version         INTEGER       NOT NULL REFERENCES document_version (id) ON DELETE CASCADE,
+    idempotency_key    VARCHAR(255)  NOT NULL,
+    request_id         UUID,
+    status             SMALLINT      NOT NULL,
+    reason             TEXT,
+    -- The FINAL version the signed PDF became (none when its procedure was
+    -- sent meanwhile: a sent piece takes no new version).
+    id_signed_version  INTEGER       REFERENCES document_version (id),
+    final_key          TEXT,
+    final_sha256       CHAR(64),
+    evidence_pdf_key   TEXT,
+    evidence_json_key  TEXT,
+    requested_by       VARCHAR(255),
+    requested_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_piece_signature_key UNIQUE (idempotency_key),
+    CONSTRAINT ck_piece_signature_status
+        CHECK (COALESCE(status IN (1, 2, 3, 4, 5, 6, 7), FALSE))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_piece_signature_live
+    ON piece_signature (id_document) WHERE status IN (1, 2);
+CREATE INDEX IF NOT EXISTS ix_piece_signature_document
+    ON piece_signature (id_document, id DESC);
+
+DROP TRIGGER IF EXISTS trg_piece_signature_updated_at ON piece_signature;
+CREATE TRIGGER trg_piece_signature_updated_at BEFORE UPDATE ON piece_signature
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 INSERT INTO schema_version (version, description)
 VALUES (6, 'Phase 4: reminder ladder, reception address, summary setting')

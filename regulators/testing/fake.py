@@ -20,7 +20,13 @@ from typing import Any
 
 from engine.calendar import CalendarData, load_calendar
 from engine.catalogue import Catalogue, ProcedureDefinition, load_catalogue
-from engine.contracts import ChangeFact, DocumentRequirement, ProcedureFacts
+from engine.contracts import (
+    ChangeFact,
+    DocumentRequirement,
+    ProcedureFacts,
+    SignatureFieldLayout,
+    SignatureLayout,
+)
 from engine.entry_sheets import EntrySheet
 from shared.const import RegulatoryStatus
 
@@ -87,6 +93,19 @@ class FakeRegulator:
 
     def entry_sheet(self, code: str) -> EntrySheet | None:
         return None
+
+    def signature_layout(self, code: str) -> SignatureLayout | None:
+        """``member_declaration`` is signed in its ``Signature`` field, with a
+        required ``Place`` and the date."""
+        if code != "member_declaration":
+            return None
+        return SignatureLayout(
+            signature_field="Signature",
+            fields=(
+                SignatureFieldLayout("place", "TEXT", "Place", True, {"fr": "Fait à"}),
+                SignatureFieldLayout("date", "DATE", "Date"),
+            ),
+        )
 
     def suggest_response(self, subject: str, text: str) -> str | None:
         """``answer`` when a mail says so, nothing otherwise."""

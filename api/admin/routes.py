@@ -49,6 +49,7 @@ from api.admin.schemas import (
     RefileOut,
     RegenerateIn,
     RegenerateOut,
+    SignatureRequestedOut,
     StatusOut,
     SummaryOut,
     TransitionIn,
@@ -65,6 +66,8 @@ from core.security.dependencies import require_feature, require_min_role
 from core.security.user_context import Role
 from engine.baseline import BaselineError, Choice, ChoiceIn
 from ports.core_effects import EffectConflictError
+from ports.events import EventPublisher
+from ports.providers import get_event_publisher
 from shared.const import FeatureName
 from shared.custom_errors import errors
 
@@ -365,6 +368,33 @@ async def upload_piece(
     the procedure was sent, except for a piece that is received after it."""
     view = await service.upload_piece(_community(), dossier_id, document_id, file, actor=_actor())
     return ApiResponse(data=ProcedureDetailOut.model_validate(view))
+
+
+@admin_routes.post(
+    "/dossiers/{dossier_id}/documents/{document_id}/signature-request",
+    status_code=202,
+    response_model=ApiResponse[SignatureRequestedOut],
+)
+@with_default_error(errors.admin.PROCEDURE_ACTION_FAILED)
+async def request_signature(
+    dossier_id: int,
+    document_id: int,
+    service: ProceduresDep,
+    publisher: Annotated[EventPublisher, Depends(get_event_publisher)],
+):
+    """Ask the participant to sign a per-member collected piece in the app (the
+    signature annexe). Its current version must be the one to sign; the
+    signed PDF comes back as the piece's final version. 409: module off (2600),
+    not signable (2601), no account (2602), already asked (2603)."""
+    result = await service.request_signature(
+        _community(),
+        dossier_id,
+        document_id,
+        actor=_actor(),
+        locale=current_locale.get(),
+        publisher=publisher,
+    )
+    return ApiResponse(data=SignatureRequestedOut.model_validate(result))
 
 
 @admin_routes.get(

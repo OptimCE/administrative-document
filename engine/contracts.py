@@ -63,6 +63,26 @@ class DocumentRequirement:
     condition: Mapping[str, Any] | None = None  # why it is required, for display
 
 
+@dataclass(frozen=True)
+class SignatureFieldLayout:
+    """A field the participant fills when signing a piece, by its name in the PDF."""
+
+    name: str  # the signature service's field name (``place``, ``date``)
+    type: str  # DATE (the signing date, written by the service), TEXT, INITIALS, CHECKBOX
+    pdf_field: str  # the regulator's own AcroForm field
+    required: bool = False
+    labels: Mapping[str, str] = field(default_factory=dict)  # by locale
+
+
+@dataclass(frozen=True)
+class SignatureLayout:
+    """Where a collected piece is signed electronically (the signature annexe):
+    the regulator's own signature field and the fields filled with it."""
+
+    signature_field: str
+    fields: tuple[SignatureFieldLayout, ...] = ()
+
+
 # What a step of common status "sent" may mean for a subject it carries.
 SENT_STATUSES = (
     RegulatoryStatus.PENDING_GRD,
@@ -111,6 +131,11 @@ class RegulatorPlugin(Protocol):
         (its subject and text), or None. Only a suggestion: a manager confirms
         it, and the engine drops one the procedure's catalogue does not offer
         from its current step."""
+        ...
+
+    def signature_layout(self, code: str) -> SignatureLayout | None:
+        """Where the participant signs the collected piece ``code`` electronically
+        (the regulator's form fields), or None when it cannot be signed in the app."""
         ...
 
 

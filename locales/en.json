@@ -61,7 +61,12 @@
       "INBOUND_MAIL_NOT_FOUND": "This received mail cannot be found.",
       "INBOUND_MAIL_HANDLED": "This received mail was already recorded or discarded.",
       "EFFECTIVE_DATE_NOT_OPEN": "The effective date can only be corrected while it is still to come: this procedure has no effect pending.",
-      "DIGEST_SETTING_INVALID": "This summary setting is not valid: check the rhythm, the day, the first send and the recipients (admins or managers of the community) (code: 2398)"
+      "DIGEST_SETTING_INVALID": "This summary setting is not valid: check the rhythm, the day, the first send and the recipients (admins or managers of the community) (code: 2398)",
+      "SIGNATURE_MODULE_OFF": "Electronic signature is not enabled for this community (code: 2600)",
+      "SIGNATURE_NOT_APPLICABLE": "This piece cannot be signed electronically now (code: 2601)",
+      "SIGNATURE_NO_ACCOUNT": "This participant has no OptimCE account: they cannot sign in the app (code: 2602)",
+      "SIGNATURE_ALREADY_REQUESTED": "A signature of this piece is already requested (code: 2603)",
+      "SIGNATURE_UNAVAILABLE": "The signature service is temporarily unavailable (code: 2604)"
     }
   }
 }

@@ -121,6 +121,19 @@ class _AdminErrors:
     # weekday, first send, or a recipient who is no admin or manager). -> 422.
     DIGEST_SETTING_INVALID = Error(code=2398, key="ERRORS.ADMIN.DIGEST_SETTING_INVALID")
 
+    # ---- the signature annexe (2026-11-03): a 2600 block, 2399 being the
+    # 2300 block's last code. -> 409 unless said otherwise. ----
+    # The community's signature module is off.
+    SIGNATURE_MODULE_OFF = Error(code=2600, key="ERRORS.ADMIN.SIGNATURE_MODULE_OFF")
+    # Not a per-member collected piece its regulator lets sign in the app, or
+    # its current version is not the one to sign, or its procedure was sent.
+    SIGNATURE_NOT_APPLICABLE = Error(code=2601, key="ERRORS.ADMIN.SIGNATURE_NOT_APPLICABLE")
+    # The participant has no account: they cannot sign in the app.
+    SIGNATURE_NO_ACCOUNT = Error(code=2602, key="ERRORS.ADMIN.SIGNATURE_NO_ACCOUNT")
+    SIGNATURE_ALREADY_REQUESTED = Error(code=2603, key="ERRORS.ADMIN.SIGNATURE_ALREADY_REQUESTED")
+    # The broker did not take the request: nothing was asked. -> 503.
+    SIGNATURE_UNAVAILABLE = Error(code=2604, key="ERRORS.ADMIN.SIGNATURE_UNAVAILABLE")
+
 
 class _Errors:
     auth = _AuthErrors()

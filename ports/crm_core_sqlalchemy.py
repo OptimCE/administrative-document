@@ -425,6 +425,31 @@ class SqlAlchemyCrmCoreRead:
             for row in result.mappings()
         }
 
+    async def feature_active(self, id_community: int, feature: str) -> bool:
+        """Whether the community subscribed to another annexe (the signature one)."""
+        result = await self._session.execute(
+            text(
+                "SELECT is_active FROM community_subscription "
+                "WHERE id_community = :cid AND feature = :feature"
+            ),
+            {"cid": id_community, "feature": feature},
+        )
+        return bool(result.scalar_one_or_none())
+
+    async def members_with_account(self, id_community: int, ids: Sequence[int]) -> set[int]:
+        """The members of ``ids`` linked to at least one account (who can sign in the app)."""
+        if not ids:
+            return set()
+        result = await self._session.execute(
+            text(
+                "SELECT DISTINCT m.id FROM member m "
+                "JOIN user_member_link uml ON uml.id_member = m.id "
+                "WHERE m.id_community = :cid AND m.id = ANY(:ids)"
+            ),
+            {"cid": id_community, "ids": list(ids)},
+        )
+        return {int(row[0]) for row in result}
+
     async def member_ids_for_user(self, *, id_community: int, auth_user_id: str) -> list[int]:
         """The member id(s) the authenticated user represents in this community."""
         result = await self._session.execute(

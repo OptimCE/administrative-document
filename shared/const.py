@@ -392,3 +392,28 @@ def extension_for_content_type(content_type: str | None) -> str:
     if not content_type:
         return ""
     return EXTENSION_BY_CONTENT_TYPE.get(content_type.split(";")[0].strip(), "")
+
+
+class PieceSignatureStatus(IntEnum):
+    """Where a piece's signature request stands (``piece_signature.status``),
+    after the signature annexe's events."""
+
+    REQUESTED = 1  # published, not yet accepted by the service
+    OPEN = 2
+    SIGNED = 3
+    DECLINED = 4
+    EXPIRED = 5
+    CANCELLED = 6
+    FAILED = 7
+
+
+#: The live ones: one at a time per piece.
+LIVE_SIGNATURE_STATUSES = (PieceSignatureStatus.REQUESTED, PieceSignatureStatus.OPEN)
+
+#: The signature annexe's contract (its domain/payloads.py): we ask on the
+#: first subject and hear back on our own prefix of the second.
+SIGNATURE_SOURCE = "administrative_document"
+SUBJECT_SIGNATURE_REQUEST = "signature.request.create"
+SUBJECT_SIGNATURE_EVENTS = f"signature.event.{SIGNATURE_SOURCE}.>"
+SUBJECT_DLQ_SIGNATURE_EVENT = "optimce.administrative_document.dlq.signature_event"
+SIGNATURE_FEATURE = "signature"

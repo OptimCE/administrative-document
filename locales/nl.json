@@ -61,7 +61,12 @@
       "INBOUND_MAIL_NOT_FOUND": "Deze ontvangen e-mail is niet gevonden.",
       "INBOUND_MAIL_HANDLED": "Deze ontvangen e-mail werd al geregistreerd of terzijde gelegd.",
       "EFFECTIVE_DATE_NOT_OPEN": "De datum van inwerkingtreding kan alleen worden gecorrigeerd zolang ze nog moet komen: deze procedure heeft geen inwerkingtreding in afwachting.",
-      "DIGEST_SETTING_INVALID": "Deze instelling van het overzicht is niet geldig: controleer het ritme, de dag, de eerste verzending en de ontvangers (beheerders of managers van de gemeenschap) (code: 2398)"
+      "DIGEST_SETTING_INVALID": "Deze instelling van het overzicht is niet geldig: controleer het ritme, de dag, de eerste verzending en de ontvangers (beheerders of managers van de gemeenschap) (code: 2398)",
+      "SIGNATURE_MODULE_OFF": "Elektronische handtekening is niet geactiveerd voor deze gemeenschap (code: 2600)",
+      "SIGNATURE_NOT_APPLICABLE": "Dit stuk kan nu niet elektronisch worden ondertekend (code: 2601)",
+      "SIGNATURE_NO_ACCOUNT": "Deze deelnemer heeft geen OptimCE-account en kan dus niet in de applicatie ondertekenen (code: 2602)",
+      "SIGNATURE_ALREADY_REQUESTED": "Er is al een handtekening van dit stuk gevraagd (code: 2603)",
+      "SIGNATURE_UNAVAILABLE": "De ondertekeningsdienst is tijdelijk niet beschikbaar (code: 2604)"
     }
   }
 }

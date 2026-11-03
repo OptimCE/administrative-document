@@ -30,9 +30,10 @@ from shared.const import (
     SUBJECT_DLQ_CORE_EVENT,
     SUBJECT_DLQ_DOCGEN_RESULT,
     SUBJECT_DLQ_GENERATE,
+    SUBJECT_DLQ_SIGNATURE_EVENT,
     SUBJECT_GENERATE_REQUESTED,
 )
-from worker import core_events, docgen_results, generate
+from worker import core_events, docgen_results, generate, signature_events
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +82,20 @@ async def subscribe_all(
     async def _attach_core_events() -> Any:
         return await core_events.subscribe(js, registry=registry, on_dlq=_to_core_event_dlq)
 
+    async def _to_signature_event_dlq(msg: Msg) -> None:
+        await _to_dlq(js, SUBJECT_DLQ_SIGNATURE_EVENT, msg)
+
+    # The signature annexe's events stream is the signature service's: it may
+    # not exist yet (the service not deployed), hence the same background retry.
+    async def _attach_signature_events() -> Any:
+        return await signature_events.subscribe(
+            js, registry=registry, on_dlq=_to_signature_event_dlq
+        )
+
     for name, attach in (
         ("docgen results", _attach_results),
         ("core events", _attach_core_events),
+        ("signature events", _attach_signature_events),
     ):
         try:
             subs.append(await attach())

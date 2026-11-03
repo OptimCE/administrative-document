@@ -44,12 +44,42 @@ from typing import Any
 
 from engine.calendar import CalendarData, load_calendar
 from engine.catalogue import Catalogue, DocumentSpec, ProcedureDefinition, load_catalogue
-from engine.contracts import ChangeFact, DocumentRequirement, ProcedureFacts
+from engine.contracts import (
+    ChangeFact,
+    DocumentRequirement,
+    ProcedureFacts,
+    SignatureFieldLayout,
+    SignatureLayout,
+)
 from engine.entry_sheets import EntrySheet, load_entry_sheets
 from shared.const import RegulatoryStatus
 
 CODE = "BE-WAL-CWAPE"
 HERE = Path(__file__).resolve().parent
+
+# The pieces a participant signs in the app (the signature annexe, 2026-11-03):
+# annexe 8 is the CWaPE's own fillable form, with its own signature field and
+# « Fait à » / « A la date du » text fields (checked on annex8 v1's PDF).
+_SIGNATURE_LAYOUTS = {
+    "annex8_sworn_declaration": SignatureLayout(
+        signature_field="Champ de signature 1",
+        fields=(
+            SignatureFieldLayout(
+                "place",
+                "TEXT",
+                "Champ de texte 21",
+                required=True,
+                labels={"fr": "Fait à", "en": "Signed at", "nl": "Opgemaakt te", "de": "Ort"},
+            ),
+            SignatureFieldLayout(
+                "date",
+                "DATE",
+                "Champ de texte 22",
+                labels={"fr": "A la date du", "en": "Date", "nl": "Datum", "de": "Datum"},
+            ),
+        ),
+    ),
+}
 
 # The piece each per-member list feeds, and where the list comes from.
 _MEMBER_LISTS = {
@@ -268,6 +298,10 @@ class CwapePlugin:
         """The CWaPE takes its community forms as files a representative fills in
         (or online): their fiche de saisie, in the forms' own order."""
         return self._sheets.get(code)
+
+    def signature_layout(self, code: str) -> SignatureLayout | None:
+        """Annexe 8 is signed in the app, in the form's own signature field."""
+        return _SIGNATURE_LAYOUTS.get(code)
 
     def suggest_response(self, subject: str, text: str) -> str | None:
         """The answer a GRD's or the CWaPE's mail most likely is, from its words

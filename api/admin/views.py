@@ -16,6 +16,7 @@ from typing import Any
 from engine.calendar import CalendarNotCoveredError, WorkingCalendar
 from engine.catalogue import CatalogueEntry, ProcedureDefinition
 from engine.lifecycle import UNRESOLVED
+from engine.signatures import signature_out
 from ports.crm_engine import Episode
 from shared.const import (
     ChangeStatus,
@@ -35,6 +36,7 @@ from shared.models.local_models import (
     DocumentTemplateModel,
     DocumentVersionModel,
     DossierModel,
+    PieceSignatureModel,
     StatusEventModel,
     VersionCheckModel,
 )
@@ -65,6 +67,10 @@ class PieceFacts:
     checks: dict[int, VersionCheckModel] = field(default_factory=dict)  # by version
     templates: dict[int, tuple[DocumentTemplateModel, bool]] = field(default_factory=dict)
     member_names: dict[int, str] = field(default_factory=dict)
+    # The signature annexe (2026-11-03): each piece's latest request, and
+    # whether a manager can ask for one now (module on, an account to sign with).
+    signatures: dict[int, PieceSignatureModel] = field(default_factory=dict)
+    signature_requestable: dict[int, bool] = field(default_factory=dict)
 
     def finals_ready(self, pieces: Sequence[DocumentModel]) -> bool:
         """What sending asks: every supplied piece final, nothing rendering."""
@@ -133,6 +139,8 @@ def piece_out(
         }
         if check is not None
         else None,
+        "signature": signature_out(facts.signatures.get(piece.id)),
+        "signature_requestable": facts.signature_requestable.get(piece.id, False),
     }
 
 

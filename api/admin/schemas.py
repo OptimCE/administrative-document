@@ -304,6 +304,22 @@ class PieceCheckOut(BaseModel):
     content_sha256: str | None = None
 
 
+class PieceSignatureOut(BaseModel):
+    status: str = Field(
+        description="requested, open, signed, declined, expired, cancelled or failed"
+    )
+    request_id: str | None = Field(
+        default=None, description="The signature annexe's request (its follow-up page)"
+    )
+    reason: str | None = Field(default=None, description="Why it was declined or failed")
+    updated_at: datetime.datetime
+
+
+class SignatureRequestedOut(BaseModel):
+    status: str = "requested"
+    idempotency_key: str
+
+
 class PieceOut(BaseModel):
     id: int
     code: str
@@ -330,6 +346,13 @@ class PieceOut(BaseModel):
     current_version: PieceVersionOut | None = None
     render: PieceRenderOut | None = None
     last_check: PieceCheckOut | None = None
+    signature: PieceSignatureOut | None = Field(
+        default=None, description="The piece's latest request to the signature annexe"
+    )
+    signature_requestable: bool = Field(
+        default=False,
+        description="A manager can ask the participant to sign it in the app now",
+    )
 
 
 class InboundAddressOut(BaseModel):
