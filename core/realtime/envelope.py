@@ -42,6 +42,10 @@ TOPICS: Final[frozenset[str]] = frozenset(
         "admin.dossier.updated",
         "admin.document.ready",
         "admin.deadline.due",
+        # The signature annexe: a signer's seal done (the signing screen waits
+        # for it), and any change of a request (inbox, follow-up view).
+        "signature.signed",
+        "signature.request.updated",
     }
 )
 
