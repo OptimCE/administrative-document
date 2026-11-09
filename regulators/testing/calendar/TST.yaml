@@ -1,0 +1,11 @@
+# The fake regulator's holidays. Few and arbitrary on purpose: the engine's
+# tests must read them from here, so a real calendar cannot make them pass.
+region: TST
+saturday_is_working: false
+years: {from: 2026, to: 2027}
+holidays:
+  - {day: 2026-01-01, label: Fake new year}
+  - {day: 2026-03-02, label: Fake spring day}
+  - {day: 2026-12-25, label: Fake winter day}
+  - {day: 2026-12-28, label: Fake year-end day}
+  - {day: 2027-01-01, label: Fake new year}

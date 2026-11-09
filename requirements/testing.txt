@@ -8,6 +8,11 @@ pytest-cov==7.0.0
 # HTTP test client
 httpx==0.28.1
 
+# The independent oracle for the plugins' holiday calendars
+# (tests/regulators/*/test_calendar.py, tests/engine/test_calendar.py): the
+# engine reads holidays from YAML, and this checks the YAML says what the law says.
+workalendar==17.0.0
+
 # Model factories
 factory-boy==3.3.1
 pandas==2.2.3

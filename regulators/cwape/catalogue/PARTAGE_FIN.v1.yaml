@@ -1,0 +1,104 @@
+# End of a sharing operation: notified to the reference GRD by electronic
+# means; takes effect on the 20th working day after the sending, at midnight
+# (a later date may be requested). The CRM has no "operation closed" event yet,
+# so it is created by hand; operation_closed is listed for when it does.
+code: PARTAGE_FIN
+version: 1
+valid_from: 2026-01-01
+scope: operation
+recipient: grd_ref
+channel: email
+family: PARTAGE_FIN
+handles_change_kinds: [operation_closed]
+labels: {fr: Fin du partage, en: End of sharing, nl: Einde van de deling, de: Ende der Teilung}
+
+initial_step: draft
+steps:
+  - code: draft
+    status: draft
+    bucket: todo
+    next_action:
+      code: complete_documents
+      labels: {fr: Compléter les pièces, en: Complete the documents, nl: De documenten aanvullen, de: Die Unterlagen vervollständigen}
+    labels: {fr: Brouillon, en: Draft, nl: Concept, de: Entwurf}
+  - code: ready
+    status: ready
+    bucket: todo
+    next_action:
+      code: send
+      labels: {fr: Notifier la fin du partage, en: Notify the end of sharing, nl: Het einde van de deling melden, de: Das Ende der Teilung melden}
+    labels: {fr: Prêt, en: Ready, nl: Klaar, de: Bereit}
+  - code: sent
+    status: sent
+    bucket: planned
+    next_action:
+      code: record_response
+      labels: {fr: Prise d'effet prévue, en: Effect scheduled, nl: Inwerkingtreding gepland, de: Inkrafttreten geplant}
+    labels: {fr: Envoyé, en: Sent, nl: Verstuurd, de: Gesendet}
+  # A July CESSATION dossier declared COMPLETE converts here (migration 0003).
+  - code: in_review
+    status: sent
+    bucket: planned
+    next_action:
+      code: record_response
+      labels: {fr: Prise d'effet prévue, en: Effect scheduled, nl: Inwerkingtreding gepland, de: Inkrafttreten geplant}
+    labels: {fr: Reçu par le GRD, en: Received by the DSO, nl: Ontvangen door de netbeheerder, de: Vom Netzbetreiber erhalten}
+  - code: in_force
+    status: in_force
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Partage terminé, en: Sharing ended, nl: Deling beëindigd, de: Teilung beendet}
+  - code: cancelled
+    status: cancelled
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Annulé, en: Cancelled, nl: Geannuleerd, de: Storniert}
+  # Kept for converted July dossiers that lapsed.
+  - code: lapsed
+    status: lapsed
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Caduc, en: Lapsed, nl: Vervallen, de: Verfallen}
+
+transitions:
+  - {from: draft, to: ready, automatic: true}
+  - {from: ready, to: draft, automatic: true}
+  - {from: draft, to: cancelled, automatic: true}   # a system draft emptied by compensation; or by hand
+  - {from: ready, to: cancelled}
+  - {from: ready, to: sent}
+  - {from: sent, to: in_review}
+  - {from: sent, to: in_force, automatic: true}       # on the effect date
+  - {from: in_review, to: in_force, automatic: true}
+  - {from: sent, to: lapsed}
+  - {from: in_review, to: lapsed}
+
+response_types:
+  - code: sent
+    direction: outbound
+    counterparty: grd
+    to_step: sent
+    labels: {fr: Envoi, en: Sending, nl: Verzending, de: Versand}
+  - code: receipt
+    direction: inbound
+    counterparty: grd
+    to_step: in_review
+    labels: {fr: Accusé de réception, en: Acknowledgement of receipt, nl: Ontvangstbevestiging, de: Empfangsbestätigung}
+  - code: other
+    direction: inbound
+    counterparty: other
+    labels: {fr: Autre, en: Other, nl: Andere, de: Sonstiges}
+
+deadline_rules:
+  - code: effect
+    kind: relative
+    anchor: step:sent
+    offset: {value: 20, unit: working_days}
+    party: grd
+    deadline_kind: effect
+    closes_on: [step:in_force]
+    labels: {fr: Prise d'effet, en: Takes effect, nl: Inwerkingtreding, de: Inkrafttreten}
+
+documents:
+  - code: sharing_termination
+    kind: collected
+    labels: {fr: Notification de fin du partage, en: End-of-sharing notice, nl: Kennisgeving van het einde van de deling, de: Mitteilung über das Ende der Teilung}

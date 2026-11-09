@@ -32,12 +32,14 @@ opentelemetry-sdk==1.39.1
 opentelemetry-semantic-conventions==0.60b1
 opentelemetry-util-http==0.60b1
 
-# Regulatory deadline arithmetic. workalendar computes Belgian public holidays
-# (including the movable feasts — Easter Monday, Ascension, Whit Monday) so
-# "+10 business days" never drifts; dateutil.relativedelta does calendar-month
-# offsets ("+6 months", "+1 year"). See domain/calendar.py.
-workalendar==17.0.0
+# Calendar-month offsets ("+6 months") in engine/calendar.py; the holidays
+# themselves are data, in each regulator plugin's calendar/<REGION>.yaml.
 python-dateutil==2.9.0.post0
+
+# The regulator plugins' catalogues and holiday calendars are versioned YAML
+# files (regulators/<plugin>/catalogue, calendar), read at startup by the API AND
+# the worker, so it is a base dependency. Always yaml.safe_load: see engine/catalogue.py.
+PyYAML==6.0.3
 
 # Realtime SSE hints (fire-and-forget pub/sub consumed by crm-backend's hub).
 # redis.asyncio, not the unmaintained aioredis — it is aioredis's successor and

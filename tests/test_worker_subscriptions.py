@@ -7,18 +7,19 @@ alone keeps those, and ``FakeJetStream`` reproduces that.
 from __future__ import annotations
 
 from core.config import settings
-from shared.const import SUBJECT_GENERATE_REQUESTED
+from shared.const import CORE_EVENTS_SUBJECT, SUBJECT_GENERATE_REQUESTED
 from tests.fake_jetstream import FakeJetStream
-from worker import dispatcher, docgen_results
+from worker import core_events, dispatcher, docgen_results
 
 
-def _js() -> FakeJetStream:
-    return FakeJetStream(
-        {
-            "ADMIN_DOCUMENT": [SUBJECT_GENERATE_REQUESTED],
-            "DOCGEN_RESULTS": ["docgen.result.>"],
-        }
-    )
+def _js(*, core_stream: bool = True) -> FakeJetStream:
+    streams = {
+        "ADMIN_DOCUMENT": [SUBJECT_GENERATE_REQUESTED],
+        "DOCGEN_RESULTS": ["docgen.result.>"],
+    }
+    if core_stream:
+        streams["CORE_EVENTS"] = [CORE_EVENTS_SUBJECT]
+    return FakeJetStream(streams)
 
 
 async def test_subscribe_all_updates_durables_an_earlier_build_created():
@@ -28,7 +29,7 @@ async def test_subscribe_all_updates_durables_an_earlier_build_created():
 
     subscriptions = await dispatcher.subscribe_all(js)
 
-    assert len(subscriptions) == 2
+    assert len(subscriptions) == 3
     generate = js.stored(SUBJECT_GENERATE_REQUESTED, dispatcher._GENERATE_DURABLE)
     assert (generate.ack_wait, generate.max_deliver) == (
         dispatcher._ACK_WAIT_SECONDS,
@@ -50,5 +51,20 @@ async def test_subscribe_all_binds_each_durable_as_its_own_queue_group():
     assert [s["durable"] for s in js.subscriptions] == [
         dispatcher._GENERATE_DURABLE,
         docgen_results._DOCGEN_DURABLE,
+        core_events._DURABLE,
     ]
     assert all(s["queue"] == s["durable"] and s["manual_ack"] for s in js.subscriptions)
+
+
+async def test_the_core_stream_missing_does_not_stop_the_other_consumers():
+    """crm-outbox-relay owns CORE_EVENTS and may start later: the worker binds
+    the rest now and retries that one in the background."""
+    js = _js(core_stream=False)
+
+    subscriptions = await dispatcher.subscribe_all(js)
+
+    assert [s["durable"] for s in js.subscriptions] == [
+        dispatcher._GENERATE_DURABLE,
+        docgen_results._DOCGEN_DURABLE,
+    ]
+    assert len(subscriptions) == 2

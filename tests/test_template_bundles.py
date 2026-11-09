@@ -23,6 +23,9 @@ import re
 import pytest
 
 from domain import cwape_labels as labels
+from domain import prefill
+from ports.crm_core import CommunityContext
+from shared.const import Region
 
 openpyxl = pytest.importorskip("openpyxl", reason="workbook inspection needs openpyxl")
 pypdf = pytest.importorskip("pypdf", reason="AcroForm inspection needs pypdf")
@@ -33,6 +36,10 @@ BUNDLE_ROOT = (
 
 BUNDLES = sorted(p for p in BUNDLE_ROOT.glob("*/v1") if (p / "manifest.json").is_file())
 BUNDLE_IDS = [p.parent.name for p in BUNDLES]
+
+_COMMUNITY = CommunityContext(
+    id_community=1, name="CER Test", regulator="BE-WAL-CWAPE", region=Region.WAL
+)
 
 
 def _manifest(bundle: pathlib.Path) -> dict:
@@ -48,7 +55,7 @@ def bundle(request) -> pathlib.Path:
 
 def test_there_is_a_bundle_for_every_registered_form():
     """A tripwire: silently losing a bundle would silently lose a doc_type."""
-    assert len(BUNDLES) == 11, [p.parent.name for p in BUNDLES]
+    assert len(BUNDLES) == 12, [p.parent.name for p in BUNDLES]
 
 
 class TestDocxTemplatesAreTheOfficialConvention:
@@ -92,7 +99,12 @@ class TestManifestMatchesItsDocument:
     def test_declared_engine_matches_the_entrypoint_kind(self, bundle):
         manifest = _manifest(bundle)
         suffix = pathlib.Path(manifest["entrypoint"]).suffix
-        expected = {"xlsx": ".xlsx", "pdf-form": ".pdf", "docx": ".docx"}[manifest["engine"]]
+        expected = {
+            "xlsx": ".xlsx",
+            "pdf-form": ".pdf",
+            "docx": ".docx",
+            "jinja-html": ".html",
+        }[manifest["engine"]]
         assert suffix == expected
 
     def test_every_mapped_acroform_field_exists(self, bundle):
@@ -143,6 +155,59 @@ class TestManifestMatchesItsDocument:
                 f"{block['source']}: manifest allows {declared} rows but "
                 f"{sheet_name!r} only provisions {available}"
             )
+
+
+class TestThePrefillOffersEveryField:
+    """The review form shows what the pre-fill seeds, so every AcroForm field is
+    seeded (a checkbox as False), in the form's order."""
+
+    def test_every_form_field_is_seeded_with_its_kind(self, bundle):
+        manifest = _manifest(bundle)
+        if manifest["engine"] != "pdf-form":
+            pytest.skip("not a pdf-form bundle")
+        declared = pypdf.PdfReader(str(bundle / manifest["entrypoint"])).get_fields() or {}
+        projected = dict(prefill._ANNEX8_COMB_FIELDS)
+        combs = {target: source for source, target in projected.items()}
+
+        expected = []
+        for key, target in manifest["fields"].items():
+            if key in combs and bundle.parent.name == prefill.DOC_TYPE_ANNEX8_SWORN_DECLARATION:
+                expected.append((combs[key], "text"))  # the EAN the combs spell
+                continue
+            name = target if isinstance(target, str) else target[0]
+            expected.append((key, "check" if declared[name].get("/FT") == "/Btn" else "text"))
+
+        assert sorted(prefill.ACROFORM_FIELDS[bundle.parent.name]) == sorted(expected)
+
+    def test_the_review_form_follows_the_form(self, bundle):
+        manifest = _manifest(bundle)
+        if manifest["engine"] != "pdf-form":
+            pytest.skip("not a pdf-form bundle")
+        snapshot = prefill.build_snapshot(bundle.parent.name, community=_COMMUNITY)
+        fields = prefill.ACROFORM_FIELDS[bundle.parent.name]
+
+        assert list(snapshot)[: len(fields)] == [key for key, _kind in fields]
+        for key, kind in fields:
+            if kind == "check":
+                assert snapshot[key] is False, key
+
+
+class TestTheHtmlTemplatesUseOnlyWhatTheyRequire:
+    """jinja-html renders with StrictUndefined: a key the schema does not require
+    (or the pre-fill does not seed) fails the first time someone renders it."""
+
+    def test_every_expression_is_required_and_seeded(self, bundle):
+        manifest = _manifest(bundle)
+        if manifest["engine"] != "jinja-html":
+            pytest.skip("not a jinja-html bundle")
+        source = (bundle / manifest["entrypoint"]).read_text(encoding="utf-8")
+        used = set(re.findall(r"\bdata\.(\w+)", source))
+        required = set(manifest["required_fields"]["required"])
+        seeded = set(prefill.build_snapshot(bundle.parent.name, community=_COMMUNITY))
+
+        assert used, "a template with no expressions fills nothing in"
+        assert used <= required, f"used but not required: {used - required}"
+        assert required <= seeded, f"required but never seeded: {required - seeded}"
 
 
 class TestLabelsStillMatchTheDropdowns:

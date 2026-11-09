@@ -36,6 +36,8 @@ from the regulator.
 
 What IS OptimCE's own work in that directory, and IS covered by the Apache-2.0
 grant: every manifest.json (the field and cell bindings, the JSON Schema over
-the input data, the declared capacities) and document-templates/README.md.
+the input data, the declared capacities), document-templates/README.md, and the
+whole key_description bundle (template.html included), which is OptimCE's own
+layout rather than a regulator file.
 
 CWaPE publications: https://www.cwape.be

@@ -33,53 +33,63 @@ OptimCE-Dienste bündelt und die Docker-Compose-Umgebung bereitstellt.
 
 ## Funktionsweise
 
-Der Dienst liefert zwei Deployables aus einer Codebasis — eine
+Der Dienst liefert zwei deploybare Einheiten aus einer Codebasis — eine
 [FastAPI](https://fastapi.tiangolo.com/)-API (`main:app`) und einen NATS-Worker
-(`worker.main`), der die Consumer für Erzeugung und Ergebnisse sowie den
-Fristenplaner ausführt — und beruht auf vier Ideen:
+(`worker.main`), der die Ereignisse des CRM in Verfahren einordnet, die Consumer
+für Erzeugung und Ergebnisse sowie die täglichen Aufgaben ausführt — aufgebaut
+um vier Ideen:
 
-- **Ein journalisierter Zustandsautomat.** Dokumente durchlaufen
-  `Entwurf → bereit → übermittelt → bestätigt` (plus `veraltet`); Dossiers
-  durchlaufen `in Vorbereitung → eingereicht → vollständig → abgeschlossen` (plus
-  `verfallen`). Ein Status wird nie an Ort und Stelle geändert: jede Änderung
-  hängt ein unveränderliches `status_event` an (Akteur, Zeitstempel, Ausgangs-
-  und Zielstatus, Kontext), und die Statusspalte ist nur ein Cache, den die
-  Datenbank gegen dieses Journal prüft. Ein Fehler wird durch einen neuen,
-  nachvollziehbaren Korrekturübergang berichtigt — die Historie wird nie
-  umgeschrieben.
-- **Abgeleitete Fristen.** Regulatorische Fristen sind Konfiguration, nicht Code.
-  Eine `deadline_rule`-Zeile besagt: „Wenn *dies* geschieht, wird eine Frist
-  *dieses Typs* N Werktage oder N Monate später fällig"; ein Übergang wertet die
-  passenden Regeln aus und materialisiert die Fristen. Die Werktagsberechnung
-  berücksichtigt die belgischen Feiertage einschließlich der beweglichen Feste.
-- **Unveränderliche Versionen.** Jede hochgeladene Datei wird zu einer
-  nummerierten, inhaltsadressierten Version. Ein erneuter Upload erzeugt eine neue
-  Version; eine bereits übermittelte Version kann nie verändert werden, sodass
-  sich stets exakt das abrufen lässt, was eingereicht wurde.
+- **Verfahren aus dem Katalog der Regulierungsbehörde.** Ein Dossier ist ein
+  *Verfahren* bei der Regulierungsbehörde der Gemeinschaft: Typ, Schritte,
+  Antworten, Unterlagen und Fristen stammen aus einem versionierten YAML-Katalog
+  in einem Regulierungs-Plugin (`regulators/`; derzeit nur die CWaPE, siehe
+  `regulators/README.md`). Die Engine (`engine/`) kennt nur gemeinsame Status —
+  Entwurf, bereit, gesendet, in Kraft, abgelehnt, storniert, verfallen — und der
+  Schritt des Plugins wird mit ihnen geführt. Ein Status wird nie an Ort und
+  Stelle geändert: Jede Änderung fügt ein unveränderliches `status_event` hinzu,
+  die Datenbank überträgt den Kopf des Journals auf das Verfahren und lehnt jedes
+  direkte Schreiben ab. Ein Fehler wird durch einen neuen, nachvollziehbaren
+  Schrittwechsel korrigiert — die Historie wird nie umgeschrieben.
+- **Änderungen hinein, Fristen heraus.** Das CRM veröffentlicht seine Änderungen
+  (ein hinzugefügter Zähler, ein genehmigter Schlüssel…) als Ereignisse; der
+  Worker ordnet jedes dem offenen Entwurf des passenden Typs zu, und die
+  täglichen Aufgaben eröffnen die kalendarischen Verfahren (den Jahresbericht)
+  und verfolgen ihre Fristen. Eine Frist ist Katalogdaten — „N Werktage oder
+  Monate nach diesem Schritt oder jener Antwort" — gezählt nach dem
+  Feiertagskalender des Plugins, bewegliche Feiertage inbegriffen.
+- **Unveränderliche Versionen.** Jede hochgeladene oder erzeugte Datei wird zu
+  einer nummerierten, inhaltsadressierten Version, ebenso jede gesendete oder
+  empfangene Nachricht. Sobald ein Verfahren gesendet ist, sind seine Unterlagen
+  eingefroren — so lässt sich stets genau abrufen, was übermittelt wurde.
 - **Erzeugte Einreichungen.** Die vorgeschriebenen Formulare entstehen aus den
-  Daten der Gemeinschaft, statt von Hand ausgefüllt zu werden: Ein Prefill-Schritt
-  baut die Nutzdaten aus dem CRM auf, die Erzeugung friert sie als Momentaufnahme
-  ein und rendert die registrierte Vorlage über den Dokumentgenerierungsdienst der
-  Plattform, und das Ergebnis landet als neue unveränderliche Version. Die
-  Momentaufnahme entsteht zum Zeitpunkt der Anfrage, sodass das Eingereichte stets
-  reproduzierbar bleibt. Pro Dokument kann nur ein Rendering gleichzeitig laufen.
+  Daten der Gemeinschaft, statt von Hand ausgefüllt zu werden: Ein
+  Vorbefüllungsschritt baut die Nutzlast aus dem CRM, die Erzeugung friert sie
+  als Momentaufnahme ein und rendert die registrierte Vorlage über den
+  Dokumenterzeugungsdienst der Plattform, und das Ergebnis kommt als neue
+  unveränderliche Version an. Die Momentaufnahme wird bei der Anfrage erfasst,
+  sodass das Eingereichte stets reproduzierbar bleibt. Pro Unterlage kann nur
+  ein Rendering gleichzeitig laufen.
 
-Zwei **PostgreSQL**-Datenbanken kommen zum Einsatz: die CRM-Datenbank (nur lesend
-für Gemeinschaften, Mitglieder, Zähler und Abonnements) und eine lokale
-Datenbank, die Dossiers, Dokumente, Versionen, das Statusjournal und die Fristen
-besitzt. Gespeicherte Dateien liegen in einem **S3-kompatiblen** Objektspeicher
-(MinIO in der Entwicklung). Status- und Fristereignisse werden auf **NATS
-JetStream** veröffentlicht. Traces, Metriken und Logs laufen über
-**OpenTelemetry**.
+Zwei **PostgreSQL**-Datenbanken kommen zum Einsatz: die CRM-Datenbank
+(Gemeinschaften, Mitglieder, Zähler und Abonnements nur lesend, dazu der
+regulatorische Status, den dieser Dienst zurückschreibt) und eine lokale
+Datenbank für die Verfahren, ihre Unterlagen, Versionen, Korrespondenz, das
+Statusjournal und die Fristen. Gespeicherte Dateien liegen in einem
+**S3-kompatiblen Objektspeicher** (MinIO in der Entwicklung). Die Ereignisse des
+CRM kommen über **NATS JetStream**, und Echtzeit-Hinweise lassen die offenen
+Seiten der Verwalter neu laden. Traces, Metriken und Logs werden über
+**OpenTelemetry** ausgegeben.
 
 ## Repository-Struktur
 
 | Pfad | Beschreibung |
 |---|---|
-| `api/` | HTTP-Schicht — Health- und Verwaltungsdokument-Routen, Schemata, Service und Repository |
-| `domain/` | Reine Domänenlogik — Zustandsautomat, Fristenregel-Engine und belgischer Werktagskalender |
+| `api/` | HTTP-Schicht — Verfahrensrouten (`/admin`), Erzeugung, Einreichungen und Vorlagen, Health; Schemata, Services und Repositories |
+| `domain/` | Reine Domänenlogik — Vorbefüllung vom CRM ins Formular und das exakte Vokabular der Regulierungsbehörde |
+| `engine/` | Die Verfahrens-Engine — Katalogmodell und -synchronisation, Lebenszyklus, Einordnung der CRM-Ereignisse, Fristen, tägliche Aufgaben; importiert nie eine Regulierungsbehörde |
+| `regulators/` | Regulierungs-Plugins (CWaPE) — Katalog, Feiertagskalender, Plugin-Vertrag; siehe `regulators/README.md` |
 | `ports/` | Adapter nach außen — lesender CRM-Zugriff, NATS-Event-Veröffentlichung und der Render-Port zur Dokumentenerzeugung |
-| `worker/` | NATS-Consumer für Erzeugungsanfragen und deren Ergebnisse, dazu der tägliche Fristenplaner |
+| `worker/` | NATS-Consumer für die CRM-Ereignisse, Erzeugungsanfragen und deren Ergebnisse, dazu die täglichen Aufgaben |
 | `document-templates/` | Die registrierten Vorlagen — die Formulare der Regulierungsbehörde und ihre Manifeste |
 | `shared/` | Konstanten, Fehlerkatalog, ORM-Modelle, Hilfsfunktionen |
 | `core/` | Querschnittsinfrastruktur — Konfiguration, Datenbank, Queue, Speicher, Sicherheit, Middleware, i18n, Tracing, Metriken, Logging |
@@ -95,35 +105,34 @@ das externe Präfix `/administrative-document`; die folgenden Pfade sind daher
 relativ.
 
 Der Zugriff ist standardmäßig auf Verwalter beschränkt: Jede Route erfordert
-mindestens die Verwalterrolle, Schreibzugriffe auf die Vorlagen- und
-Fristenregelregister erfordern die Administratorrolle, und `GET /filings/mine` ist
-der einzige für Mitglieder offene Endpunkt — er trägt keine Rollenprüfung, weil
-der Dienst jedes Dossier auf die eigenen Zeilen des Aufrufers reduziert, bevor die
-Antwort gebaut wird.
+mindestens die Verwalterrolle, Schreibzugriffe auf das Vorlagenregister erfordern
+die Administratorrolle, und `GET /filings/mine` ist der einzige für Mitglieder
+zugängliche Endpunkt — er trägt keine Rollenbeschränkung, weil der Dienst jede
+Einreichung vor dem Aufbau der Antwort auf die Zeilen des Aufrufers reduziert.
 
 | Methode | Pfad | Zweck |
 |---|---|---|
-| `GET` / `POST` | `/dossiers` | Dossiers auflisten (paginiert, filterbar) oder anlegen |
-| `GET` / `PATCH` | `/dossiers/{id}` | Ein Dossier mit Dokumenten und Fristen lesen oder Referenz/Metadaten ändern |
-| `POST` | `/dossiers/{id}/transition` · `rollback` | Eine Statusänderung des Dossiers erfassen, oder eine Korrektur |
-| `GET` | `/dossiers/{id}/timeline` | Das unveränderliche Journal des Dossiers und seiner Dokumente |
-| `GET` | `/dossiers/{id}/deadlines` | Die für ein Dossier abgeleiteten Fristen |
-| `GET` / `POST` | `/dossiers/{id}/documents` | Dokumente auflisten oder hinzufügen |
-| `GET` | `/documents/{id}` | Ein Dokument mit seinen Versionen lesen |
-| `POST` | `/documents/{id}/versions` | Eine neue unveränderliche Version hochladen (`multipart/form-data`) |
-| `GET` | `/documents/{id}/versions/{versionId}/file` | Eine gespeicherte Version herunterladen |
-| `POST` | `/documents/{id}/transition` | Eine Statusänderung des Dokuments erfassen |
-| `POST` | `/documents/{id}/mark-ready` · `mark-sent` · `acknowledge` · `rollback` | Kurzbefehle für die häufigen Übergänge |
-| `GET` | `/documents/{id}/prefill` | Die Nutzdaten aus dem CRM aufbauen, ohne etwas zu speichern |
+| `GET` | `/admin/status` | Das Modul für diese Gemeinschaft: aktiv, Regulierungsbehörde unterstützt oder nicht, zu bestätigende Ausgangslage |
+| `GET` / `POST` | `/admin/baseline` · `/admin/baseline/confirm` | Die zu bestätigende Ausgangslage und ihre Bestätigung (schreibt die Wirkungen ins CRM) |
+| `GET` | `/admin/inbox` | Das Dashboard: Verfahren nach Gruppe mit nächstem Schritt und dessen Frist, dazu die drei nächsten Fristen |
+| `GET` | `/admin/deadlines` | Die Agenda: alle offenen Fristen, oder die eines Zeitraums (`from`, `to`) |
+| `GET` / `POST` | `/admin/dossiers` | Alle Verfahren (paginiert, filterbar), oder eines von Hand aus dem Katalog eröffnen |
+| `GET` | `/admin/dossiers/{id}` | Ein Verfahren: Schritte, Änderungen, Unterlagen, Fristen, Verlauf |
+| `POST` | `/admin/dossiers/{id}/changes/{changeId}/defer` · `exclude` | Eine Änderung auf das nächste Verfahren verschieben, oder sie mit Begründung ausschließen |
+| `POST` | `/admin/dossiers/{id}/documents/{pieceId}/versions` | Eine Unterlage als neue unveränderliche Version hochladen (`multipart/form-data`) |
+| `POST` | `/admin/dossiers/{id}/send` | Als gesendet markieren (Datum, Kanal, optional .eml oder Bestätigung); friert das Verfahren ein |
+| `POST` | `/admin/dossiers/{id}/correspondence` | Eine Antwort erfassen; `dry_run=true` zeigt, was sie bewirken würde, ohne etwas zu schreiben |
+| `GET` | `/admin/dossiers/{id}/correspondence/{messageId}/file` | Die Datei einer Nachricht, wie erfasst |
+| `POST` | `/admin/dossiers/{id}/transition` | Ein Schrittwechsel von Hand entlang des Katalogs, mit Begründung |
+| `GET` | `/admin/procedure-definitions` | Der Katalog der Regulierungsbehörde, mit Bezeichnungen in vier Sprachen |
+| `GET` | `/documents/{id}/prefill` | Die Nutzlast einer Unterlage aus dem CRM aufbauen, ohne etwas zu speichern |
 | `POST` | `/documents/{id}/generate` | Die Momentaufnahme einfrieren und das Rendering anfordern (`409`, wenn bereits eines läuft) |
 | `GET` | `/documents/{id}/render-status` | Das laufende Rendering abfragen |
-| `GET` | `/deadlines` | Fristen-Dashboard über alle Dossiers hinweg |
-| `POST` | `/deadlines/{id}` | Eine Frist als erfüllt oder storniert markieren |
+| `GET` | `/documents/{id}/versions/{versionId}/file` | Eine gespeicherte Version herunterladen |
 | `GET` | `/filings/mine` | Die eigenen Einreichungen des Aufrufers, vor dem Aufbau der Antwort auf seine Zeilen reduziert |
-| `GET` | `/sharing-operations` | Die CRM-Sharing-Vorgänge, an die ein Dossier angehängt werden kann |
-| `GET` / `POST` | `/templates`, `/deadline-rules` | Die Register lesen (eigene Overrides und Plattformvorgaben) oder ein Override anlegen |
-| `PATCH` | `/templates/{id}`, `/deadline-rules/{id}` | Das eigene Override der Gemeinschaft bearbeiten |
-| `POST` | `/maintenance/deadline-sweep` | Den Fristenlauf außerplanmäßig auslösen |
+| `GET` | `/sharing-operations` | Die Teilungsoperationen der Gemeinschaft, aus dem CRM |
+| `GET` / `POST` | `/templates` | Das Vorlagenregister lesen (eigene Overrides und Plattformvorgaben) oder ein Override anlegen |
+| `PATCH` | `/templates/{id}` | Das eigene Override der Gemeinschaft bearbeiten |
 
 Health-Endpunkte liegen unter `/health` (`/health/liveness`,
 `/health/readiness`, `/health/health`). Die interaktive OpenAPI-Dokumentation
@@ -175,7 +184,8 @@ PostgreSQL müssen erreichbar sein — der Monorepo-Stack ist der einfachste Weg
 
 ```bash
 psql "$LOCAL_DATABASE_URL" -f scripts/sql/schema.sql
-psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0001_wal_deadline_rules.sql
+psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0002_wal_templates.sql
+psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0003_wal_templates_phase2.sql
 uvicorn main:app --reload
 ```
 
@@ -199,10 +209,12 @@ Variable. Die wichtigsten Gruppen sind:
 Es gibt keinen Migrations-Runner. `scripts/sql/schema.sql` ist die einzige Quelle
 der Wahrheit für die lokale Datenbank und wird von
 `shared/models/local_models.py` gespiegelt; Änderungen kommen als
-vorwärtsgerichtete Dateien nach `scripts/sql/migrations/`. Regionale
-Referenzdaten (Fristenregeln und Vorlagen) liegen in `scripts/sql/seeds/`, sodass
+vorwärtsgerichtete Dateien nach `scripts/sql/migrations/`. Der Vorlagenkatalog
+liegt als Seeds in `scripts/sql/seeds/`, und jedes Regulierungs-Plugin bringt
+seinen Verfahrenskatalog und Feiertagskalender als YAML mit
+(`regulators/<plugin>/`), beim Start mit der Datenbank synchronisiert — so ist
 die Anpassung an ein überarbeitetes Formular oder eine geänderte Frist eine
-Datenänderung ist und kein Deployment.
+Datenänderung und keine Codeänderung.
 
 ## Tests
 

@@ -5,6 +5,7 @@ Pure-domain tests: no database, no broker, no template bundle.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import datetime
 
@@ -13,8 +14,11 @@ import pytest
 from domain import cwape_labels as labels
 from domain import prefill
 from ports.crm_core import (
+    AllocationKey,
     CommunityContext,
     Installation,
+    KeyIteration,
+    KeyShare,
     MeterPoint,
     Participant,
     PostalAddress,
@@ -281,6 +285,42 @@ class TestSnapshot:
         # Negotiated terms are blank for the reviewer, never guessed.
         assert snapshot["distribution_key"] is None
         assert snapshot["start_date"] is None
+
+    @pytest.mark.parametrize(
+        "doc_type",
+        [
+            prefill.DOC_TYPE_COMMUNITY_NOTIFICATION,
+            prefill.DOC_TYPE_COMMUNITY_MODIFICATION,
+            prefill.DOC_TYPE_SHARING_NOTIFICATION,
+            prefill.DOC_TYPE_SHARING_MODIFICATION,
+        ],
+    )
+    def test_the_representative_the_crm_knows_fills_the_form(self, doc_type):
+        """Phase 4: the CRM records the community's representative, so the
+        reviewer no longer types it."""
+        community = dataclasses.replace(
+            _COMMUNITY, representative_first_name=" Anne ", representative_last_name="Dupont"
+        )
+        assert prefill.build_snapshot(doc_type, community=community)["representative_name"] == (
+            "Anne Dupont"
+        )
+        assert prefill.build_snapshot(doc_type, community=_COMMUNITY)["representative_name"] is None
+
+    def test_a_form_without_a_representative_gets_none(self):
+        community = dataclasses.replace(_COMMUNITY, representative_last_name="Dupont")
+        snapshot = prefill.build_snapshot(
+            prefill.DOC_TYPE_ANNEX8_SWORN_DECLARATION, community=community
+        )
+        assert "representative_name" not in snapshot
+
+    def test_the_dso_convention_names_the_representative_when_known(self):
+        community = dataclasses.replace(
+            _COMMUNITY, representative_first_name="Anne", representative_last_name="Dupont"
+        )
+        snapshot = prefill.build_snapshot(
+            prefill.DOC_TYPE_DSO_AGREEMENT_COMMUNITY, community=community
+        )
+        assert snapshot["representative_name"] == "Anne Dupont"
 
     def test_the_building_convention_has_its_own_extra_clause(self):
         """It splits the preamble in two; the community one states it in one."""
@@ -694,3 +734,273 @@ class TestAnnex8CombBoxes:
             production=[_PV],
         )
         assert snapshot["ean_delivery"] is None
+
+
+class TestCarryOver:
+    """A one-click regeneration: fresh CRM data, the reviewer's own edits kept."""
+
+    def _row(self, member, ean, **cells):
+        return {prefill.ROW_MEMBER_ID: member, "ean": ean, "nom": f"M{member}", **cells}
+
+    def test_a_scalar_the_reviewer_set_wins_and_the_others_are_fresh(self):
+        before = {"community_name": "Old name", "representative_name": None}
+        snapshot = {"community_name": "Old name", "representative_name": "Alice Dupont"}
+        fresh = {"community_name": "New name", "representative_name": None}
+
+        carried = prefill.carry_over(fresh, snapshot, before)
+
+        assert carried == {"community_name": "New name", "representative_name": "Alice Dupont"}
+
+    def test_a_cleared_value_stays_cleared(self):
+        carried = prefill.carry_over({"vat": "BE1"}, {"vat": None}, {"vat": "BE1"})
+        assert carried == {"vat": None}
+
+    def test_an_edited_cell_keeps_its_edit_and_the_rest_of_the_row_is_fresh(self):
+        before = {"participants": [self._row(1, "E1", localite="Liege", part_allouee=None)]}
+        snapshot = {"participants": [self._row(1, "E1", localite="Liege", part_allouee=40)]}
+        fresh = {"participants": [self._row(1, "E1", localite="Liège", part_allouee=None)]}
+
+        rows = prefill.carry_over(fresh, snapshot, before)["participants"]
+
+        assert rows == [self._row(1, "E1", localite="Liège", part_allouee=40)]
+
+    def test_a_row_the_crm_added_since_comes_in_and_one_it_dropped_goes(self):
+        before = {"participants": [self._row(1, "E1"), self._row(2, "E2")]}
+        snapshot = {"participants": [self._row(1, "E1", part_allouee=50), self._row(2, "E2")]}
+        fresh = {"participants": [self._row(1, "E1"), self._row(3, "E3")]}
+
+        rows = prefill.carry_over(fresh, snapshot, before)["participants"]
+
+        assert rows == [self._row(1, "E1", part_allouee=50), self._row(3, "E3")]
+
+    def test_a_row_the_reviewer_removed_stays_removed(self):
+        before = {"participants": [self._row(1, "E1"), self._row(2, "E2")]}
+        snapshot = {"participants": [self._row(1, "E1")]}
+        fresh = {"participants": [self._row(1, "E1"), self._row(2, "E2")]}
+
+        assert prefill.carry_over(fresh, snapshot, before)["participants"] == [self._row(1, "E1")]
+
+    def test_a_row_the_reviewer_added_stays_after_the_crms(self):
+        """The CRM models no storage unit: the reviewer types it, every time otherwise."""
+        hand_typed = {"ean": None, "nom": "Batterie", "puissance_kva": 10}
+        before = {"storage": []}
+        snapshot = {"storage": [hand_typed]}
+        fresh = {"storage": []}
+
+        assert prefill.carry_over(fresh, snapshot, before)["storage"] == [hand_typed]
+
+    def test_an_untouched_sheet_is_simply_fresh(self):
+        before = {"participants": [self._row(1, "E1")]}
+        fresh = {"participants": [self._row(1, "E1", localite="Namur"), self._row(2, "E2")]}
+
+        assert prefill.carry_over(fresh, before, before) == fresh
+
+    def test_an_unmatchable_crm_row_is_not_doubled(self):
+        anonymous = {"nom": None, "ean": None, "localite": "Huy"}
+        before = {"installations": [anonymous]}
+        snapshot = {"installations": [anonymous, {"ean": "E9", "nom": "added"}]}
+        fresh = {"installations": [anonymous]}
+
+        rows = prefill.carry_over(fresh, snapshot, before)["installations"]
+
+        assert rows == [anonymous, {"ean": "E9", "nom": "added"}]
+
+    def test_the_inputs_are_not_mutated(self):
+        before = {"participants": [self._row(1, "E1")], "x": None}
+        snapshot = {"participants": [self._row(1, "E1", part_allouee=1)], "x": "typed"}
+        fresh = {"participants": [self._row(1, "E1")], "x": None}
+        copies = [copy.deepcopy(d) for d in (before, snapshot, fresh)]
+
+        carried = prefill.carry_over(fresh, snapshot, before)
+        carried["participants"][0]["nom"] = "changed"
+
+        assert [before, snapshot, fresh] == copies
+
+
+class TestASwornDeclarationIsTheParticipants:
+    """Annex 8 is signed by one participant: a per-member piece is filled with
+    that participant's identity and EANs, never someone else's."""
+
+    def _declaration(self, id_member):
+        return prefill.build_snapshot(
+            prefill.DOC_TYPE_ANNEX8_SWORN_DECLARATION,
+            community=_COMMUNITY,
+            participants=(_ALICE, _ACME),
+            production=(_PV,),
+            id_member=id_member,
+        )
+
+    def test_an_individual_signs_in_their_own_name(self):
+        snapshot = self._declaration(_ALICE.id_member)
+
+        assert snapshot["declarant_name"] == "Alice Dupont"
+        assert snapshot["declarant_company_name"] is None
+        assert snapshot["declarant_address"] == "Rue Basse 3, 5000 Namur"
+        assert snapshot["declarant_email"] == "alice@example.be"
+        assert snapshot["community_name"] == _COMMUNITY.name
+
+    def test_a_company_is_named_and_its_signatory_left_to_the_reviewer(self):
+        snapshot = self._declaration(_ACME.id_member)
+
+        assert snapshot["declarant_company_name"] == "ACME SRL"
+        assert snapshot["declarant_name"] is None
+
+    def test_only_the_participants_own_eans_are_offered(self):
+        acme = self._declaration(_ACME.id_member)
+        alice = self._declaration(_ALICE.id_member)
+
+        assert (acme["ean_delivery"], acme["ean_injection"]) == (
+            "541448000000000003",
+            "541448000000000009",
+        )
+        # Two delivery points: which one is declared is the reviewer's call.
+        assert (alice["ean_delivery"], alice["ean_injection"]) == (None, None)
+
+    def test_the_checkboxes_start_unticked(self):
+        snapshot = self._declaration(_ALICE.id_member)
+        assert snapshot["sharing_within_community"] is False
+
+
+class TestTheDsoConventionKnowsTheProcedure:
+    _KEY = AllocationKey(name="Clé 70/30", description="", since=datetime.date(2026, 11, 1))
+
+    def test_the_operator_the_date_and_the_key_come_from_the_procedure(self):
+        snapshot = prefill.build_snapshot(
+            prefill.DOC_TYPE_DSO_AGREEMENT_COMMUNITY,
+            community=_COMMUNITY,
+            grd_ref="ores",
+            requested_effective_date=datetime.date(2027, 1, 1),
+            key=self._KEY,
+        )
+
+        assert snapshot["grid_operator_name"] == "ORES"
+        assert snapshot["start_date"] == "01/01/2027"
+        assert snapshot["distribution_key"] == "Clé 70/30"
+        assert snapshot["suspensive_condition"] is None  # the parties' terms
+
+    def test_an_unknown_operator_is_kept_as_written(self):
+        snapshot = prefill.build_snapshot(
+            prefill.DOC_TYPE_DSO_AGREEMENT_BUILDING, community=_COMMUNITY, grd_ref="Gaselwest"
+        )
+        assert snapshot["grid_operator_name"] == "Gaselwest"
+
+
+class TestTheKeyDescription:
+    def test_iterations_and_shares_are_laid_out_as_percentages(self):
+        key = AllocationKey(
+            name="Clé quartier",
+            description="Deux itérations.",
+            since=datetime.date(2026, 11, 1),
+            iterations=(
+                KeyIteration(
+                    number=1,
+                    share=0.7,
+                    consumers=(KeyShare("École", 0.6), KeyShare("Mairie", 0.4)),
+                ),
+                KeyIteration(number=2, share=0.3, consumers=(KeyShare("Ménages", 1.0),)),
+            ),
+        )
+
+        snapshot = prefill.build_snapshot(
+            prefill.DOC_TYPE_KEY_DESCRIPTION, community=_COMMUNITY, key=key
+        )
+
+        assert snapshot["key_name"] == "Clé quartier"
+        assert snapshot["key_since"] == "01/11/2026"
+        assert snapshot["iterations"] == [
+            {"iteration": 1, "part": 70.0},
+            {"iteration": 2, "part": 30.0},
+        ]
+        assert snapshot["key_shares"] == [
+            {"iteration": 1, "consommateur": "École", "part": 60.0},
+            {"iteration": 1, "consommateur": "Mairie", "part": 40.0},
+            {"iteration": 2, "consommateur": "Ménages", "part": 100.0},
+        ]
+
+    def test_without_a_key_the_sheets_are_empty_for_the_reviewer(self):
+        snapshot = prefill.build_snapshot(prefill.DOC_TYPE_KEY_DESCRIPTION, community=_COMMUNITY)
+
+        assert snapshot["key_name"] is None
+        assert (snapshot["iterations"], snapshot["key_shares"]) == ([], [])
+
+
+class TestKeyWarnings:
+    """What the operation's key lacks: a key description of nothing is refused,
+    a key that is only odd is filed with a warning."""
+
+    @staticmethod
+    def _key(*iterations: KeyIteration) -> AllocationKey:
+        return AllocationKey(
+            id=7,
+            name="Clé vent",
+            description="",
+            since=datetime.date(2026, 11, 1),
+            iterations=iterations,
+        )
+
+    def _warnings(
+        self, key: AllocationKey | None, doc_type: str = prefill.DOC_TYPE_KEY_DESCRIPTION
+    ):
+        return prefill.key_warnings(doc_type, key, id_sharing_operation=3)
+
+    def test_no_key_blocks_the_key_description(self):
+        (warning,) = self._warnings(None)
+
+        assert warning.code == "key.missing"
+        assert (warning.subject_type, warning.subject_id) == ("sharing_operation", "3")
+        assert warning.blocking is True
+
+    def test_a_key_with_no_iteration_blocks_it(self):
+        (warning,) = self._warnings(self._key())
+
+        assert warning.code == "key.no_iteration"
+        assert (warning.subject_type, warning.subject_id) == ("key", "7")
+        assert warning.blocking is True
+
+    def test_a_complete_key_says_nothing(self):
+        key = self._key(
+            KeyIteration(number=1, share=0.7, consumers=(KeyShare("A", 1.0),)),
+            KeyIteration(number=2, share=0.2, consumers=(KeyShare("A", 1.0),)),
+            KeyIteration(number=3, share=0.1, consumers=(KeyShare("A", 1.0),)),
+        )
+        # 0.7 + 0.2 + 0.1 is 0.9999999999999999 as floats: not a 99.99 % key.
+        assert self._warnings(key) == ()
+
+    def test_an_iteration_without_consumer_only_warns(self):
+        key = self._key(
+            KeyIteration(number=1, share=0.6, consumers=(KeyShare("A", 1.0),)),
+            KeyIteration(number=2, share=0.4),
+        )
+
+        (warning,) = self._warnings(key)
+
+        assert warning.code == "key.iteration_no_consumer"
+        assert warning.params["iteration"] == "2"
+        assert warning.blocking is False
+
+    def test_iterations_short_of_100_percent_only_warn(self):
+        key = self._key(KeyIteration(number=1, share=0.8, consumers=(KeyShare("A", 1.0),)))
+
+        (warning,) = self._warnings(key)
+
+        assert (warning.code, warning.params["total"]) == ("key.iterations_total", "80")
+        assert warning.blocking is False
+
+    def test_a_dso_convention_without_key_only_warns(self):
+        (warning,) = self._warnings(None, prefill.DOC_TYPE_DSO_AGREEMENT_COMMUNITY)
+
+        assert (warning.code, warning.blocking) == ("key.missing", False)
+        # A convention does not describe the key: an empty one is not its business.
+        assert self._warnings(self._key(), prefill.DOC_TYPE_DSO_AGREEMENT_BUILDING) == ()
+
+    def test_a_piece_that_does_not_use_the_key_says_nothing(self):
+        assert self._warnings(None, prefill.DOC_TYPE_ANNEX6_SHARING_FORM) == ()
+
+    def test_blockers_come_first_and_are_listed_once(self):
+        community = dataclasses.replace(_COMMUNITY, legal_name=None)
+        warnings = prefill.sort_warnings(
+            (*prefill.community_warnings(community), *self._warnings(None), *self._warnings(None))
+        )
+
+        assert warnings[0].blocking is True
+        assert prefill.blocking_codes(warnings) == ["key.missing"]

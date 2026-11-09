@@ -14,37 +14,6 @@ class Region(IntEnum):
     VLA = 3
 
 
-class DossierType(IntEnum):
-    """Administrative dossier kinds (spec §5.3)."""
-
-    CREATION_NOTIFICATION = 1  # → CWaPE, via Mon Espace
-    MODIFICATION = 2  # → CWaPE, 15-business-day notification
-    ANNUAL_REPORT = 3  # → CWaPE, recurring
-    SHARING_AUTHORIZATION = 4  # → DSO, then opinion → CWaPE
-    SHARING_MODIFICATION = 5  # → DSO
-    CESSATION = 6  # → CWaPE (via modification)
-
-
-class DossierStatus(IntEnum):
-    """Dossier lifecycle. Transitions are journaled in ``status_event``."""
-
-    IN_PREPARATION = 1
-    SUBMITTED = 2
-    COMPLETE = 3
-    CLOSED = 4
-    LAPSED = 5
-
-
-class DocumentStatus(IntEnum):
-    """Document lifecycle. Transitions are journaled in ``status_event``."""
-
-    DRAFT = 1
-    READY = 2
-    SENT = 3
-    ACKNOWLEDGED = 4
-    OBSOLETE = 5
-
-
 class DocOrigin(IntEnum):
     """How a document's versions are produced.
 
@@ -74,6 +43,33 @@ class RenderState(IntEnum):
     FAILED = 2
 
 
+class RenderPurpose(IntEnum):
+    """Why a render occupies a piece's ``document_render`` slot."""
+
+    RENDER = 1  # produce a new version
+    VERIFY = 2  # regenerate an existing version and compare its sha256; no version
+
+
+class VersionStage(IntEnum):
+    """What a ``document_version`` is for, held in ``document_version.stage``.
+
+    A DB CHECK keeps it consistent with the watermark: a draft carries one, the
+    other two never do.
+    """
+
+    DRAFT = 1  # a working render, stamped with the plugin's watermark
+    FINAL = 2  # what is sent: an unstamped render of a reviewed snapshot, or an upload
+    TO_SIGN = 3  # a pre-filled collected piece; its signed upload is the FINAL
+
+
+class CheckOutcome(IntEnum):
+    """What regenerating a version from its snapshot gave, in ``version_check``."""
+
+    IDENTICAL = 1  # same sha256
+    DIFFERENT = 2  # another sha256: renderer_json says whether the renderer changed
+    FAILED = 3  # the render itself failed
+
+
 class SubjectType(IntEnum):
     """What a ``status_event`` row is about."""
 
@@ -86,6 +82,7 @@ class OffsetUnit(IntEnum):
 
     BUSINESS_DAYS = 1  # jours ouvres (Mon-Fri minus Belgian public holidays)
     MONTHS = 2  # calendar months (relativedelta)
+    CALENDAR_DAYS = 3
 
 
 class DeadlineStatus(IntEnum):
@@ -97,32 +94,222 @@ class DeadlineStatus(IntEnum):
     CANCELLED = 4
 
 
-class TriggerEvent(StrEnum):
-    """Keys that link a state transition to the ``deadline_rule`` rows it fires.
+# --- Procedures engine (espace administratif) --------------------------------
+# Generic enums are coded integers, as everywhere in this schema; a code that
+# belongs to one regulator (a step, a response type, a variant, a piece code)
+# is a string the plugin validates and never appears here.
 
-    Stored as text in ``deadline_rule.trigger_event`` so a new rule is pure data.
+
+class ProcedureStatus(IntEnum):
+    """The engine's common statuses, held in ``dossier.status``.
+
+    The regulator plugin's own step (incomplete, non-conformity, accepted…) is
+    ``dossier.step``. Codes 1, 2 and 5 keep the meaning they had for the July
+    ``DossierStatus``; 3 (COMPLETE) and 4 (CLOSED) are retired and only survive
+    in the journal's history.
     """
 
-    DOSSIER_SUBMITTED = "dossier.submitted"
-    DOSSIER_COMPLETE = "dossier.complete"
-    DOSSIER_MODIFICATION = "dossier.modification"
-    DOCUMENT_ACKNOWLEDGED_INCOMPLETE = "document.acknowledged.incomplete"
+    DRAFT = 1
+    SENT = 2
+    LAPSED = 5
+    READY = 6
+    IN_FORCE = 7
+    REFUSED = 8
+    CANCELLED = 9
 
 
-class DeadlineType(StrEnum):
-    """Keys stored in ``deadline.deadline_type`` / ``deadline_rule.deadline_type``."""
+class ProcedureDocumentStatus(IntEnum):
+    """Status of a piece of a procedure, held in ``document.status``.
 
-    COMPLETENESS_CHECK = "completeness_check"  # +10 business days
-    LAPSE = "lapse"  # +6 months
-    MODIFICATION_NOTIFICATION = "modification_notification"  # +15 business days
-    ANNUAL_REPORT = "annual_report"  # recurring, +12 months
+    READY and OBSOLETE keep their July ``DocumentStatus`` codes; 1 (DRAFT), 3
+    (SENT) and 4 (ACKNOWLEDGED) are retired. "Generating" is never a status:
+    it is read from ``document_render``.
+    """
+
+    READY = 2
+    OBSOLETE = 5
+    MISSING = 6
+    STALE = 7
+    SIGNED = 8
+    REJECTED = 9
 
 
-class AcknowledgementResult(StrEnum):
-    """``context_json.result`` supplied when acknowledging a document."""
+class ProcedureScope(IntEnum):
+    """What a procedure is about: the community itself, or one operation."""
 
-    COMPLETE = "complete"
-    INCOMPLETE = "incomplete"
+    COMMUNITY = 1
+    OPERATION = 2
+
+
+class Recipient(IntEnum):
+    """Who a procedure is sent to."""
+
+    GRD_REF = 1  # the operation's reference DSO (SPOC when several)
+    REGULATOR = 2
+
+
+class Channel(IntEnum):
+    """How a procedure is sent, or a correspondence travelled."""
+
+    EMAIL = 1
+    ONLINE_FORM = 2
+    POST = 3
+    UPLOAD = 4  # correspondence only: a file someone added by hand
+
+
+class OpenedBy(IntEnum):
+    """Who opened a procedure."""
+
+    SYSTEM = 1  # the event router or a daily job
+    USER = 2
+    MIGRATION = 3  # a July dossier converted by migration 0003
+
+
+class ChangeSubjectType(IntEnum):
+    """What a ``change`` row is about. 1 and 2 match the core's
+    ``regulatory_link_status.subject_type``."""
+
+    METER = 1
+    KEY = 2
+    MEMBER = 3
+    OPERATION = 4
+    COMMUNITY = 5
+
+
+class InboundMailStatus(IntEnum):
+    """What became of a mail the reception address received (phase 4)."""
+
+    UNMATCHED = 1  # no procedure found: a manager attaches or discards it
+    ATTACHED = 2  # attached to its procedure, to qualify
+    RECORDED = 3  # recorded as a correspondence of its procedure
+    DISCARDED = 4  # not a procedure's (spam, a mistake)
+
+
+class DigestCadence(IntEnum):
+    """How often a community's summary email goes out (``digest_setting``)."""
+
+    WORKING_DAYS = 1  # Monday to Friday; Monday's covers the weekend
+    WEEKLY = 2  # on ``weekday``
+    BIWEEKLY = 3  # on ``weekday``, every other week from ``first_on``
+    MONTHLY = 4  # on the month's first ``weekday``
+
+
+class ChangeStatus(IntEnum):
+    """Lifecycle of a ``change``."""
+
+    PENDING = 1  # detected, not filed yet (baseline awaiting confirmation)
+    ATTACHED = 2  # filed in a procedure
+    DEFERRED = 3  # postponed by the admin to a later procedure
+    EXCLUDED = 4  # the admin decided it needs no procedure
+    CANCELLED = 5  # compensated by its inverse before sending
+    APPLIED = 6  # its effect reached the core
+    REFUSED = 7  # the authority refused it
+
+
+class EventOutcome(IntEnum):
+    """What the consumer did with a core event (``processed_event.outcome``).
+
+    The lower-cased name is the ``reason`` label of
+    ``admin_events_skipped_total``.
+    """
+
+    ROUTED = 1
+    MODULE_DISABLED = 2
+    BEFORE_ACTIVATION = 3
+    ALREADY_REFLECTED = 4
+    REGULATOR_NOT_SUPPORTED = 5
+    NO_PROCEDURE = 6
+
+
+class CorrespondenceDirection(IntEnum):
+    OUTBOUND = 1
+    INBOUND = 2
+
+
+class Counterparty(IntEnum):
+    """The other side of a correspondence."""
+
+    GRD = 1
+    REGULATOR = 2
+    PARTICIPANT = 3
+    OTHER = 4
+
+
+class DocumentKind(IntEnum):
+    """Where a piece comes from."""
+
+    GENERATED = 1  # rendered from a template (annex, amendment)
+    COLLECTED = 2  # supplied by the community or a participant (signed declaration)
+    RECEIVED = 3  # sent back by the recipient
+
+
+class DeadlineParty(IntEnum):
+    """Who a deadline binds."""
+
+    COMMUNITY = 1
+    GRD = 2
+    REGULATOR = 3
+
+
+class DeadlineKind(IntEnum):
+    """What a deadline is for."""
+
+    SUBMISSION = 1  # the community must send something
+    RESPONSE = 2  # the recipient must answer
+    LAPSE = 3  # past it the procedure lapses
+    EFFECT = 4  # the change takes effect
+
+
+class RuleKind(IntEnum):
+    """How a catalogue ``deadline_rule`` computes its date."""
+
+    RELATIVE = 1  # an offset after an anchor event
+    ANNUAL = 2  # a fixed day of the year
+
+
+class Bucket(StrEnum):
+    """The dashboard group a procedure's current step puts it in. Derived from
+    the catalogue, never stored; the value is what the API returns."""
+
+    TODO = "todo"  # the community has something to do
+    WAITING = "waiting"  # the GRD or the regulator has to answer
+    PLANNED = "planned"  # scheduled: an annual filing, an effect to come
+    DONE = "done"
+
+
+class NextActionCode(StrEnum):
+    """What the dashboard's one button does, stored in ``dossier.next_action_code``.
+
+    Generic on purpose: the frontend knows these and nothing else, so adding a
+    regulator never touches it. What the button SAYS comes from the catalogue.
+    """
+
+    COMPLETE_DOCUMENTS = "complete_documents"
+    SEND = "send"
+    RECORD_RESPONSE = "record_response"
+    CONFIRM_BASELINE = "confirm_baseline"
+    NONE = "none"
+
+
+class RegulatoryStatus(IntEnum):
+    """``regulatory_link_status.regulatory_status`` in the CORE database.
+
+    A mirror of crm-backend's ``RegulatoryStatus``
+    (src/modules/regulatory/domain/regulatory-link-status.models.ts); the core
+    owns the codes and its CHECK accepts 1 to 9.
+    """
+
+    TO_NOTIFY = 1
+    PENDING_GRD = 2
+    PENDING_REGULATOR = 3
+    AUTHORIZED = 4
+    ACTIVE = 5
+    LEAVING = 6
+    ENDED = 7
+    REFUSED = 8
+    #: Filed, then cancelled, excluded or compensated before it was
+    #: authorised: the row stays (no DELETE grant), the CRM shows nothing.
+    WITHDRAWN = 9
 
 
 class FeatureName(StrEnum):
@@ -142,23 +329,22 @@ ADMIN_DOCUMENT_EVENTS_STREAM = "ADMIN_DOCUMENT_EVENTS"  # limits: fire-and-forge
 ADMIN_DOCUMENT_STREAM = "ADMIN_DOCUMENT"  # work_queue: generation requests
 ADMIN_DOCUMENT_DLQ_STREAM = "ADMIN_DOCUMENT_DLQ"  # limits: poison messages
 
-# --- Subjects the API publishes --------------------------------------------
-SUBJECT_DOCUMENT_STATUS_CHANGED = "optimce.administrative_document.document.status_changed"
-SUBJECT_DOSSIER_STATUS_CHANGED = "optimce.administrative_document.dossier.status_changed"
-SUBJECT_DEADLINE_CREATED = "optimce.administrative_document.deadline.created"
-SUBJECT_DEADLINE_MISSED = "optimce.administrative_document.deadline.missed"
+# --- Subjects the worker publishes -----------------------------------------
 SUBJECT_DOCUMENT_RENDERED = "optimce.administrative_document.document.rendered"
 
 # --- Work + dead-letter subjects (worker) ----------------------------------
 SUBJECT_GENERATE_REQUESTED = "optimce.administrative_document.document.generate.requested"
 SUBJECT_DLQ_GENERATE = "optimce.administrative_document.dlq.generate"
 SUBJECT_DLQ_DOCGEN_RESULT = "optimce.administrative_document.dlq.docgen_result"
+SUBJECT_DLQ_CORE_EVENT = "optimce.administrative_document.dlq.core_event"
+
+# --- The core's domain events (owned by crm-backend's outbox relay) ---------
+# crm-backend/src/shared/outbox/core-events.ts. This service binds a durable to
+# the stream and never declares it.
+CORE_EVENTS_STREAM = "CORE_EVENTS"
+CORE_EVENTS_SUBJECT = "core.evt.>"
 
 # --- Event.type values carried in the envelope (spec R6) -------------------
-EVENT_DOCUMENT_STATUS_CHANGED = "admin.document.status_changed"
-EVENT_DOSSIER_STATUS_CHANGED = "admin.dossier.status_changed"
-EVENT_DEADLINE_CREATED = "admin.dossier.deadline_created"
-EVENT_DEADLINE_MISSED = "admin.dossier.deadline_missed"
 EVENT_DOCUMENT_RENDERED = "admin.document.rendered"
 EVENT_GENERATE_REQUESTED = "admin.document.generate_requested"
 
@@ -206,3 +392,28 @@ def extension_for_content_type(content_type: str | None) -> str:
     if not content_type:
         return ""
     return EXTENSION_BY_CONTENT_TYPE.get(content_type.split(";")[0].strip(), "")
+
+
+class PieceSignatureStatus(IntEnum):
+    """Where a piece's signature request stands (``piece_signature.status``),
+    after the signature annexe's events."""
+
+    REQUESTED = 1  # published, not yet accepted by the service
+    OPEN = 2
+    SIGNED = 3
+    DECLINED = 4
+    EXPIRED = 5
+    CANCELLED = 6
+    FAILED = 7
+
+
+#: The live ones: one at a time per piece.
+LIVE_SIGNATURE_STATUSES = (PieceSignatureStatus.REQUESTED, PieceSignatureStatus.OPEN)
+
+#: The signature annexe's contract (its domain/payloads.py): we ask on the
+#: first subject and hear back on our own prefix of the second.
+SIGNATURE_SOURCE = "administrative_document"
+SUBJECT_SIGNATURE_REQUEST = "signature.request.create"
+SUBJECT_SIGNATURE_EVENTS = f"signature.event.{SIGNATURE_SOURCE}.>"
+SUBJECT_DLQ_SIGNATURE_EVENT = "optimce.administrative_document.dlq.signature_event"
+SIGNATURE_FEATURE = "signature"

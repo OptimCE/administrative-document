@@ -1,0 +1,77 @@
+# Fiche de saisie of the CWaPE's "Formulaire de modification d'une communauté
+# d'énergie" (version of 27 June 2024, bundle community_modification/v1): its
+# reference and its sections 2.1 and 2.2, in the form's order. French labels
+# are the form's own. Every key is one the bundle binds.
+piece: community_modification
+labels:
+  fr: Modification d'une communauté d'énergie
+  en: Change to an energy community
+  nl: Wijziging van een energiegemeenschap
+  de: Änderung einer Energiegemeinschaft
+sections:
+  - labels:
+      fr: "1. Référence de la communauté d'énergie"
+      en: "1. Energy community reference"
+      nl: "1. Referentie van de energiegemeenschap"
+      de: "1. Referenz der Energiegemeinschaft"
+    fields:
+      - key: cwape_reference_digits
+        labels: {fr: "Numéro de référence attribué par la CWaPE (CE-…)", en: "Reference number given by the CWaPE (CE-…)", nl: "Referentienummer toegekend door de CWaPE (CE-…)", de: "Von der CWaPE vergebene Referenznummer (CE-…)"}
+      - key: community_legal_name
+        labels: {fr: "Dénomination de la communauté d'énergie", en: Name of the energy community, nl: Naam van de energiegemeenschap, de: Bezeichnung der Energiegemeinschaft}
+  - labels:
+      fr: "2.1. Modification des coordonnées de la communauté d'énergie"
+      en: "2.1. Change to the energy community's details"
+      nl: "2.1. Wijziging van de gegevens van de energiegemeenschap"
+      de: "2.1. Änderung der Angaben zur Energiegemeinschaft"
+    fields:
+      - key: community_vat_number
+        labels: {fr: N° BCE, en: Company number (BCE), nl: Ondernemingsnummer (KBO), de: Unternehmensnummer (ZDU)}
+      - key: community_legal_form
+        labels: {fr: Forme juridique, en: Legal form, nl: Rechtsvorm, de: Rechtsform}
+      - key: community_street
+        labels: {fr: Rue (adresse du siège), en: Street (registered office), nl: Straat (maatschappelijke zetel), de: Straße (Sitz)}
+      - key: community_number
+        labels: {fr: N°, en: Number, nl: Nr., de: Nr.}
+      - key: community_box
+        labels: {fr: Boîte, en: Box, nl: Bus, de: Briefkasten}
+      - key: community_postcode
+        labels: {fr: Code postal, en: Postcode, nl: Postcode, de: Postleitzahl}
+      - key: community_city
+        labels: {fr: Commune, en: Municipality, nl: Gemeente, de: Gemeinde}
+  - labels:
+      fr: "2.2. Modification de l'identité du représentant de la communauté d'énergie ou de ses coordonnées"
+      en: "2.2. Change to the representative or their details"
+      nl: "2.2. Wijziging van de vertegenwoordiger of van diens gegevens"
+      de: "2.2. Änderung des Vertreters oder seiner Angaben"
+    fields:
+      - key: representative_name
+        labels: {fr: Nom et prénom du représentant ou dénomination, en: Representative's full name or company name, nl: Naam en voornaam of benaming van de vertegenwoordiger, de: Name und Vorname oder Bezeichnung des Vertreters}
+      - key: representative_vat_number
+        labels: {fr: "N° BCE (si d'application)", en: Company number (if any), nl: Ondernemingsnummer (indien van toepassing), de: Unternehmensnummer (falls zutreffend)}
+      - key: representative_street
+        labels: {fr: Rue, en: Street, nl: Straat, de: Straße}
+      - key: representative_number
+        labels: {fr: N°, en: Number, nl: Nr., de: Nr.}
+      - key: representative_box
+        labels: {fr: Boîte, en: Box, nl: Bus, de: Briefkasten}
+      - key: representative_postcode
+        labels: {fr: Code postal, en: Postcode, nl: Postcode, de: Postleitzahl}
+      - key: representative_city
+        labels: {fr: Commune, en: Municipality, nl: Gemeente, de: Gemeinde}
+  - labels:
+      fr: Personne de contact
+      en: Contact person
+      nl: Contactpersoon
+      de: Ansprechperson
+    fields:
+      - key: contact_last_name
+        labels: {fr: Nom, en: Last name, nl: Naam, de: Name}
+      - key: contact_first_name
+        labels: {fr: Prénom, en: First name, nl: Voornaam, de: Vorname}
+      - key: contact_street
+        labels: {fr: Rue, en: Street, nl: Straat, de: Straße}
+      - key: contact_number
+        labels: {fr: N°, en: Number, nl: Nr., de: Nr.}
+      - key: contact_box
+        labels: {fr: Boîte, en: Box, nl: Bus, de: Briefkasten}

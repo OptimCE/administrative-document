@@ -19,7 +19,7 @@ not the form.
 from __future__ import annotations
 
 import datetime
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -53,6 +53,20 @@ class CommunityContext:
     legal_name: str | None = None
     vat_number: str | None = None
     address: PostalAddress | None = None
+    # Who represents the community towards the GRD and the regulator (phase 4).
+    representative_first_name: str | None = None
+    representative_last_name: str | None = None
+    representative_email: str | None = None
+
+    @property
+    def representative(self) -> str | None:
+        """The representative's name, as a form writes it, or None."""
+        parts = [
+            (self.representative_first_name or "").strip(),
+            (self.representative_last_name or "").strip(),
+        ]
+        name = " ".join(part for part in parts if part)
+        return name or None
 
 
 @dataclass(frozen=True)
@@ -125,12 +139,17 @@ class PrefillWarning:
     ``subject_id`` is a string for every kind of subject: an EAN is an 18-digit
     identifier that must never become an int, and a member id is only ever used
     to build ``/members/{id}``.
+
+    ``blocking`` marks what makes the document meaningless rather than merely
+    incomplete (a key description of a key with no iteration): the render is
+    refused until the CRM is fixed, instead of filing a form that says nothing.
     """
 
     code: str
-    subject_type: str  # "meter" | "member" | "community"
+    subject_type: str  # "meter" | "member" | "community" | "key" | "sharing_operation"
     subject_id: str | None = None
     params: Mapping[str, str] = field(default_factory=dict)
+    blocking: bool = False
 
 
 #: A delivery point in the operation that no member owns. It cannot be listed
@@ -150,6 +169,45 @@ WARNING_MEMBER_FIELD_MISSING = "member.field_missing"
 #: such as 5414482000000 does start with 54 and is still unprintable, so a code
 #: called "ean_prefix_not_54" would be a lie for half the cases it fires on.
 WARNING_EAN_NOT_FORM_REPRESENTABLE = "meter.ean_not_form_representable"
+#: The operation has no approved key, so there is nothing to describe.
+WARNING_KEY_MISSING = "key.missing"
+#: The operation's key has no iteration: it splits nothing.
+WARNING_KEY_NO_ITERATION = "key.no_iteration"
+#: One iteration of the key names no consumer.
+WARNING_KEY_ITERATION_NO_CONSUMER = "key.iteration_no_consumer"
+#: The iterations' shares of the energy do not add up to 100 %.
+WARNING_KEY_ITERATIONS_TOTAL = "key.iterations_total"
+
+
+@dataclass(frozen=True)
+class KeyShare:
+    """One consumer's share of an iteration, as the CRM stores it (a fraction)."""
+
+    name: str
+    share: float
+
+
+@dataclass(frozen=True)
+class KeyIteration:
+    """One iteration of an allocation key: its share of the energy (a fraction)
+    and how that share is split between the consumers."""
+
+    number: int
+    share: float
+    consumers: tuple[KeyShare, ...] = ()
+
+
+@dataclass(frozen=True)
+class AllocationKey:
+    """The key an operation applies, for the description the regulator asks of a
+    non-standard key."""
+
+    name: str
+    description: str
+    since: datetime.date
+    iterations: tuple[KeyIteration, ...] = ()
+    #: The CRM's ``allocation_key.id``, so a warning can point at ``/keys/{id}``.
+    id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -182,14 +240,31 @@ class CrmCoreReadPort(Protocol):
         ...
 
     async def get_operation_participants(
-        self, id_community: int, id_sharing_operation: int
+        self, id_community: int, id_sharing_operation: int | None
     ) -> OperationParticipants:
         """Participants, production units and storage units of one operation.
+
+        ``id_sharing_operation=None`` reads the whole community instead: a
+        community-scope procedure (CE_NOTIFICATION, CE_RAPPORT_ANNUEL) has no
+        operation, and its forms list every participant.
 
         A single call because the three lists come from the same ``meter_data``
         scan and every annexe needs at least two of them; splitting it would mean
         three round trips over the same rows.
         """
+        ...
+
+    async def get_operation_key(
+        self, id_community: int, id_sharing_operation: int
+    ) -> AllocationKey | None:
+        """The operation's most recently approved key, with its iterations and
+        consumers; None when it has none. The most recent, not the one in force
+        today: a procedure notifies a key change before it takes effect."""
+        ...
+
+    async def member_names(self, id_community: int, ids: Sequence[int]) -> dict[int, str]:
+        """Display names of these members of the community (first name, then name;
+        a company's name alone). A member of another community is not named."""
         ...
 
     async def member_ids_for_user(self, *, id_community: int, auth_user_id: str) -> list[int]:

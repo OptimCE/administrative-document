@@ -7,16 +7,20 @@ breaks one file with an obvious diff, rather than leaking through the codebase.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.regions import region_for_regulator
 from ports.crm_core import (
     WARNING_METER_NO_MEMBER,
+    AllocationKey,
     CommunityContext,
     Installation,
+    KeyIteration,
+    KeyShare,
     MeterPoint,
     OperationParticipants,
     Participant,
@@ -27,6 +31,10 @@ from ports.crm_core import (
 
 # meter_data.status value for an active attribution (MeterDataStatus.ACTIVE).
 _ACTIVE_METER_DATA_STATUS = 1
+# In one operation, a meter waiting for its GRD (3) or its manager (4) is listed
+# too: it is what an authorisation or a modification notifies (phase 4; one
+# status per meter keeps it waiting until its procedure makes it active).
+_IN_OPERATION_METER_DATA_STATUSES = [1, 3, 4]
 
 _COMMUNITY_IDENTITY_SQL = text(
     """
@@ -35,6 +43,9 @@ _COMMUNITY_IDENTITY_SQL = text(
            c.regulator,
            c.legal_name,
            c.vat_number,
+           c.representative_first_name,
+           c.representative_last_name,
+           c.representative_email,
            a.street,
            a.number     AS address_number,
            a.postcode,
@@ -68,7 +79,43 @@ _SHARING_OPERATIONS_SQL = text(
 )
 
 
-# One row per ACTIVE meter attribution in the operation, carrying the member's
+# The operation's most recently approved key (status 1 = approved). The most
+# recent rather than the one in force today: a key change is notified before
+# it takes effect.
+_OPERATION_KEY_SQL = text(
+    """
+    SELECT k.id, k.name, k.description, sok.start_date
+      FROM sharing_operation_key sok
+      JOIN allocation_key k ON k.id = sok.id_key
+     WHERE sok.id_community = :id_community
+       AND sok.id_sharing_operation = :id_sharing_operation
+       AND sok.status = 1
+     ORDER BY sok.start_date DESC, sok.id DESC
+     LIMIT 1
+    """
+)
+
+_KEY_ITERATIONS_SQL = text(
+    """
+    SELECT id, number, energy_allocated_percentage AS share
+      FROM iteration
+     WHERE id_key = :id_key AND id_community = :id_community
+     ORDER BY number, id
+    """
+)
+
+_KEY_CONSUMERS_SQL = text(
+    """
+    SELECT c.id_iteration, c.name, c.energy_allocated_percentage AS share
+      FROM consumer c
+      JOIN iteration i ON i.id = c.id_iteration
+     WHERE i.id_key = :id_key AND c.id_community = :id_community
+     ORDER BY c.id_iteration, c.id
+    """
+)
+
+# One row per meter attribution in the operation (active, or waiting when one
+# operation is asked for: see _IN_OPERATION_METER_DATA_STATUSES), carrying the member's
 # identity and both the meter's own address and the member's home address. The
 # annexes list a delivery point at the meter's address, so that one wins when
 # present. member is LEFT JOINed: an attributed-to-nobody meter must still show
@@ -111,11 +158,12 @@ _OPERATION_METERS_SQL = text(
       LEFT JOIN address   ma  ON ma.id = m.id_address
       LEFT JOIN address   ha  ON ha.id = mem.id_home_address
      WHERE md.id_community = :id_community
-       AND md.id_sharing_operation = :id_sharing_operation
-       AND md.status = :active
+       AND (CAST(:id_sharing_operation AS INTEGER) IS NULL
+            OR md.id_sharing_operation = :id_sharing_operation)
+       AND md.status IN :statuses
      ORDER BY mem.name NULLS LAST, mem.id, md.ean
     """
-)
+).bindparams(bindparam("statuses", expanding=True))
 
 
 def _as_optional_str(value: object) -> str | None:
@@ -228,6 +276,9 @@ class SqlAlchemyCrmCoreRead:
             legal_name=row["legal_name"],
             vat_number=row["vat_number"],
             address=address,
+            representative_first_name=row["representative_first_name"],
+            representative_last_name=row["representative_last_name"],
+            representative_email=row["representative_email"],
         )
 
     async def get_sharing_operation(
@@ -252,9 +303,10 @@ class SqlAlchemyCrmCoreRead:
         ]
 
     async def get_operation_participants(
-        self, id_community: int, id_sharing_operation: int
+        self, id_community: int, id_sharing_operation: int | None
     ) -> OperationParticipants:
-        """Fold the operation's active meter attributions into the annexe lists.
+        """Fold the operation's meter attributions into the annexe lists: the
+        active ones community-wide, the waiting ones too for one operation.
 
         Note on storage: the CRM does not model storage units — ``meter_data``
         distinguishes only consumption from injection. The sharing form's storage
@@ -266,7 +318,9 @@ class SqlAlchemyCrmCoreRead:
             {
                 "id_community": id_community,
                 "id_sharing_operation": id_sharing_operation,
-                "active": _ACTIVE_METER_DATA_STATUS,
+                "statuses": [_ACTIVE_METER_DATA_STATUS]
+                if id_sharing_operation is None
+                else _IN_OPERATION_METER_DATA_STATUSES,
             },
         )
         rows: list[dict[str, Any]] = [dict(row) for row in result.mappings().all()]
@@ -303,6 +357,99 @@ class SqlAlchemyCrmCoreRead:
             storage=(),
             warnings=tuple(warnings),
         )
+
+    async def get_operation_key(
+        self, id_community: int, id_sharing_operation: int
+    ) -> AllocationKey | None:
+        key = (
+            (
+                await self._session.execute(
+                    _OPERATION_KEY_SQL,
+                    {"id_community": id_community, "id_sharing_operation": id_sharing_operation},
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if key is None:
+            return None
+        iterations = (
+            (
+                await self._session.execute(
+                    _KEY_ITERATIONS_SQL, {"id_community": id_community, "id_key": key["id"]}
+                )
+            )
+            .mappings()
+            .all()
+        )
+        shares: dict[int, list[KeyShare]] = {}
+        for row in (
+            (
+                await self._session.execute(
+                    _KEY_CONSUMERS_SQL, {"id_community": id_community, "id_key": key["id"]}
+                )
+            )
+            .mappings()
+            .all()
+        ):
+            shares.setdefault(row["id_iteration"], []).append(
+                KeyShare(name=row["name"], share=float(row["share"]))
+            )
+        return AllocationKey(
+            id=int(key["id"]),
+            name=key["name"],
+            description=key["description"] or "",
+            since=key["start_date"],
+            iterations=tuple(
+                KeyIteration(
+                    number=int(row["number"]),
+                    share=float(row["share"]),
+                    consumers=tuple(shares.get(row["id"], ())),
+                )
+                for row in iterations
+            ),
+        )
+
+    async def member_names(self, id_community: int, ids: Sequence[int]) -> dict[int, str]:
+        if not ids:
+            return {}
+        result = await self._session.execute(
+            text(
+                "SELECT m.id, m.name, i.first_name FROM member m "
+                "LEFT JOIN individual i ON i.id = m.id "
+                "WHERE m.id_community = :cid AND m.id = ANY(:ids)"
+            ),
+            {"cid": id_community, "ids": list(ids)},
+        )
+        return {
+            int(row["id"]): " ".join(part for part in (row["first_name"], row["name"]) if part)
+            for row in result.mappings()
+        }
+
+    async def feature_active(self, id_community: int, feature: str) -> bool:
+        """Whether the community subscribed to another annexe (the signature one)."""
+        result = await self._session.execute(
+            text(
+                "SELECT is_active FROM community_subscription "
+                "WHERE id_community = :cid AND feature = :feature"
+            ),
+            {"cid": id_community, "feature": feature},
+        )
+        return bool(result.scalar_one_or_none())
+
+    async def members_with_account(self, id_community: int, ids: Sequence[int]) -> set[int]:
+        """The members of ``ids`` linked to at least one account (who can sign in the app)."""
+        if not ids:
+            return set()
+        result = await self._session.execute(
+            text(
+                "SELECT DISTINCT m.id FROM member m "
+                "JOIN user_member_link uml ON uml.id_member = m.id "
+                "WHERE m.id_community = :cid AND m.id = ANY(:ids)"
+            ),
+            {"cid": id_community, "ids": list(ids)},
+        )
+        return {int(row[0]) for row in result}
 
     async def member_ids_for_user(self, *, id_community: int, auth_user_id: str) -> list[int]:
         """The member id(s) the authenticated user represents in this community."""

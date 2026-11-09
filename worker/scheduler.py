@@ -1,12 +1,12 @@
-"""A once-a-day tick for the deadline sweep.
+"""A once-a-day tick for the engine's daily jobs (``worker/engine_jobs.py``).
 
 Fires at a fixed LOCAL time rather than "every N hours from process start". A
-from-start interval re-runs the sweep on every deploy, and the sweep is a
-user-visible event: `admin_deadline.missed` is TRANSACTIONAL and reaches every
-manager's inbox. `reminded_at` and the MISSED status flip make a re-run
-harmless, so this is hygiene rather than correctness — but "one email a day"
-versus "an email every deploy" is the difference between a useful reminder and
-one people filter.
+from-start interval re-runs the jobs on every deploy, and they are a
+user-visible event: the in-app reminders, and the one summary email per
+manager per day. `reminders_sent`, the MISSED status flip and the summary's
+per-day dedupe key make a re-run harmless, so this is hygiene rather than
+correctness — but a morning email versus one at every deploy is the
+difference between a useful summary and one people filter.
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ import logging
 from zoneinfo import ZoneInfo
 
 from core.config import settings
-from worker.sweeps import try_sweep_deadlines
+from engine.contracts import PluginRegistry
+from worker.engine_jobs import try_run_daily_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,8 @@ def seconds_until_next_run(now: datetime.datetime, hour_local: int) -> float:
     return (target - local_now).total_seconds()
 
 
-async def run_deadline_scheduler(shutdown: asyncio.Event) -> None:
-    """Sleep until the next scheduled hour, sweep, repeat, until shutdown."""
+async def run_deadline_scheduler(shutdown: asyncio.Event, *, registry: PluginRegistry) -> None:
+    """Sleep until the next scheduled hour, run the jobs, repeat, until shutdown."""
     if not settings.DEADLINE_SWEEP_ENABLED:
         logger.info("deadline scheduler disabled")
         return
@@ -47,14 +48,14 @@ async def run_deadline_scheduler(shutdown: asyncio.Event) -> None:
         delay = seconds_until_next_run(
             datetime.datetime.now(datetime.UTC), settings.DEADLINE_SWEEP_HOUR_LOCAL
         )
-        logger.info("next deadline sweep in %.0fs", delay)
+        logger.info("next daily jobs in %.0fs", delay)
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(shutdown.wait(), timeout=delay)
         if shutdown.is_set():
             return
         try:
-            await try_sweep_deadlines()
+            await try_run_daily_jobs(registry)
         except Exception:
-            # One failed sweep must not take the worker down: the next tick
-            # retries, and the sweep is idempotent by construction.
-            logger.exception("deadline sweep failed")
+            # One failed run must not take the worker down: the next tick
+            # retries, and the jobs are idempotent by construction.
+            logger.exception("daily jobs failed")

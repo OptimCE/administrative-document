@@ -34,6 +34,10 @@ class DocgenRequest:
     reply_to: str
     locale: str | None = None
     presign_ttl: int | None = None
+    # A draft's stamp. document-generation echoes what it applied, and the
+    # result handler refuses a draft whose echo is missing (an older worker
+    # ignores unknown options and would render it plain).
+    watermark: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

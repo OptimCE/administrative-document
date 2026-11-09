@@ -49,6 +49,7 @@ module = [
     "botocore.*",
     "dateutil.*",
     "workalendar.*",
+    "yaml.*",
 ]
 ignore_missing_imports = true
 

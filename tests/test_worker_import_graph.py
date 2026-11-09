@@ -17,8 +17,7 @@ asserted what the image contains.
 Two failure modes, one assertion each:
 
 1. the worker reaches a module importing something the image does not install —
-   `api/.../service.py` is one import away from `fastapi.UploadFile`, and the
-   deadline sweep constructs that service on purpose;
+   anything under `api/` is one import away from fastapi;
 2. the worker reaches a first-party package `Dockerfile.worker` does not COPY.
    This was the actual `No module named 'api'` here, and no import check can see
    it, because the package is present locally.
@@ -41,7 +40,7 @@ SERVICE_ROOT = Path(__file__).resolve().parents[1]
 
 # worker.main imports the other two, but naming them keeps a failure pointing at
 # the guilty module rather than at the entry point.
-WORKER_MODULES = ["worker.main", "worker.scheduler", "worker.sweeps"]
+WORKER_MODULES = ["worker.main", "worker.scheduler", "worker.engine_jobs"]
 
 # Top-level distributions `requirements/worker.txt` does not install. The first
 # three come with fastapi/uvicorn; `jose` and `auth0` are api.txt-only too, and
@@ -123,6 +122,14 @@ def test_the_worker_imports_with_the_api_stack_uninstalled(probe):
         "Move the shared piece somewhere framework-free (see ports/providers.py) "
         f"rather than adding it to requirements/worker.txt.\n\n{probe.stderr}"
     )
+
+
+def test_the_worker_never_reaches_the_api_package(probe):
+    """Not even a framework-free corner of it: the image has no api/ since the
+    July sweep, the only worker path that ran the API's service, went."""
+    assert probe.returncode == 0, probe.stderr
+    imported = set(json.loads(probe.stdout.strip().splitlines()[-1]))
+    assert "api" not in imported
 
 
 def test_every_package_the_worker_imports_is_copied_into_the_image(probe):

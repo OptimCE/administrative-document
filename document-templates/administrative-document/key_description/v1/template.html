@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Description de la clé de répartition</title>
+<style>
+  @page { size: A4; margin: 20mm 18mm; }
+  body { font-family: "DejaVu Sans", sans-serif; font-size: 10pt; color: #1f2933; line-height: 1.4; }
+  h1 { font-size: 15pt; margin: 0 0 4mm; }
+  h2 { font-size: 11.5pt; margin: 7mm 0 2mm; }
+  dl { display: grid; grid-template-columns: 45mm 1fr; gap: 1.5mm 4mm; margin: 0; }
+  dt { color: #52606d; }
+  dd { margin: 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 2mm; }
+  th, td { border: 0.3mm solid #9aa5b1; padding: 1.5mm 2.5mm; text-align: left; vertical-align: top; }
+  th { background: #f0f4f8; font-weight: bold; }
+  td.part, th.part { text-align: right; white-space: nowrap; }
+  .empty { color: #7b8794; font-style: italic; }
+  .description { white-space: pre-line; }
+</style>
+</head>
+<body>
+<h1>Description et formules de la clé de répartition</h1>
+
+<dl>
+  <dt>Communauté</dt>
+  <dd>{{ data.community_legal_name or data.community_name }}</dd>
+  <dt>Opération de partage</dt>
+  <dd>{{ data.operation_name or "—" }}</dd>
+  <dt>Clé</dt>
+  <dd>{{ data.key_name or "—" }}</dd>
+  <dt>Appliquée à partir du</dt>
+  <dd>{{ data.key_since or "—" }}</dd>
+</dl>
+
+<h2>Description</h2>
+{% if data.key_description %}
+<p class="description">{{ data.key_description }}</p>
+{% else %}
+<p class="empty">Aucune description.</p>
+{% endif %}
+
+<h2>Répartition par itération</h2>
+{% if data.iterations %}
+<table>
+  <thead><tr><th>Itération</th><th class="part">Part de l'énergie partagée</th></tr></thead>
+  <tbody>
+  {% for row in data.iterations %}
+    <tr><td>{{ row.iteration }}</td><td class="part">{{ ("%g"|format(row.part)).replace(".", ",") }} %</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">Aucune itération.</p>
+{% endif %}
+
+<h2>Parts des consommateurs</h2>
+{% if data.key_shares %}
+<table>
+  <thead><tr><th>Itération</th><th>Consommateur</th><th class="part">Part dans l'itération</th></tr></thead>
+  <tbody>
+  {% for row in data.key_shares %}
+    <tr><td>{{ row.iteration }}</td><td>{{ row.consommateur }}</td><td class="part">{{ ("%g"|format(row.part)).replace(".", ",") }} %</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">Aucune part.</p>
+{% endif %}
+</body>
+</html>

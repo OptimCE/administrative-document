@@ -13,11 +13,20 @@ document it wraps.
 
 ## The documents are the regulator's own
 
-Every entrypoint is an unmodified CWaPE file. The PDFs are the authority's
+Every entrypoint but one is an unmodified CWaPE file. The PDFs are the authority's
 fillable AcroForms and the workbooks are its mandated spreadsheets: rendering
 sets field and cell values and changes nothing else, so what gets filed **is**
 the official document rather than a reproduction of it. Each manifest records
 which CWaPE publication and format date it wraps, in `_source`.
+
+The exception is `key_description` (`template.html`, jinja-html → PDF): for a
+key outside its standard list the CWaPE asks for "la description et les
+formules de la clé" and publishes no form for them, so the layout is OptimCE's
+own.
+
+A draft is stamped by document-generation, never by the bundle: the renderer
+adds the watermark (`options.watermark`) on top of the regulator's file, and a
+final is that file with only its values set.
 
 That also means they are **third-party material**. The `template.pdf` /
 `template.xlsx` / `template.docx` files are not OptimCE-authored and are **not**

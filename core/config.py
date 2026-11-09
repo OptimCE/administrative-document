@@ -81,15 +81,33 @@ class Settings(BaseSettings):
     # permanently, with nothing in the UI able to clear it.
     RENDER_STALE_AFTER_SECONDS: int = 1800
 
-    # ---- Deadline sweep ----
-    # How far ahead `sweep_deadlines` looks when emitting `admin_deadline.due_soon`.
-    # A single window, not a ladder: `reminded_at` makes the reminder at-most-once
-    # per occurrence, so a second window would need a second marker column.
-    DEADLINE_REMINDER_DAYS: int = 14
-    # The sweep is driven from the worker rather than by a caller. 0 disables it,
-    # which is what the test environment uses.
+    # ---- Daily jobs (worker/engine_jobs.py) ----
+    # The reminder ladder for a deadline of the community: in-app reminders at
+    # these many days before the due date, each once (`deadline.reminders_sent`),
+    # then MISSED. The emails go in one summary per manager per day.
+    DEADLINE_REMINDER_RUNGS: list[int] = [14, 7, 2]
+    # The hour the scheduler runs the day; DEADLINE_SWEEP_ENABLED switches it
+    # off (the test environment does).
     DEADLINE_SWEEP_HOUR_LOCAL: int = 6
     DEADLINE_SWEEP_ENABLED: bool = True
+
+    # ---- The reception address (phase 4, worker/inbound.py) ----
+    # One mailbox serves every community; the worker polls it by IMAP. The
+    # address of a community is the template with its code in place of
+    # {token}: plus-addressing (`demarches+{token}@optimce.be`) or a catch-all
+    # (`{token}@inbox.optimce.be`). Empty template or host: the feature is off
+    # and the hub shows no address.
+    INBOUND_ADDRESS_TEMPLATE: str = ""
+    INBOUND_IMAP_HOST: str = ""
+    INBOUND_IMAP_PORT: int = 993
+    INBOUND_IMAP_SSL: bool = True
+    INBOUND_IMAP_USER: str = ""
+    INBOUND_IMAP_PASSWORD: str = ""
+    INBOUND_IMAP_FOLDER: str = "INBOX"
+    INBOUND_POLL_SECONDS: int = 120
+    INBOUND_POLL_BATCH: int = 50
+    # A mail larger than this (with its attachments) is dropped, and logged.
+    INBOUND_MAX_BYTES: int = 30 * 1024 * 1024
 
     # ---- Regulator registry ----
     # Points at the SHARED reference/regulators.json, which maps a community's

@@ -25,6 +25,12 @@ CREATE TABLE IF NOT EXISTS community (
     legal_name               VARCHAR(255),
     iban                     VARCHAR(34),
     account_holder_name      VARCHAR(255),
+    -- crm-backend 2026-11-01_community_representative_documents.sql (phase 4).
+    representative_first_name VARCHAR(255),
+    representative_last_name  VARCHAR(255),
+    representative_email      VARCHAR(255),
+    statutes_date             DATE,
+    internal_rules_date       DATE,
     headquarters_address_id  INTEGER,
     created_at               TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at               TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -271,7 +277,158 @@ CREATE TABLE IF NOT EXISTS notification_preference (
     id_user     INTEGER      NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
     type_prefix VARCHAR(128) NOT NULL,
     channel     SMALLINT     NOT NULL CHECK (channel IN (1, 2)),
+    -- 1 IMMEDIATE, 3 OFF
     mode        SMALLINT     NOT NULL CHECK (mode IN (1, 3)),
 
     PRIMARY KEY (id_user, type_prefix, channel)
 );
+
+-- ---- allocation_key / sharing_operation_key ---------------------------------
+-- The key applied to each operation, which the procedures engine photographs
+-- for the baseline (status 1 = approved). Mirrors crm-backend
+-- database_script/init.sql; only what the photo reads.
+CREATE TABLE IF NOT EXISTS allocation_key (
+    id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name         VARCHAR(255) NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    id_community INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sharing_operation_key (
+    id                   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id_sharing_operation INTEGER NOT NULL REFERENCES sharing_operation (id) ON DELETE CASCADE,
+    id_key               INTEGER NOT NULL REFERENCES allocation_key (id) ON DELETE CASCADE,
+    start_date           DATE NOT NULL,
+    end_date             DATE,
+    status               INTEGER NOT NULL CHECK (status IN (1, 2, 3)),
+    id_community         INTEGER NOT NULL
+);
+
+-- A key's iterations and each one's consumers, which the key description
+-- (piece key_description) lays out. Shares are fractions, as the CRM stores
+-- them. Mirrors crm-backend database_script/init.sql; only what the read uses.
+CREATE TABLE IF NOT EXISTS iteration (
+    id                          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    number                      INTEGER NOT NULL,
+    energy_allocated_percentage FLOAT NOT NULL,
+    id_key                      INTEGER NOT NULL REFERENCES allocation_key (id) ON DELETE CASCADE,
+    id_community                INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS consumer (
+    id                          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name                        VARCHAR(255) NOT NULL,
+    energy_allocated_percentage FLOAT NOT NULL,
+    id_iteration                INTEGER NOT NULL REFERENCES iteration (id) ON DELETE CASCADE,
+    id_community                INTEGER NOT NULL
+);
+
+-- ---- regulatory_link_status -------------------------------------------------
+-- The one CRM table this service WRITES beyond audit/notification: its effects
+-- port opens episodes and moves the four effect columns (the real role has
+-- INSERT + UPDATE on those columns only; see monorepo
+-- postgres/provision/30-crm-grants.sql). Mirrors
+-- crm-backend/database_script/2026-10-29_regulatory_link_status.sql, EXCLUDE
+-- included: "one EAN pending/authorised/active in a single operation per date"
+-- is the constraint the effects port must surface, so a test without it would
+-- prove nothing. The updated_at trigger is left out (the CRM's trigger function
+-- does not exist here).
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+CREATE TABLE IF NOT EXISTS regulatory_link_status (
+    id                   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id_community         INT NOT NULL REFERENCES community (id) ON DELETE CASCADE,
+    id_sharing_operation INT NOT NULL REFERENCES sharing_operation (id) ON DELETE CASCADE,
+    subject_type         SMALLINT NOT NULL CHECK (subject_type IN (1, 2)),
+    subject_ref          VARCHAR(64) NOT NULL,
+    id_dossier_origin    BIGINT NOT NULL,
+    regulatory_status    SMALLINT NOT NULL,
+    valid_from           DATE,
+    valid_to             DATE,
+    regulatory_ref       VARCHAR(64),
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_regulatory_link_status_code CHECK (regulatory_status BETWEEN 1 AND 9),
+    CONSTRAINT uq_regulatory_link_episode UNIQUE (id_dossier_origin, subject_type, subject_ref),
+    CONSTRAINT ck_regulatory_link_validity
+        CHECK (valid_from IS NULL OR valid_to IS NULL OR valid_from <= valid_to),
+    CONSTRAINT ex_regulatory_link_one_operation EXCLUDE USING gist (
+        subject_ref WITH =,
+        daterange(valid_from, valid_to, '[]') WITH &&
+    ) WHERE (subject_type = 1 AND regulatory_status IN (2, 3, 4, 5))
+);
+
+CREATE INDEX IF NOT EXISTS ix_regulatory_link_operation
+    ON regulatory_link_status (id_community, id_sharing_operation);
+
+-- The core's alignment trigger, verbatim: an episode written ACTIVE turns the
+-- meter's waiting meter_data rows of that operation ACTIVE from valid_from
+-- (crm-backend/database_script/2026-11-01_regulatory_meter_alignment.sql), so
+-- the effect tests see the CRM's own status follow the procedure.
+CREATE OR REPLACE FUNCTION meter_data_split(p_id INT, p_at DATE) RETURNS INT
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_columns TEXT;
+    v_new_id  INT;
+BEGIN
+    SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum)
+      INTO v_columns
+      FROM pg_attribute
+     WHERE attrelid = 'meter_data'::regclass
+       AND attnum > 0
+       AND NOT attisdropped
+       AND attidentity = ''
+       AND attgenerated = ''
+       AND attname NOT IN ('id', 'start_date', 'created_at', 'updated_at');
+    EXECUTE format(
+        'INSERT INTO meter_data (start_date, %1$s) SELECT $2, %1$s FROM meter_data WHERE id = $1 RETURNING id',
+        v_columns
+    ) INTO v_new_id USING p_id, p_at;
+    UPDATE meter_data SET end_date = p_at - 1 WHERE id = p_id;
+    RETURN v_new_id;
+END;
+$$;
+REVOKE ALL ON FUNCTION meter_data_split(INT, DATE) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION align_meter_data_with_regulatory() RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    r        RECORD;
+    v_target INT;
+BEGIN
+    FOR r IN
+        SELECT id, start_date, end_date
+          FROM meter_data
+         WHERE id_community = NEW.id_community
+           AND id_sharing_operation = NEW.id_sharing_operation
+           AND ean = NEW.subject_ref
+           AND status IN (3, 4)
+           AND (end_date IS NULL OR end_date >= NEW.valid_from)
+           AND (NEW.valid_to IS NULL OR start_date <= NEW.valid_to)
+         ORDER BY start_date
+         FOR UPDATE
+    LOOP
+        v_target := r.id;
+        IF r.start_date < NEW.valid_from THEN
+            v_target := meter_data_split(r.id, NEW.valid_from);
+        END IF;
+        IF NEW.valid_to IS NOT NULL AND (r.end_date IS NULL OR r.end_date > NEW.valid_to) THEN
+            PERFORM meter_data_split(v_target, NEW.valid_to + 1);
+        END IF;
+        UPDATE meter_data SET status = 1 WHERE id = v_target;
+    END LOOP;
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS align_meter_data_on_activation ON regulatory_link_status;
+CREATE TRIGGER align_meter_data_on_activation
+    AFTER INSERT OR UPDATE OF regulatory_status, valid_from, valid_to ON regulatory_link_status
+    FOR EACH ROW
+    WHEN (NEW.subject_type = 1 AND NEW.regulatory_status = 5 AND NEW.valid_from IS NOT NULL)
+    EXECUTE FUNCTION align_meter_data_with_regulatory();

@@ -17,8 +17,11 @@ message. That forces the initial lookup to run unscoped — see
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
+import re
+import unicodedata
 from typing import Any
 
 from nats.aio.msg import Msg
@@ -32,17 +35,25 @@ from core.audit_log import AuditActions, AuditLogInput, AuditLogService
 from core.config import settings
 from core.database.database import AsyncSessionCRMFactory, AsyncSessionLocalFactory
 from core.queue.helper import Event, send_event, subscribe_durable
+from core.realtime import CommunityAudience, Tier, emit
+from engine.events import BRUSSELS
+from engine.filing import piece_rendered
+from regulators.registry import REGISTRY
 from shared.const import (
     CONTENT_TYPE_BY_FORMAT,
     EVENT_DOCUMENT_RENDERED,
     SUBJECT_DOCUMENT_RENDERED,
+    CheckOutcome,
     DocOrigin,
+    RenderPurpose,
     RenderState,
 )
 from shared.models.local_models import (
     DocumentModel,
     DocumentRenderModel,
     DocumentVersionModel,
+    DossierModel,
+    VersionCheckModel,
 )
 from worker.context import with_tenant
 
@@ -60,6 +71,7 @@ ATTACHED = "attached"
 RENDER_FAILED = "render_failed"
 TRANSIENT = "transient"
 DROP = "drop"
+CHECKED = "checked"  # a verification recorded
 
 
 def _metadata(body: dict[str, Any]) -> dict[str, Any]:
@@ -130,6 +142,8 @@ async def process_docgen_result(
         if render is None:
             if await _already_attached(local, request_id):
                 return ATTACHED  # idempotent redelivery of a handled result
+            if await _already_checked(local, request_id):
+                return CHECKED
             logger.warning("docgen result for unknown/superseded request %s", request_id)
             metrics.document_renders.add(1, {"outcome": "dropped"})
             return DROP
@@ -147,30 +161,47 @@ async def process_docgen_result(
             metrics.document_renders.add(1, {"outcome": "dropped"})
             return DROP
 
-        with with_tenant(render.id_community):
+        # Plain values for the realtime hint, which goes out after the commit.
+        id_community, id_document = render.id_community, render.id_document
+        with with_tenant(id_community):
+            if render.purpose == int(RenderPurpose.VERIFY):
+                outcome = await _checked(local, render, body, own_local=own_local)
+                if outcome == CHECKED:
+                    await _render_ended(id_community, id_document, status="ready")
+                return outcome
+
             if body.get("status") == "success":
-                return await _attach(local, crm, render, body, own_local=own_local, own_crm=own_crm)
+                if render.watermark is not None and body.get("watermark") != render.watermark:
+                    # An older docgen ignores options it does not know and would
+                    # hand back a plain render: a "draft" that looks final. The
+                    # stage is the guarantee, so it fails rather than lands.
+                    return await _fail(
+                        local,
+                        crm,
+                        render,
+                        code="WATERMARK_NOT_APPLIED",
+                        message="document-generation did not stamp the draft watermark",
+                        own_local=own_local,
+                        own_crm=own_crm,
+                    )
+                outcome = await _attach(
+                    local, crm, render, body, own_local=own_local, own_crm=own_crm
+                )
+                if outcome == ATTACHED:
+                    await _render_ended(id_community, id_document, status="ready")
+                return outcome
 
             error = body.get("error") or {}
             if error.get("permanent"):
-                render.render_state = int(RenderState.FAILED)
-                render.render_error_json = {
-                    "code": error.get("code"),
-                    "message": error.get("message"),
-                    "permanent": True,
-                }
-                if own_local:
-                    await local.commit()
-                await _audit(
+                return await _fail(
+                    local,
                     crm,
-                    AuditActions.DOCUMENT_RENDER_FAILED,
-                    render.id_document,
-                    {"error": error.get("code")},
-                    id_community=render.id_community,
-                    commit=own_crm,
+                    render,
+                    code=error.get("code"),
+                    message=error.get("message"),
+                    own_local=own_local,
+                    own_crm=own_crm,
                 )
-                metrics.document_renders.add(1, {"outcome": "failed"})
-                return RENDER_FAILED
 
             # Transient: docgen will not retry for us (it already gave up on this
             # attempt), but a redelivery of the *result* may still succeed.
@@ -180,6 +211,86 @@ async def process_docgen_result(
             await local.close()
         if own_crm:
             await crm.close()
+
+
+async def _already_checked(session: AsyncSession, request_id: str) -> bool:
+    """Has this verification already been recorded? ``version_check`` is
+    append-only, so a redelivered result is told apart from an unknown one."""
+    return (
+        await session.execute(
+            select(VersionCheckModel.id).where(VersionCheckModel.docgen_request_id == request_id)
+        )
+    ).first() is not None
+
+
+async def _fail(
+    local: AsyncSession,
+    crm: AsyncSession,
+    render: DocumentRenderModel,
+    *,
+    code: str | None,
+    message: str | None,
+    own_local: bool,
+    own_crm: bool,
+) -> str:
+    """Mark the render failed for good (the slot stays, so the UI says so and a
+    retry takes it over)."""
+    id_community, id_document = render.id_community, render.id_document
+    render.render_state = int(RenderState.FAILED)
+    render.render_error_json = {"code": code, "message": message, "permanent": True}
+    if own_local:
+        await local.commit()
+    await _audit(
+        crm,
+        AuditActions.DOCUMENT_RENDER_FAILED,
+        id_document,
+        {"error": code},
+        id_community=id_community,
+        commit=own_crm,
+    )
+    metrics.document_renders.add(1, {"outcome": "failed"})
+    await _render_ended(id_community, id_document, status="failed")
+    return RENDER_FAILED
+
+
+async def _checked(
+    local: AsyncSession, render: DocumentRenderModel, body: dict[str, Any], *, own_local: bool
+) -> str:
+    """Record what regenerating a version gave: the same bytes, other bytes (with
+    the renderer that made them), or a failure. No version comes of it."""
+    if body.get("status") == "success":
+        artifact = _first_artifact(body)
+        if artifact is None:
+            logger.warning("docgen success without an artifact for %s", render.docgen_request_id)
+            return TRANSIENT
+        version = await local.get(DocumentVersionModel, render.id_document_version)
+        produced = artifact.get("sha256")
+        identical = version is not None and produced == version.content_sha256
+        check = VersionCheckModel(
+            outcome=int(CheckOutcome.IDENTICAL if identical else CheckOutcome.DIFFERENT),
+            content_sha256=produced,
+            renderer_json=body.get("renderer"),
+        )
+    else:
+        error = body.get("error") or {}
+        if not error.get("permanent"):
+            return TRANSIENT
+        check = VersionCheckModel(
+            outcome=int(CheckOutcome.FAILED),
+            error_json={"code": error.get("code"), "message": error.get("message")},
+        )
+    check.id_community = render.id_community
+    check.id_document_version = int(render.id_document_version or 0)
+    check.docgen_request_id = render.docgen_request_id
+    check.requested_by = render.requested_by
+    check.requested_at = render.requested_at
+    outcome = CheckOutcome(check.outcome).name.lower()
+    local.add(check)
+    await local.delete(render)
+    if own_local:
+        await local.commit()
+    metrics.document_renders.add(1, {"outcome": f"checked_{outcome}"})
+    return CHECKED
 
 
 async def _attach(
@@ -199,6 +310,21 @@ async def _attach(
 
     document = await local.get(DocumentModel, render.id_document)
     if document is None:  # deleted between request and result
+        return DROP
+    dossier = await local.get(DossierModel, document.id_dossier)
+    if dossier is not None and dossier.frozen_at is not None:
+        # Sent while this render was in flight (sending refuses that; a stuck
+        # render past the staleness window is how it happens). A sent piece
+        # takes no new version, and the database would refuse it anyway.
+        logger.warning(
+            "docgen result %s for document %s arrived after its procedure was sent; dropped",
+            render.docgen_request_id,
+            render.id_document,
+        )
+        await local.delete(render)
+        if own_local:
+            await local.commit()
+        metrics.document_renders.add(1, {"outcome": "dropped"})
         return DROP
 
     next_no = int(
@@ -223,13 +349,20 @@ async def _attach(
         # extension) and that name is the last segment of the URI. Recording it
         # is what lets the download arrive as "annexe6-notification.xlsx"
         # instead of an extensionless blob the OS cannot open.
-        original_filename=_artifact_filename(artifact["uri"]),
+        original_filename=_marked_filename(_artifact_filename(artifact["uri"]), render.watermark),
         id_template=render.id_template,
         # The snapshot frozen at REQUEST time, not re-read now: that is what makes
         # "the filed version reflects the state at generation time" true.
         data_snapshot_json=render.data_snapshot_json,
         generated_by=render.requested_by or "system",
         docgen_request_id=render.docgen_request_id,
+        stage=render.stage,
+        watermark=render.watermark,
+        prefill_json=render.prefill_json,
+        # What docgen says produced the bytes: with the snapshot and the pinned
+        # template, everything a later regeneration needs to compare against.
+        template_version=body.get("template_version"),
+        renderer_json=body.get("renderer"),
     )
     local.add(version)
     await local.flush()
@@ -240,10 +373,12 @@ async def _attach(
     # whether it will be uploaded or generated, so this is the only place the
     # answer is actually known.
     document.origin = int(DocOrigin.GENERATED)
-    # Success clears the in-flight slot: the version row is now the record. The
-    # document's STATUS is untouched — a render is technical, and only a human
-    # moves a document to READY.
+    # Success clears the in-flight slot: the version row is now the record. A
+    # July document's STATUS is untouched (a render is technical, only a human
+    # moves it to READY); a generated piece of an engine procedure is ready
+    # now, and its procedure's readiness follows.
     await local.delete(render)
+    await piece_rendered(local, REGISTRY, document, day=datetime.datetime.now(BRUSSELS).date())
     if own_local:
         await local.commit()
 
@@ -258,6 +393,19 @@ async def _attach(
         commit=own_crm,
     )
     return ATTACHED
+
+
+async def _render_ended(id_community: int, id_document: int, *, status: str) -> None:
+    """Tell the managers a render ended (spec: the end is signalled in SSE),
+    so an open page refetches the piece instead of polling. After the commit;
+    never raises."""
+    await emit(
+        topic="admin.document.ready",
+        audience=CommunityAudience(id_community, Tier.MANAGER),
+        resource=("document", id_document),
+        hint={"status": status},
+        scope_community_id=id_community,
+    )
 
 
 def _first_artifact(body: dict[str, Any]) -> dict[str, Any] | None:
@@ -281,6 +429,23 @@ def _artifact_filename(uri: str) -> str | None:
     """
     tail = uri.rstrip("/").rsplit("/", 1)[-1]
     return tail or None
+
+
+def _marked_filename(name: str | None, watermark: str | None) -> str | None:
+    """A draft's name says so too (``annexe6-partage-brouillon.xlsx``): a stamp
+    inside a spreadsheet shows only in print, so the name is what a reader sees
+    first. A final keeps the bundle's name."""
+    if name is None or watermark is None:
+        return name
+    mark = re.sub(
+        r"[^a-z0-9]+",
+        "-",
+        unicodedata.normalize("NFKD", watermark).encode("ascii", "ignore").decode().lower(),
+    ).strip("-")
+    if not mark:
+        return name
+    stem, dot, extension = name.rpartition(".")
+    return f"{stem}-{mark}.{extension}" if dot else f"{name}-{mark}"
 
 
 async def _audit(

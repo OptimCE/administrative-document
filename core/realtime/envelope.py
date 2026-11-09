@@ -37,6 +37,15 @@ TOPICS: Final[frozenset[str]] = frozenset(
         "simulation.finished",
         "billing_run.finished",
         "session.revoked",
+        # The espace administratif (administrative-document), for managers.
+        "admin.change.detected",
+        "admin.dossier.updated",
+        "admin.document.ready",
+        "admin.deadline.due",
+        # The signature annexe: a signer's seal done (the signing screen waits
+        # for it), and any change of a request (inbox, follow-up view).
+        "signature.signed",
+        "signature.request.updated",
     }
 )
 

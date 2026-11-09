@@ -5,9 +5,11 @@ from fastapi import Depends, FastAPI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from starlette.middleware.cors import CORSMiddleware
 
+from api.admin.routes import admin_routes
 from api.administrative_document.routes import administrative_document_routes
 from api.health.routes import health_router
 from core.config import Environment, settings
+from core.database.database import AsyncSessionLocalFactory
 from core.errors.errors import ErrorException
 from core.errors.handlers import error_exception_handler, unhandled_exception_handler
 from core.logging import configure_logging
@@ -18,6 +20,8 @@ from core.middleware.set_auth_context import GatewayScopeMiddleware
 from core.queue.init import close_nats, init_nats
 from core.realtime import log_realtime_state
 from core.tracing import enrich_span, setup_tracer_provider
+from engine.catalogue_sync import sync_registry
+from regulators.registry import REGISTRY
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -29,6 +33,9 @@ async def lifespan(app: FastAPI):
     # see core/realtime/bus.py. Must come after configure_logging().
     log_realtime_state("administrative-document api")
     setup_tracer_provider()
+    # Before serving anything: no request may run on a catalogue the database
+    # does not hold. A conflict raises and stops the API, on purpose.
+    await sync_registry(AsyncSessionLocalFactory, REGISTRY)
     await init_nats()
     yield
     await close_nats()
@@ -74,6 +81,7 @@ app.include_router(
     tags=["Administrative document"],
     dependencies=protected_deps,
 )
+app.include_router(admin_routes, tags=["Procedures"], dependencies=protected_deps)
 app.include_router(health_router, prefix="/health", tags=["Health"])
 
 FastAPIInstrumentor.instrument_app(app)

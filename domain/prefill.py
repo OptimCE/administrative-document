@@ -31,7 +31,12 @@ from domain import cwape_labels as labels
 from ports.crm_core import (
     WARNING_COMMUNITY_FIELD_MISSING,
     WARNING_EAN_NOT_FORM_REPRESENTABLE,
+    WARNING_KEY_ITERATION_NO_CONSUMER,
+    WARNING_KEY_ITERATIONS_TOTAL,
+    WARNING_KEY_MISSING,
+    WARNING_KEY_NO_ITERATION,
     WARNING_MEMBER_FIELD_MISSING,
+    AllocationKey,
     CommunityContext,
     Installation,
     Participant,
@@ -52,6 +57,125 @@ DOC_TYPE_SHARING_NOTIFICATION = "sharing_notification"
 DOC_TYPE_SHARING_MODIFICATION = "sharing_modification"
 DOC_TYPE_DSO_AGREEMENT_COMMUNITY = "dso_agreement_community"
 DOC_TYPE_DSO_AGREEMENT_BUILDING = "dso_agreement_building"
+DOC_TYPE_KEY_DESCRIPTION = "key_description"
+#: The pieces that describe the operation's allocation key, so the only ones
+#: the CRM key is read for.
+DOC_TYPES_WITH_KEY = (
+    DOC_TYPE_KEY_DESCRIPTION,
+    DOC_TYPE_DSO_AGREEMENT_COMMUNITY,
+    DOC_TYPE_DSO_AGREEMENT_BUILDING,
+)
+
+#: Every field of each AcroForm, in the form's own order, as (key, kind): kind
+#: "check" for a checkbox (seeded False), "text" otherwise (seeded None). Seeding
+#: them all is what puts them in the review form, so a reviewer fills the
+#: representative or the contact once, in the app, and a regeneration carries it
+#: over. The keys are the bundle manifests' ``fields``;
+#: ``tests/test_template_bundles.py`` re-reads the manifests and the PDFs to keep
+#: this in step. Annex 8's EAN combs are not here: they are projected from
+#: ``ean_delivery``/``ean_injection`` when the payload is frozen.
+_IDENTITY = (
+    "community_legal_name",
+    "community_vat_number",
+    "community_legal_form",
+    "community_street",
+    "community_number",
+    "community_box",
+    "community_postcode",
+    "community_city",
+)
+_REPRESENTATIVE = (
+    "representative_name",
+    "representative_vat_number",
+    "representative_street",
+    "representative_number",
+    "representative_box",
+    "representative_postcode",
+    "representative_city",
+)
+_CONTACT = (
+    "contact_last_name",
+    "contact_first_name",
+    "contact_street",
+    "contact_number",
+    "contact_box",
+    "contact_postcode",
+    "contact_city",
+)
+ACROFORM_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
+    DOC_TYPE_ANNEX7_LEGAL_ENTITY: (
+        ("entity_name", "text"),
+        ("entity_vat_digits", "text"),
+        ("controlling_entity_name", "text"),
+    ),
+    DOC_TYPE_ANNEX8_SWORN_DECLARATION: (
+        ("declarant_name", "text"),
+        ("declarant_representative", "text"),
+        ("declarant_company_name", "text"),
+        ("declarant_address", "text"),
+        ("declarant_phone", "text"),
+        ("declarant_email", "text"),
+        ("community_name", "text"),
+        ("signed_at", "text"),
+        ("signed_on", "text"),
+        ("ean_delivery", "text"),
+        ("ean_injection", "text"),
+        ("sharing_within_building", "check"),
+        ("sharing_within_community", "check"),
+        ("waives_residential_right", "check"),
+        ("will_request_metering_regime", "check"),
+        ("will_switch_to_injection_service", "check"),
+    ),
+    DOC_TYPE_COMMUNITY_MODIFICATION: (
+        # This form stops the contact's address at the box number.
+        *((key, "text") for key in (*_IDENTITY, *_REPRESENTATIVE, *_CONTACT[:5])),
+        ("cwape_reference_digits", "text"),
+    ),
+    DOC_TYPE_COMMUNITY_NOTIFICATION: tuple(
+        (key, "text")
+        for key in (
+            *_IDENTITY,
+            *_REPRESENTATIVE,
+            *_CONTACT,
+            "contact_phone",
+            "contact_mobile",
+        )
+    ),
+    DOC_TYPE_SHARING_MODIFICATION: (
+        *(
+            (key, "text")
+            for key in (
+                *_REPRESENTATIVE,
+                "representative_country",
+                *_CONTACT,
+                "contact_phone",
+                "contact_mobile",
+                "contact_email",
+                "building_reference",
+                "community_reference",
+            )
+        ),
+        ("sharing_within_building", "check"),
+    ),
+    DOC_TYPE_SHARING_NOTIFICATION: (
+        *(
+            (key, "text")
+            for key in (
+                *(k for k in _IDENTITY if k != "community_legal_form"),
+                *_REPRESENTATIVE,
+                "representative_country",
+                *_CONTACT,
+                "contact_phone",
+                "contact_mobile",
+                "contact_email",
+                "project_description",
+            )
+        ),
+        ("sharing_within_building", "check"),
+        ("sharing_within_community", "check"),
+        ("single_grid_operator", "check"),
+    ),
+}
 
 #: An EAN is exactly 18 digits. Mirrors crm-backend's
 #: `modules/meters/shared/ean.ts` and crm-frontend's
@@ -246,8 +370,17 @@ def build_snapshot(
     participants: Sequence[Participant] = (),
     production: Sequence[Installation] = (),
     storage: Sequence[Installation] = (),
+    id_member: int | None = None,
+    grd_ref: str | None = None,
+    requested_effective_date: datetime.date | None = None,
+    key: AllocationKey | None = None,
 ) -> dict[str, Any]:
     """Assemble the render payload for ``doc_type``.
+
+    ``id_member`` is the participant a per-member piece is for (annex 8 is
+    signed by one participant); ``grd_ref``, ``requested_effective_date`` and
+    ``key`` are the procedure's, for the DSO conventions and the key
+    description.
 
     An unknown doc_type still gets the community header — enough for a reviewer
     to work from, and better than refusing to open the form.
@@ -273,11 +406,34 @@ def build_snapshot(
         # theirs to write.
         for field in _DSO_AGREEMENT_FIELDS:
             snapshot[field] = None
-        snapshot["representative_name"] = community.legal_name or community.name
+        snapshot["representative_name"] = (
+            community.representative or community.legal_name or community.name
+        )
+        # What the procedure itself knows: the DSO it goes to, the effective
+        # date asked for, the key it applies. The terms stay the parties'.
+        snapshot["grid_operator_name"] = labels.grd_label(grd_ref) or grd_ref
+        snapshot["start_date"] = _french_date(requested_effective_date)
+        snapshot["distribution_key"] = key.name if key is not None else None
         if doc_type == DOC_TYPE_DSO_AGREEMENT_COMMUNITY:
             snapshot["community_address"] = format_address(community.address)
         else:
             snapshot["unmet_condition"] = None
+    elif doc_type == DOC_TYPE_KEY_DESCRIPTION:
+        # The description and formulas of the key the operation applies, for a
+        # key that is not in the regulator's standard list. Two flat sheets, so
+        # the review form can show (and correct) them as tables.
+        snapshot["key_name"] = key.name if key is not None else None
+        snapshot["key_description"] = (key.description or None) if key is not None else None
+        snapshot["key_since"] = _french_date(key.since) if key is not None else None
+        snapshot["iterations"] = [
+            {"iteration": it.number, "part": _percent(it.share)}
+            for it in (key.iterations if key is not None else ())
+        ]
+        snapshot["key_shares"] = [
+            {"iteration": it.number, "consommateur": share.name, "part": _percent(share.share)}
+            for it in (key.iterations if key is not None else ())
+            for share in it.consumers
+        ]
     elif doc_type in (
         DOC_TYPE_SHARING_NOTIFICATION,
         DOC_TYPE_SHARING_MODIFICATION,
@@ -292,17 +448,58 @@ def build_snapshot(
         snapshot["installation_count"] = len(production)
 
         if doc_type == DOC_TYPE_ANNEX8_SWORN_DECLARATION:
-            # Annex 8 is signed by ONE participant and the CRM cannot know
-            # which, so the EANs are seeded only when the operation leaves no
-            # choice and blank otherwise. A guessed EAN on a sworn declaration
-            # is worse than a blank the reviewer fills. Seeding the keys at all
-            # is what makes the fields appear in the review form.
-            delivery = [meter.ean for p in participants for meter in p.meters]
-            injection = [installation.ean for installation in production]
+            # Annex 8 is signed by ONE participant: the piece's own when it is a
+            # per-member piece, whose identity then comes from the CRM. The
+            # EANs are seeded only when that leaves no choice and blank
+            # otherwise: a guessed EAN on a sworn declaration is worse than a
+            # blank the reviewer fills.
+            declarant = next((p for p in participants if p.id_member == id_member), None)
+            if declarant is not None:
+                is_company = declarant.member_type == labels.MemberType.COMPANY
+                snapshot["declarant_name"] = (
+                    None
+                    if is_company
+                    else labels.display_name(
+                        declarant.name, declarant.first_name, declarant.member_type
+                    )
+                )
+                snapshot["declarant_company_name"] = declarant.name if is_company else None
+                snapshot["declarant_address"] = format_address(declarant.address) or None
+                snapshot["declarant_email"] = declarant.email
+                delivery = [meter.ean for meter in declarant.meters]
+                injection = [i.ean for i in production if i.id_member == id_member]
+            else:
+                delivery = [meter.ean for p in participants for meter in p.meters]
+                injection = [installation.ean for installation in production]
             snapshot["ean_delivery"] = delivery[0] if len(delivery) == 1 else None
             snapshot["ean_injection"] = injection[0] if len(injection) == 1 else None
 
+        # The community's representative, where the form asks for one and the
+        # CRM knows them (phase 4); the reviewer types it otherwise.
+        fields = ACROFORM_FIELDS.get(doc_type, ())
+        if "representative_name" in dict(fields):
+            snapshot["representative_name"] = community.representative
+
+        # Every field of the form, in its order, then what it does not bind.
+        snapshot = {
+            **{
+                name: snapshot.get(name, False if kind == "check" else None)
+                for name, kind in fields
+            },
+            **{k: v for k, v in snapshot.items() if k not in dict(fields)},
+        }
+
     return snapshot
+
+
+def _french_date(value: datetime.date | None) -> str | None:
+    """A date as a CWaPE form or contract prints it."""
+    return value.strftime("%d/%m/%Y") if value is not None else None
+
+
+def _percent(share: float) -> float:
+    """A CRM fraction (0.7) as the percentage a form prints (70.0)."""
+    return round(share * 100, 2)
 
 
 def merge_overrides(
@@ -320,6 +517,91 @@ def merge_overrides(
         merged[key] = copy.deepcopy(value)
     _restore_row_identity(snapshot, merged)
     return merged
+
+
+def carry_over(
+    fresh: Mapping[str, Any], previous: Mapping[str, Any], previous_prefill: Mapping[str, Any]
+) -> dict[str, Any]:
+    """A fresh pre-fill with the reviewer's own edits of the previous version on top.
+
+    What a one-click regeneration renders. The reviewer's edits are what the
+    previous snapshot holds and its pre-fill did not (both are on the version),
+    so a value the CRM changed since comes through fresh, and a value the
+    reviewer typed (a fixed share, a signature date, a representative the CRM
+    does not know) is not lost:
+
+    * a scalar the reviewer set wins over the fresh one; the others are fresh;
+    * a row is matched on ``(_id_member, ean)``, column by column: a cell the
+      reviewer edited keeps its edit, the rest is fresh. A row the CRM added
+      since comes in as is, one it dropped goes. A row the reviewer removed
+      stays removed, and one they added (a storage unit the CRM does not model)
+      stays, after the CRM's rows.
+
+    The comb-box keys of annex 8 are recomputed from the EANs when the payload
+    is frozen (``project_comb_fields``), so carrying them is harmless.
+    """
+    result = copy.deepcopy(dict(fresh))
+    for key, value in previous.items():
+        if isinstance(value, list) or isinstance(previous_prefill.get(key), list):
+            continue
+        if key not in previous_prefill or previous_prefill[key] != value:
+            result[key] = copy.deepcopy(value)
+    for key in {*previous, *fresh}:
+        rows, prefilled = previous.get(key), previous_prefill.get(key)
+        if not isinstance(rows, list) or rows == prefilled:
+            continue
+        fresh_rows = fresh.get(key)
+        result[key] = _carry_rows(
+            fresh_rows if isinstance(fresh_rows, list) else [],
+            rows,
+            prefilled if isinstance(prefilled, list) else [],
+        )
+    return result
+
+
+def _row_identity(row: Any) -> tuple[Any, Any] | None:
+    if not isinstance(row, Mapping):
+        return None
+    identity = (row.get(ROW_MEMBER_ID), row.get("ean"))
+    return identity if identity != (None, None) else None
+
+
+def _carry_rows(
+    fresh: list[Any], previous: list[Any], prefilled: list[Any]
+) -> list[dict[str, Any]]:
+    before = {k: row for row in prefilled if (k := _row_identity(row)) is not None}
+    after = {k: row for row in previous if (k := _row_identity(row)) is not None}
+    carried: list[dict[str, Any]] = []
+    for row in fresh:
+        identity = _row_identity(row)
+        if identity is None or identity not in after:
+            if identity is None or identity not in before:
+                carried.append(copy.deepcopy(row))  # new in the CRM since
+            continue  # in the previous pre-fill, removed by the reviewer
+        edited, original = after[identity], before.get(identity, {})
+        carried.append(
+            {
+                **copy.deepcopy(row),
+                **{
+                    column: copy.deepcopy(value)
+                    for column, value in edited.items()
+                    if original.get(column) != value
+                },
+            }
+        )
+    in_fresh = {k for row in fresh if (k := _row_identity(row)) is not None}
+    # A CRM row with neither member nor EAN cannot be matched: it came back in
+    # the fresh pre-fill already, so only an unidentified row the pre-fill did
+    # not have is the reviewer's.
+    unmatched_prefill = [row for row in prefilled if _row_identity(row) is None]
+    for row in previous:
+        identity = _row_identity(row)
+        if identity is None:
+            if row not in unmatched_prefill:
+                carried.append(copy.deepcopy(row))
+        elif identity not in before and identity not in in_fresh:
+            carried.append(copy.deepcopy(row))
+    return carried
 
 
 def _restore_row_identity(derived: Mapping[str, Any], merged: dict[str, Any]) -> None:
@@ -533,12 +815,89 @@ def participant_warnings(
     return tuple(warnings)
 
 
+#: How far the iterations' total may drift from 100 % before it is reported: the
+#: CRM stores fractions as floats, and 0.7 + 0.2 + 0.1 is not exactly 1.
+_KEY_TOTAL_TOLERANCE = 1e-6
+
+
+def key_warnings(
+    doc_type: str, key: AllocationKey | None, *, id_sharing_operation: int | None
+) -> tuple[PrefillWarning, ...]:
+    """What the operation's key lacks for THIS piece.
+
+    The key description describes the key and nothing else, so a missing key or
+    a key with no iteration makes it a document that says nothing: those two
+    BLOCK the render. An iteration without a consumer, or iterations that do not
+    add up to 100 %, still describe something the reviewer may want filed, so
+    they only warn. A DSO convention names the key in one slot the parties can
+    fill by hand: a missing key only warns there.
+    """
+    if doc_type not in DOC_TYPES_WITH_KEY:
+        return ()
+    operation_id = str(id_sharing_operation) if id_sharing_operation is not None else None
+    if key is None:
+        return (
+            PrefillWarning(
+                code=WARNING_KEY_MISSING,
+                subject_type="sharing_operation",
+                subject_id=operation_id,
+                blocking=doc_type == DOC_TYPE_KEY_DESCRIPTION,
+            ),
+        )
+    if doc_type != DOC_TYPE_KEY_DESCRIPTION:
+        return ()
+    key_id = str(key.id) if key.id is not None else None
+    if not key.iterations:
+        return (
+            PrefillWarning(
+                code=WARNING_KEY_NO_ITERATION,
+                subject_type="key",
+                subject_id=key_id,
+                params={"key": key.name},
+                blocking=True,
+            ),
+        )
+    warnings = [
+        PrefillWarning(
+            code=WARNING_KEY_ITERATION_NO_CONSUMER,
+            subject_type="key",
+            subject_id=key_id,
+            params={"key": key.name, "iteration": str(it.number)},
+        )
+        for it in key.iterations
+        if not it.consumers
+    ]
+    total = sum(it.share for it in key.iterations)
+    if abs(total - 1) > _KEY_TOTAL_TOLERANCE:
+        warnings.append(
+            PrefillWarning(
+                code=WARNING_KEY_ITERATIONS_TOTAL,
+                subject_type="key",
+                subject_id=key_id,
+                params={"key": key.name, "total": f"{_percent(total):g}"},
+            )
+        )
+    return tuple(warnings)
+
+
+def blocking_codes(warnings: Iterable[PrefillWarning]) -> list[str]:
+    """The codes of the warnings that refuse a render, in order, once each."""
+    return list(dict.fromkeys(w.code for w in warnings if w.blocking))
+
+
 def sort_warnings(warnings: Iterable[PrefillWarning]) -> list[PrefillWarning]:
-    """Deterministic order, so the panel does not reshuffle between prefills."""
+    """Deterministic order, so the panel does not reshuffle between prefills.
+    What blocks the render comes first: it is the one thing to read."""
     return sorted(
         warnings,
-        key=lambda w: (w.subject_type, w.subject_id or "", w.code, w.params.get("field", "")),
-    )
+        key=lambda w: (
+            not w.blocking,
+            w.subject_type,
+            w.subject_id or "",
+            w.code,
+            w.params.get("field", ""),
+        ),
+    )  # stable: a key's iterations keep the CRM's order
 
 
 def rows_for_members(

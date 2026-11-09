@@ -1,0 +1,28 @@
+# The fake regulator's starting-state procedure (purpose: baseline).
+code: FAKE_BASELINE
+version: 1
+valid_from: 2026-01-01
+purpose: baseline
+scope: community
+recipient: regulator
+channel: online_form
+family: FAKE_BASELINE
+labels: {fr: Départ factice, en: Fake baseline, nl: Valse beginsituatie, de: Falsche Ausgangslage}
+
+initial_step: draft
+steps:
+  - code: draft
+    status: draft
+    bucket: todo
+    next_action:
+      code: confirm_baseline
+      labels: {fr: Confirmer, en: Confirm, nl: Bevestigen, de: Bestätigen}
+    labels: {fr: À confirmer, en: To confirm, nl: Te bevestigen, de: Zu bestätigen}
+  - code: in_force
+    status: in_force
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Confirmé, en: Confirmed, nl: Bevestigd, de: Bestätigt}
+
+transitions:
+  - {from: draft, to: in_force, automatic: true}

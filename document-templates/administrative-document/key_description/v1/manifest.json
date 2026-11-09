@@ -1,0 +1,32 @@
+{
+  "id": "administrative_document.key_description",
+  "version": "2026.10.30",
+  "engine": "jinja-html",
+  "supported_formats": ["pdf", "html"],
+  "entrypoint": "template.html",
+  "output_basename": "description-cle-de-repartition",
+  "_source": "OptimCE's own layout, not a regulator file: for a key outside its standard list the CWaPE asks for its description and formulas, and publishes no form for them.",
+  "required_fields": {
+    "type": "object",
+    "required": [
+      "community_name",
+      "community_legal_name",
+      "operation_name",
+      "key_name",
+      "key_description",
+      "key_since",
+      "iterations",
+      "key_shares"
+    ],
+    "properties": {
+      "iterations": {
+        "type": "array",
+        "items": {"type": "object", "required": ["iteration", "part"]}
+      },
+      "key_shares": {
+        "type": "array",
+        "items": {"type": "object", "required": ["iteration", "consommateur", "part"]}
+      }
+    }
+  }
+}

@@ -42,7 +42,8 @@ Apply the local schema and reference seeds, then start the API:
 
 ```bash
 psql "$LOCAL_DATABASE_URL" -f scripts/sql/schema.sql
-psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0001_wal_deadline_rules.sql
+psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0002_wal_templates.sql
+psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0003_wal_templates_phase2.sql
 uvicorn main:app --reload
 ```
 

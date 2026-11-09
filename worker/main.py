@@ -21,12 +21,15 @@ import pathlib
 import signal
 import sys
 
-from core.database.database import crm_engine, local_engine
+from core.database.database import AsyncSessionLocalFactory, crm_engine, local_engine
 from core.logging import configure_logging
 from core.queue.init import close_nats, get_jetstream, init_nats
 from core.realtime import log_realtime_state
 from core.tracing import setup_tracer_provider
+from engine.catalogue_sync import sync_registry
+from regulators.registry import REGISTRY
 from worker import dispatcher
+from worker.inbound import run_inbound_poller
 from worker.scheduler import run_deadline_scheduler
 
 logger = logging.getLogger(__name__)
@@ -98,6 +101,10 @@ async def main() -> None:
     log_realtime_state("administrative-document-worker")
     setup_tracer_provider()
 
+    # Before consuming anything, like the API: the worker files changes into
+    # procedures that point at these rows. A conflict raises and stops it.
+    await sync_registry(AsyncSessionLocalFactory, REGISTRY)
+
     await _connect_nats_with_retry()
     js = get_jetstream()
 
@@ -108,15 +115,21 @@ async def main() -> None:
     subs: list = []
     heartbeat_task: asyncio.Task | None = None
     scheduler_task: asyncio.Task | None = None
+    inbound_task: asyncio.Task | None = None
     try:
-        subs = await dispatcher.subscribe_all(js, inflight=inflight)
+        subs = await dispatcher.subscribe_all(js, inflight=inflight, registry=REGISTRY)
         heartbeat_task = asyncio.create_task(_heartbeat(shutdown_event), name="heartbeat")
-        # The deadline sweep, which nothing invoked before. It lives here rather
-        # than behind a cron container because it needs the service, its two
-        # sessions and the tenant ContextVar — all of which this process already
-        # has. An advisory lock inside makes a second replica a no-op.
+        # The engine's daily jobs. They live here rather than behind a cron
+        # container because they need the registry, the two sessions and the
+        # tenant ContextVar — all of which this process already has. An
+        # advisory lock inside makes a second replica a no-op.
         scheduler_task = asyncio.create_task(
-            run_deadline_scheduler(shutdown_event), name="deadline-scheduler"
+            run_deadline_scheduler(shutdown_event, registry=REGISTRY), name="deadline-scheduler"
+        )
+        # The reception address (phase 4): the mailbox polled by IMAP, off
+        # unless INBOUND_ADDRESS_TEMPLATE and INBOUND_IMAP_HOST are set.
+        inbound_task = asyncio.create_task(
+            run_inbound_poller(shutdown_event, registry=REGISTRY), name="inbound-mailbox"
         )
 
         logger.info("Administrative-document worker ready")
@@ -127,6 +140,11 @@ async def main() -> None:
             scheduler_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await scheduler_task
+
+        if inbound_task is not None:
+            inbound_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await inbound_task
 
         if heartbeat_task is not None:
             heartbeat_task.cancel()

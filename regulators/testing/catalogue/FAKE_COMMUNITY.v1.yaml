@@ -1,0 +1,75 @@
+# The fake regulator's community procedure. It shares representative_changed
+# with FAKE_CHANGE, so one event feeds two procedures (one change each).
+code: FAKE_COMMUNITY
+version: 1
+valid_from: 2026-01-01
+scope: community
+recipient: regulator
+channel: online_form
+family: FAKE_COMMUNITY
+handles_change_kinds: [representative_changed]
+labels: {fr: Mise à jour factice, en: Fake update, nl: Valse bijwerking, de: Falsche Aktualisierung}
+
+initial_step: draft
+steps:
+  - code: draft
+    status: draft
+    bucket: todo
+    next_action:
+      code: complete_documents
+      labels: {fr: Compléter les pièces, en: Complete the documents, nl: Documenten aanvullen, de: Unterlagen vervollständigen}
+    labels: {fr: Brouillon, en: Draft, nl: Concept, de: Entwurf}
+  - code: ready
+    status: ready
+    bucket: todo
+    next_action:
+      code: send
+      labels: {fr: Envoyer la mise à jour, en: Send the update, nl: De bijwerking versturen, de: Die Aktualisierung senden}
+    labels: {fr: Prêt, en: Ready, nl: Klaar, de: Bereit}
+  - code: sent
+    status: sent
+    bucket: waiting
+    next_action:
+      code: record_response
+      labels: {fr: Confirmation attendue, en: Awaiting confirmation, nl: Wachten op bevestiging, de: Bestätigung erwartet}
+    labels: {fr: Envoyé, en: Sent, nl: Verstuurd, de: Gesendet}
+  - code: in_force
+    status: in_force
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: En vigueur, en: In force, nl: Van kracht, de: In Kraft}
+  - code: cancelled
+    status: cancelled
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Annulé, en: Cancelled, nl: Geannuleerd, de: Storniert}
+
+transitions:
+  - {from: draft, to: ready, automatic: true}
+  - {from: ready, to: draft, automatic: true}
+  - {from: draft, to: cancelled, automatic: true}   # a system draft emptied by compensation; or by hand
+  - {from: ready, to: sent}
+  - {from: sent, to: in_force}
+
+response_types:
+  - code: confirmation
+    direction: inbound
+    counterparty: regulator
+    to_step: in_force
+    labels: {fr: Confirmation, en: Confirmation, nl: Bevestiging, de: Bestätigung}
+
+deadline_rules:
+  - code: confirmation
+    kind: relative
+    anchor: step:sent
+    offset: {value: 10, unit: working_days}
+    party: regulator
+    deadline_kind: response
+    closes_on: [response:confirmation]
+    labels: {fr: Confirmation, en: Confirmation, nl: Bevestiging, de: Bestätigung}
+
+documents:
+  - code: update_form
+    kind: generated
+    template: fake/update_form
+    labels: {fr: Fiche de mise à jour, en: Update form, nl: Bijwerkingsformulier, de: Aktualisierungsformular}

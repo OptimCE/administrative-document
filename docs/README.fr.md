@@ -36,27 +36,32 @@ exécuter ensemble.
 
 Le service fournit deux déployables issus d'une même base de code — une API
 [FastAPI](https://fastapi.tiangolo.com/) (`main:app`) et un worker NATS
-(`worker.main`) qui exécute les consommateurs de génération et de résultats ainsi
-que le planificateur d'échéances — construits autour de quatre idées :
+(`worker.main`) qui range les événements du CRM dans des démarches, exécute les
+consommateurs de génération et de résultats ainsi que les tâches quotidiennes —
+construits autour de quatre idées :
 
-- **Une machine à états journalisée.** Les documents suivent le cycle
-  `brouillon → prêt → transmis → accusé de réception` (plus `obsolète`) ; les
-  dossiers suivent `en préparation → soumis → complet → clôturé` (plus `caduc`).
-  Un statut n'est jamais modifié sur place : chaque changement ajoute un
-  `status_event` immuable (auteur, horodatage, statuts source et cible,
-  contexte), et la colonne de statut n'est qu'un cache que la base de données
-  valide par rapport à ce journal. Corriger une erreur consiste à enregistrer une
-  nouvelle transition corrective tracée — l'historique n'est jamais réécrit.
-- **Des échéances calculées.** Les délais réglementaires sont de la
-  configuration, pas du code. Une ligne `deadline_rule` exprime « lorsque *ceci*
-  se produit, une échéance *de ce type* tombe N jours ouvrés ou N mois plus
-  tard » ; une transition évalue les règles correspondantes et matérialise les
-  échéances. Le calcul en jours ouvrés respecte les jours fériés belges, fêtes
-  mobiles comprises.
-- **Des versions immuables.** Chaque fichier téléversé devient une version
-  numérotée, adressée par son empreinte. Un nouveau téléversement crée une
-  nouvelle version ; une version déjà transmise ne peut plus être modifiée, ce
-  qui garantit de toujours pouvoir récupérer exactement ce qui a été envoyé.
+- **Des démarches tirées du catalogue du régulateur.** Un dossier est une
+  *démarche* auprès du régulateur de la communauté : son type, ses étapes, ses
+  réponses, ses pièces et ses délais viennent d'un catalogue YAML versionné dans
+  un plugin de régulateur (`regulators/` ; la CWaPE est le seul aujourd'hui, voir
+  `regulators/README.md`). Le moteur (`engine/`) ne connaît que des statuts
+  communs — brouillon, prêt, envoyé, en vigueur, refusé, annulé, caduc — et
+  l'étape du plugin voyage avec eux. Un statut n'est jamais modifié sur place :
+  chaque changement ajoute un `status_event` immuable, la base recopie la tête du
+  journal sur la démarche et refuse toute écriture directe. Corriger une erreur
+  consiste à enregistrer un nouveau changement d'étape tracé — l'historique n'est
+  jamais réécrit.
+- **Des changements en entrée, des échéances en sortie.** Le CRM publie ses
+  changements (un compteur ajouté, une clé approuvée…) sous forme d'événements ;
+  le worker range chacun dans le brouillon ouvert du bon type, et les tâches
+  quotidiennes ouvrent les démarches calendaires (le rapportage annuel) et
+  suivent leurs échéances. Un délai est une donnée du catalogue — « N jours
+  ouvrables ou N mois après telle étape ou telle réponse » — compté sur le
+  calendrier des jours fériés du plugin, fêtes mobiles comprises.
+- **Des versions immuables.** Chaque fichier téléversé ou généré devient une
+  version numérotée, adressée par son empreinte, tout comme chaque message
+  envoyé ou reçu. Une fois la démarche envoyée, ses pièces sont figées, ce qui
+  garantit de toujours pouvoir récupérer exactement ce qui a été transmis.
 - **Des dépôts générés.** Les formulaires obligatoires sont produits à partir des
   données de la communauté plutôt que remplis à la main : une étape de
   préremplissage construit la charge utile depuis le CRM, la génération fige
@@ -64,24 +69,27 @@ que le planificateur d'échéances — construits autour de quatre idées :
   de génération de documents de la plateforme, et le résultat arrive comme une
   nouvelle version immuable. L'instantané est capturé au moment de la demande, ce
   qui rend toujours reproductible ce qui a été déposé. Un seul rendu peut être en
-  cours par document.
+  cours par pièce.
 
-Deux bases **PostgreSQL** sont utilisées : la base du CRM (source en lecture
-seule pour les communautés, membres, compteurs et abonnements) et une base locale
-qui détient les dossiers, documents, versions, le journal de statuts et les
-échéances. Les fichiers stockés résident dans un stockage objet **compatible S3**
-(MinIO en développement). Les événements de statut et d'échéance sont publiés sur
-**NATS JetStream** pour les autres services. Traces, métriques et journaux sont
-émis via **OpenTelemetry**.
+Deux bases **PostgreSQL** sont utilisées : la base du CRM (communautés, membres,
+compteurs et abonnements en lecture seule, plus le statut réglementaire que ce
+service y écrit) et une base locale qui détient les démarches, leurs pièces, les
+versions, la correspondance, le journal de statuts et les échéances. Les fichiers
+stockés résident dans un stockage objet **compatible S3** (MinIO en
+développement). Les événements du CRM arrivent par **NATS JetStream**, et des
+signaux en temps réel demandent aux pages ouvertes des gestionnaires de se
+rafraîchir. Traces, métriques et journaux sont émis via **OpenTelemetry**.
 
 ## Structure du dépôt
 
 | Chemin | Description |
 |---|---|
-| `api/` | Couche HTTP — routes de santé et des documents administratifs, schémas, service et repository |
-| `domain/` | Logique métier pure — machine à états, moteur de règles d'échéance et calendrier ouvré belge |
+| `api/` | Couche HTTP — routes des démarches (`/admin`), génération, dépôts et modèles, santé ; schémas, services et repositories |
+| `domain/` | Logique métier pure — préremplissage CRM vers formulaire et vocabulaire exact du régulateur |
+| `engine/` | Le moteur de démarches — modèle et synchronisation du catalogue, cycle de vie, rangement des événements du CRM, échéances, tâches quotidiennes ; n'importe jamais un régulateur |
+| `regulators/` | Plugins de régulateur (CWaPE) — catalogue, calendrier des jours fériés, contrat du plugin ; voir `regulators/README.md` |
 | `ports/` | Adaptateurs vers l'extérieur — lecture seule du CRM, publication d'événements NATS et port de rendu vers la génération de documents |
-| `worker/` | Consommateurs NATS des demandes de génération et de leurs résultats, plus le planificateur quotidien d'échéances |
+| `worker/` | Consommateurs NATS des événements du CRM, des demandes de génération et de leurs résultats, plus les tâches quotidiennes |
 | `document-templates/` | Les modèles enregistrés — les formulaires propres au régulateur et leurs manifestes |
 | `shared/` | Constantes, catalogue d'erreurs, modèles ORM, utilitaires |
 | `core/` | Infrastructure transverse — configuration, base de données, file, stockage, sécurité, middlewares, i18n, tracing, métriques, journalisation |
@@ -97,35 +105,34 @@ préfixe externe `/administrative-document` ; les chemins ci-dessous sont donc
 relatifs.
 
 L'accès est par défaut réservé aux gestionnaires : chaque route exige au moins le
-rôle gestionnaire, les écritures dans les registres de modèles et de règles
-d'échéance exigent le rôle administrateur, et `GET /filings/mine` est l'unique
-endpoint ouvert aux membres — il ne porte aucune restriction de rôle parce que le
-service réduit chaque dossier aux seules lignes de l'appelant avant de construire
-la réponse.
+rôle gestionnaire, les écritures dans le registre des modèles exigent le rôle
+administrateur, et `GET /filings/mine` est l'unique endpoint ouvert aux membres —
+il ne porte aucune restriction de rôle parce que le service réduit chaque dépôt
+aux seules lignes de l'appelant avant de construire la réponse.
 
 | Méthode | Chemin | Rôle |
 |---|---|---|
-| `GET` / `POST` | `/dossiers` | Lister (paginé, filtrable) ou ouvrir un dossier |
-| `GET` / `PATCH` | `/dossiers/{id}` | Consulter un dossier avec ses documents et échéances, ou modifier sa référence / ses métadonnées |
-| `POST` | `/dossiers/{id}/transition` · `rollback` | Enregistrer un changement de statut du dossier, ou une correction |
-| `GET` | `/dossiers/{id}/timeline` | Le journal immuable du dossier et de ses documents |
-| `GET` | `/dossiers/{id}/deadlines` | Les échéances calculées pour un dossier |
-| `GET` / `POST` | `/dossiers/{id}/documents` | Lister ou ajouter un document au dossier |
-| `GET` | `/documents/{id}` | Consulter un document et ses versions |
-| `POST` | `/documents/{id}/versions` | Téléverser une nouvelle version immuable (`multipart/form-data`) |
-| `GET` | `/documents/{id}/versions/{versionId}/file` | Télécharger une version stockée |
-| `POST` | `/documents/{id}/transition` | Enregistrer un changement de statut du document |
-| `POST` | `/documents/{id}/mark-ready` · `mark-sent` · `acknowledge` · `rollback` | Raccourcis pour les transitions courantes |
-| `GET` | `/documents/{id}/prefill` | Construire la charge utile depuis le CRM, sans rien persister |
+| `GET` | `/admin/status` | Le module pour cette communauté : actif, régulateur suivi ou non, état de départ à confirmer |
+| `GET` / `POST` | `/admin/baseline` · `/admin/baseline/confirm` | L'état de départ à confirmer, et sa confirmation (écrit les effets dans le CRM) |
+| `GET` | `/admin/inbox` | Le tableau de bord : démarches par groupe avec leur prochaine action et son échéance, et les trois échéances les plus proches |
+| `GET` | `/admin/deadlines` | L'agenda : toutes les échéances ouvertes, ou celles d'une période (`from`, `to`) |
+| `GET` / `POST` | `/admin/dossiers` | Toutes les démarches (paginé, filtrable), ou en ouvrir une à la main depuis le catalogue |
+| `GET` | `/admin/dossiers/{id}` | Une démarche : étapes, changements, pièces, échéances, fil |
+| `POST` | `/admin/dossiers/{id}/changes/{changeId}/defer` · `exclude` | Reporter un changement à la démarche suivante, ou l'exclure avec un motif |
+| `POST` | `/admin/dossiers/{id}/documents/{pieceId}/versions` | Téléverser une pièce comme nouvelle version immuable (`multipart/form-data`) |
+| `POST` | `/admin/dossiers/{id}/send` | Marquer comme envoyé (date, canal, .eml ou accusé facultatif) ; fige la démarche |
+| `POST` | `/admin/dossiers/{id}/correspondence` | Enregistrer une réponse ; `dry_run=true` indique ce qu'elle ferait sans rien écrire |
+| `GET` | `/admin/dossiers/{id}/correspondence/{messageId}/file` | Le fichier d'un message, tel qu'enregistré |
+| `POST` | `/admin/dossiers/{id}/transition` | Un changement d'étape à la main selon le catalogue, avec son motif |
+| `GET` | `/admin/procedure-definitions` | Le catalogue du régulateur, avec ses libellés en quatre langues |
+| `GET` | `/documents/{id}/prefill` | Construire la charge utile d'une pièce depuis le CRM, sans rien persister |
 | `POST` | `/documents/{id}/generate` | Figer l'instantané et demander le rendu (`409` si un rendu est déjà en cours) |
 | `GET` | `/documents/{id}/render-status` | Interroger le rendu en cours |
-| `GET` | `/deadlines` | Tableau de bord des échéances, tous dossiers confondus |
-| `POST` | `/deadlines/{id}` | Marquer une échéance respectée ou annulée |
+| `GET` | `/documents/{id}/versions/{versionId}/file` | Télécharger une version stockée |
 | `GET` | `/filings/mine` | Les dépôts propres à l'appelant, réduits à ses lignes avant construction de la réponse |
-| `GET` | `/sharing-operations` | Les opérations de partage du CRM auxquelles rattacher un dossier |
-| `GET` / `POST` | `/templates`, `/deadline-rules` | Consulter les registres (surcharges propres et valeurs par défaut) ou ajouter une surcharge |
-| `PATCH` | `/templates/{id}`, `/deadline-rules/{id}` | Modifier la surcharge propre à la communauté |
-| `POST` | `/maintenance/deadline-sweep` | Déclencher le balayage des échéances hors planification |
+| `GET` | `/sharing-operations` | Les opérations de partage de la communauté, depuis le CRM |
+| `GET` / `POST` | `/templates` | Consulter le registre des modèles (surcharges propres et valeurs par défaut) ou ajouter une surcharge |
+| `PATCH` | `/templates/{id}` | Modifier la surcharge propre à la communauté |
 
 Les endpoints de santé sont servis sous `/health` (`/health/liveness`,
 `/health/readiness`, `/health/health`). La documentation OpenAPI interactive
@@ -178,7 +185,8 @@ plus simple de les fournir) :
 
 ```bash
 psql "$LOCAL_DATABASE_URL" -f scripts/sql/schema.sql
-psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0001_wal_deadline_rules.sql
+psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0002_wal_templates.sql
+psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0003_wal_templates_phase2.sql
 uvicorn main:app --reload
 ```
 
@@ -203,10 +211,11 @@ variable. Les principaux groupes sont :
 Il n'y a pas d'outil de migration. `scripts/sql/schema.sql` est l'unique source
 de vérité pour la base locale et est reflété par `shared/models/local_models.py` ;
 les évolutions sont ajoutées sous forme de fichiers non réversibles dans
-`scripts/sql/migrations/`. Les données de référence régionales (règles d'échéance
-et modèles) sont livrées dans `scripts/sql/seeds/` : s'adapter à un formulaire ou
-à un délai réglementaire révisé est donc une modification de données, pas un
-déploiement.
+`scripts/sql/migrations/`. Le catalogue des modèles est livré dans
+`scripts/sql/seeds/`, et chaque plugin de régulateur porte son catalogue de
+démarches et son calendrier des jours fériés en YAML (`regulators/<plugin>/`),
+synchronisés avec la base au démarrage : s'adapter à un formulaire ou à un délai
+révisé est donc une modification de données, pas de code.
 
 ## Tests
 

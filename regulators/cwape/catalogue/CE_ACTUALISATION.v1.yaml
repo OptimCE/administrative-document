@@ -1,0 +1,158 @@
+# Update of an energy community's information, to the CWaPE through its online
+# form: representative, statutes or internal rules, delegation, company
+# members, installations, conflict of interest, total stop. CWaPE completeness
+# within 10 working days. No trigger before phase 4.
+#
+# submission: the 15 working days July recorded for a MODIFICATION dossier
+# (migration 0003 renamed those open deadlines to this code). wallonie.be no
+# longer states it, but the CWaPE's modification form (version of 27 June 2024,
+# bundle community_modification/v1) does, for the five changes it covers; the
+# others go to the annual report.
+#
+# channel: the form itself says it is deposited as a file on the CWaPE's secure
+# upload platform. Kept online_form (decided 30/10/2026): the CWaPE has a newer
+# online way to file it, which does not seem to work yet.
+code: CE_ACTUALISATION
+version: 1
+valid_from: 2026-01-01
+scope: community
+recipient: regulator
+channel: online_form
+family: CE_ACTUALISATION
+handles_change_kinds: []
+labels: {fr: Actualisation des informations de la CE, en: Community information update, nl: Bijwerking van de gegevens van de gemeenschap, de: Aktualisierung der Angaben der Gemeinschaft}
+
+initial_step: draft
+steps:
+  - code: draft
+    status: draft
+    bucket: todo
+    next_action:
+      code: complete_documents
+      labels: {fr: Compléter les pièces, en: Complete the documents, nl: De documenten aanvullen, de: Die Unterlagen vervollständigen}
+    labels: {fr: Brouillon, en: Draft, nl: Concept, de: Entwurf}
+  - code: ready
+    status: ready
+    bucket: todo
+    next_action:
+      code: send
+      labels: {fr: Envoyer l'actualisation à la CWaPE, en: Send the update to the CWaPE, nl: De bijwerking aan de CWaPE versturen, de: Die Aktualisierung an die CWaPE senden}
+    labels: {fr: Prêt, en: Ready, nl: Klaar, de: Bereit}
+  - code: sent
+    status: sent
+    bucket: waiting
+    next_action:
+      code: record_response
+      labels: {fr: Accusé de complétude de la CWaPE attendu, en: Awaiting the CWaPE's completeness check, nl: Wachten op de volledigheidscontrole van de CWaPE, de: Vollständigkeitsprüfung der CWaPE erwartet}
+    labels: {fr: Envoyé, en: Sent, nl: Verstuurd, de: Gesendet}
+  - code: incomplete
+    status: sent
+    bucket: todo
+    next_action:
+      code: record_response
+      labels: {fr: Envoyer les compléments, en: Send the additional information, nl: De aanvullingen versturen, de: Die Ergänzungen senden}
+    labels: {fr: Incomplet, en: Incomplete, nl: Onvolledig, de: Unvollständig}
+  - code: in_force
+    status: in_force
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Complète, en: Complete, nl: Volledig, de: Vollständig}
+  - code: cancelled
+    status: cancelled
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Annulé, en: Cancelled, nl: Geannuleerd, de: Storniert}
+  - code: lapsed
+    status: lapsed
+    bucket: done
+    next_action: {code: none}
+    labels: {fr: Caduc, en: Lapsed, nl: Vervallen, de: Verfallen}
+
+transitions:
+  - {from: draft, to: ready, automatic: true}
+  - {from: ready, to: draft, automatic: true}
+  - {from: draft, to: cancelled, automatic: true}   # a system draft emptied by compensation; or by hand
+  - {from: ready, to: cancelled}
+  - {from: ready, to: sent}
+  - {from: sent, to: incomplete}
+  - {from: incomplete, to: sent}
+  - {from: incomplete, to: lapsed}
+  - {from: sent, to: in_force}
+
+response_types:
+  - code: sent
+    direction: outbound
+    counterparty: regulator
+    to_step: sent
+    labels: {fr: Envoi, en: Sending, nl: Verzending, de: Versand}
+  - code: receipt
+    direction: inbound
+    counterparty: regulator
+    labels: {fr: Accusé de réception, en: Acknowledgement of receipt, nl: Ontvangstbevestiging, de: Empfangsbestätigung}
+  - code: completeness_ack
+    direction: inbound
+    counterparty: regulator
+    to_step: in_force
+    labels: {fr: Accusé de complétude, en: Completeness acknowledgement, nl: Bevestiging van volledigheid, de: Vollständigkeitsbestätigung}
+  - code: incomplete_notice
+    direction: inbound
+    counterparty: regulator
+    to_step: incomplete
+    labels: {fr: Demande de compléments, en: Request for additional information, nl: Verzoek om aanvullingen, de: Nachforderung von Unterlagen}
+  - code: other
+    direction: inbound
+    counterparty: other
+    labels: {fr: Autre, en: Other, nl: Andere, de: Sonstiges}
+
+deadline_rules:
+  - code: submission
+    kind: relative
+    anchor: step:draft
+    offset: {value: 15, unit: working_days}
+    party: community
+    deadline_kind: submission
+    closes_on: [step:sent]
+    labels: {fr: Notification de la modification, en: Notification of the change, nl: Kennisgeving van de wijziging, de: Meldung der Änderung}
+  - code: completeness
+    kind: relative
+    anchor: step:sent
+    offset: {value: 10, unit: working_days}
+    party: regulator
+    deadline_kind: response
+    closes_on: [response:completeness_ack, response:incomplete_notice]
+    labels: {fr: Contrôle de complétude, en: Completeness check, nl: Volledigheidscontrole, de: Vollständigkeitsprüfung}
+  - code: lapse
+    kind: relative
+    anchor: response:incomplete_notice
+    offset: {value: 6, unit: months}
+    party: community
+    deadline_kind: lapse
+    closes_on: [step:sent]
+    labels: {fr: Compléments avant caducité, en: Additional information before lapse, nl: Aanvullingen vóór verval, de: Ergänzungen vor dem Verfall}
+
+documents:
+  - code: community_modification
+    kind: generated
+    template: community_modification
+    labels: {fr: Formulaire de modification de communauté, en: Community modification form, nl: Wijzigingsformulier gemeenschap, de: Änderungsformular Gemeinschaft}
+  - code: annex6_notification
+    kind: generated
+    template: annex6_notification
+    labels: {fr: Annexe 6 – notification de communauté, en: Annex 6 – community notification, nl: Bijlage 6 – kennisgeving gemeenschap, de: Anlage 6 – Meldung der Gemeinschaft}
+  - code: annex7_legal_entity
+    kind: generated
+    per_member: true          # one per member that is a company or association
+    template: annex7_legal_entity
+    labels: {fr: Annexe 7 – sociétés et associations, en: Annex 7 – companies and associations, nl: Bijlage 7 – vennootschappen en verenigingen, de: Anlage 7 – Gesellschaften und Vereinigungen}
+  - code: statutes
+    kind: collected
+    condition: statutes_changed
+    labels: {fr: Statuts, en: Articles of association, nl: Statuten, de: Satzung}
+  - code: internal_rules
+    kind: collected
+    condition: internal_rules_changed
+    labels: {fr: Règlement d'ordre intérieur, en: Internal rules, nl: Huishoudelijk reglement, de: Geschäftsordnung}
+  - code: delegate_agreement
+    kind: collected
+    condition: has_delegate
+    labels: {fr: Convention avec le délégué, en: Agreement with the delegate, nl: Overeenkomst met de gedelegeerde, de: Vereinbarung mit dem Beauftragten}

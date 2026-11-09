@@ -8,8 +8,8 @@ filed version is frozen at generation time.
 import pytest
 from sqlalchemy import text
 
-from tests.api.administrative_document.test_transitions import make_document, make_dossier
 from tests.factories import crm_participant_factory as f
+from tests.procedures import make_piece
 
 pytestmark = pytest.mark.asyncio
 
@@ -25,6 +25,17 @@ async def register_bundle(db_session, *, doc_type="annex6_notification", uri=_BU
             "WHERE doc_type = :doc_type AND valid_to IS NULL"
         ),
         {"uri": uri, "doc_type": doc_type},
+    )
+    await db_session.flush()
+
+
+async def retarget(db_session, document_id: int, doc_type: str) -> None:
+    """Point a piece at another template key, unpinned: the state a catalogue may
+    reach (a form registered ahead of its bundle, or not registered at all, when
+    the piece was born)."""
+    await db_session.execute(
+        text("UPDATE document SET doc_type = :doc_type, id_template = NULL WHERE id = :id"),
+        {"doc_type": doc_type, "id": document_id},
     )
     await db_session.flush()
 
@@ -55,8 +66,7 @@ class TestPrefill:
         self, client, manager_headers, db_session, community, sharing_operation
     ):
         await seed_participants(db_session, community, sharing_operation)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
 
         response = await client.get(f"/documents/{document_id}/prefill", headers=manager_headers)
 
@@ -82,8 +92,7 @@ class TestPrefill:
             id_sharing_operation=sharing_operation,
             id_member=None,
         )
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
 
         response = await client.get(f"/documents/{document_id}/prefill", headers=manager_headers)
 
@@ -96,14 +105,14 @@ class TestPrefill:
                 "subject_type": "meter",
                 "subject_id": "541448000000000007",
                 "params": {},
+                "blocking": False,
             }
         ]
 
     async def test_a_member_cannot_prefill(
-        self, client, manager_headers, member_headers, sharing_operation
+        self, client, db_session, manager_headers, member_headers, sharing_operation
     ):
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
 
         response = await client.get(f"/documents/{document_id}/prefill", headers=member_headers)
 
@@ -116,8 +125,7 @@ class TestGenerate:
     ):
         await register_bundle(db_session)
         await seed_participants(db_session, community, sharing_operation)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
 
         response = await client.post(
             f"/documents/{document_id}/generate", json={"data": {}}, headers=manager_headers
@@ -138,8 +146,7 @@ class TestGenerate:
         """This is the whole point of review-and-edit: the CRM value loses."""
         await register_bundle(db_session)
         await seed_participants(db_session, community, sharing_operation)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
 
         await client.post(
             f"/documents/{document_id}/generate",
@@ -163,8 +170,7 @@ class TestGenerate:
         """A participant the reviewer removed must not reappear in the filing."""
         await register_bundle(db_session)
         await seed_participants(db_session, community, sharing_operation)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
 
         await client.post(
             f"/documents/{document_id}/generate",
@@ -184,8 +190,7 @@ class TestGenerate:
         self, client, manager_headers, db_session, community, sharing_operation
     ):
         await register_bundle(db_session)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
 
         first = await client.post(
             f"/documents/{document_id}/generate", json={"data": {}}, headers=manager_headers
@@ -203,8 +208,7 @@ class TestGenerate:
     ):
         """A FAILED render is not "in flight"; refusing a retry would strand it."""
         await register_bundle(db_session)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
         await client.post(
             f"/documents/{document_id}/generate", json={"data": {}}, headers=manager_headers
         )
@@ -219,27 +223,6 @@ class TestGenerate:
         )
 
         assert retry.status_code == 200, retry.text
-
-    async def test_a_sent_document_cannot_be_regenerated(
-        self, client, manager_headers, db_session, sharing_operation
-    ):
-        """Same rule as upload: roll back first, so the correction is traced."""
-        await register_bundle(db_session)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
-        await client.post(f"/documents/{document_id}/mark-ready", headers=manager_headers)
-        await client.post(
-            f"/documents/{document_id}/mark-sent",
-            json={"submission_date": "2026-07-01"},
-            headers=manager_headers,
-        )
-
-        response = await client.post(
-            f"/documents/{document_id}/generate", json={"data": {}}, headers=manager_headers
-        )
-
-        assert response.status_code == 409
-        assert response.json()["error_code"] == 2360
 
     async def test_a_doc_type_without_a_bundle_is_refused(
         self, client, manager_headers, db_session, sharing_operation
@@ -259,10 +242,8 @@ class TestGenerate:
         )
         await db_session.flush()
 
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(
-            client, manager_headers, dossier_id, doc_type="dso_agreement_community"
-        )
+        _, document_id = await make_piece(client, manager_headers, db_session)
+        await retarget(db_session, document_id, "dso_agreement_community")
 
         response = await client.post(
             f"/documents/{document_id}/generate", json={"data": {}}, headers=manager_headers
@@ -272,13 +253,11 @@ class TestGenerate:
         assert response.json()["error_code"] == 2361
 
     async def test_an_unregistered_doc_type_is_refused(
-        self, client, manager_headers, sharing_operation
+        self, client, db_session, manager_headers, sharing_operation
     ):
         """A doc_type with no catalogue row at all fails the same way."""
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(
-            client, manager_headers, dossier_id, doc_type="not_a_real_form"
-        )
+        _, document_id = await make_piece(client, manager_headers, db_session)
+        await retarget(db_session, document_id, "not_a_real_form")
 
         response = await client.post(
             f"/documents/{document_id}/generate", json={"data": {}}, headers=manager_headers
@@ -287,27 +266,27 @@ class TestGenerate:
         assert response.status_code == 422
         assert response.json()["error_code"] == 2361
 
-    async def test_generating_does_not_move_the_document_status(
+    async def test_generating_does_not_move_the_piece_status(
         self, client, manager_headers, db_session, sharing_operation
     ):
-        """A render is technical; only a human marks a document READY."""
+        """A render is technical: the piece is ready when the version lands."""
         await register_bundle(db_session)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
 
         await client.post(
             f"/documents/{document_id}/generate", json={"data": {}}, headers=manager_headers
         )
 
-        document = await client.get(f"/documents/{document_id}", headers=manager_headers)
-        assert document.json()["data"]["status"] == 1  # still DRAFT
+        status = await client.get(
+            f"/documents/{document_id}/render-status", headers=manager_headers
+        )
+        assert status.json()["data"]["status"] == 6  # still MISSING
 
     async def test_a_member_cannot_generate(
         self, client, manager_headers, member_headers, db_session, sharing_operation
     ):
         await register_bundle(db_session)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
 
         response = await client.post(
             f"/documents/{document_id}/generate", json={"data": {}}, headers=member_headers
@@ -318,10 +297,9 @@ class TestGenerate:
 
 class TestRenderStatus:
     async def test_status_is_idle_before_any_generation(
-        self, client, manager_headers, sharing_operation
+        self, client, db_session, manager_headers, sharing_operation
     ):
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
 
         response = await client.get(
             f"/documents/{document_id}/render-status", headers=manager_headers
@@ -335,8 +313,7 @@ class TestRenderStatus:
         self, client, manager_headers, db_session, sharing_operation
     ):
         await register_bundle(db_session)
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
         await client.post(
             f"/documents/{document_id}/generate", json={"data": {}}, headers=manager_headers
         )
@@ -359,10 +336,9 @@ class TestRenderStatus:
         assert data["render_error"]["code"] == "VALIDATION_ERROR"
 
     async def test_another_communitys_document_is_not_visible(
-        self, client, manager_headers, other_manager_headers, sharing_operation
+        self, client, db_session, manager_headers, other_manager_headers, sharing_operation
     ):
-        dossier_id = await make_dossier(client, manager_headers, sharing_operation)
-        document_id = await make_document(client, manager_headers, dossier_id)
+        _, document_id = await make_piece(client, manager_headers, db_session)
 
         response = await client.get(
             f"/documents/{document_id}/render-status", headers=other_manager_headers

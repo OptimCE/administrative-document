@@ -34,47 +34,54 @@ together.
 
 The service ships two deployables from one codebase — a
 [FastAPI](https://fastapi.tiangolo.com/) API (`main:app`) and a NATS worker
-(`worker.main`) that runs the generation and result consumers plus the deadline
-scheduler — built around four ideas:
+(`worker.main`) that files the core's events into procedures, runs the generation
+and result consumers, and the daily jobs — built around four ideas:
 
-- **A journaled state machine.** Documents move `draft → ready → sent →
-  acknowledged` (plus `obsolete`); dossiers move `in_preparation → submitted →
-  complete → closed` (plus `lapsed`). A status is never edited in place: each
-  change appends an immutable `status_event` (actor, timestamp, from/to, context)
-  and the status column is a cache the database validates against that journal.
-  Correcting a mistake is a new, traced corrective transition — history is never
-  rewritten.
-- **Derived deadlines.** Regulatory clocks are configuration, not code. A
-  `deadline_rule` row says "when *this* happens, a *that* deadline falls due N
-  business days / months later"; a transition evaluates the matching rules and
-  materialises the deadlines. Business-day arithmetic respects Belgian public
-  holidays, including the movable feasts.
-- **Immutable versions.** Every uploaded file becomes a numbered, content-addressed
-  version. Re-uploading creates a new version; a version that has been sent can
-  never be altered, so you can always retrieve exactly what was transmitted.
+- **Procedures from the regulator's catalogue.** A dossier is a *procedure* of
+  the community's regulator: its type, steps, responses, pieces and clocks come
+  from a versioned YAML catalogue in a regulator plugin (`regulators/`; CWaPE is
+  the only one today, see `regulators/README.md`). The engine (`engine/`) knows
+  only common statuses — draft, ready, sent, in force, refused, cancelled,
+  lapsed — and the plugin's step travels with them. A status is never edited in
+  place: each change appends an immutable `status_event`, the database copies
+  the journal head onto the procedure and refuses a direct write. Correcting a
+  mistake is a new, traced step change — history is never rewritten.
+- **Changes in, deadlines out.** The CRM publishes its changes (a meter added, a
+  key approved…) as events; the worker files each one into the open draft of
+  the right type, and the daily jobs open the calendar procedures (the annual
+  report) and chase their deadlines. A clock is catalogue data — "N working days
+  or months after this step or that response" — counted on the plugin's holiday
+  calendar, movable feasts included.
+- **Immutable versions.** Every uploaded or generated file becomes a numbered,
+  content-addressed version, and so does every message sent or received. Once a
+  procedure is sent its pieces are frozen, so you can always retrieve exactly
+  what was transmitted.
 - **Generated filings.** The mandated forms are produced from the community's own
   data rather than filled by hand: a prefill step builds the payload from the CRM,
   generation freezes that payload as a snapshot and renders the registered
   template bundle through the platform's document-generation service, and the
   result lands as a new immutable version. The snapshot is captured when the
   request is made, so what was filed is always reproducible. Only one render can
-  be in flight per document.
+  be in flight per piece.
 
-Two **PostgreSQL** databases are used: the CRM database (read-only source for
-communities, members, meters, and subscriptions) and a local database owning the
-dossiers, documents, versions, status journal, and deadlines. Stored files live in
-an **S3-compatible object store** (MinIO in development). Status and deadline
-events are published on **NATS JetStream** for other services to observe. Traces,
-metrics, and logs are emitted through **OpenTelemetry**.
+Two **PostgreSQL** databases are used: the CRM database (communities, members,
+meters and subscriptions, read-only, plus the regulatory status this service
+writes back) and a local database owning the procedures, their pieces, versions,
+correspondence, status journal and deadlines. Stored files live in an
+**S3-compatible object store** (MinIO in development). The CRM's events arrive on
+**NATS JetStream**, and realtime hints tell the managers' open pages to refresh.
+Traces, metrics, and logs are emitted through **OpenTelemetry**.
 
 ## Repository Structure
 
 | Path | Description |
 |---|---|
-| `api/` | HTTP layer — health and administrative-document routes, schemas, service and repository logic |
-| `domain/` | Pure domain logic — the state machine, the deadline rule engine, and the Belgian business-day calendar |
+| `api/` | HTTP layer — the procedures routes (`/admin`), generation, filings and templates, health; schemas, services and repositories |
+| `domain/` | Pure domain logic — the CRM-to-form prefill and the regulator's exact vocabulary |
+| `engine/` | The procedures engine — catalogue model and sync, lifecycle, routing of the CRM's events, deadlines, daily jobs; never imports a regulator |
+| `regulators/` | Regulator plugins (CWaPE) — catalogue, holiday calendar, plugin contract; see `regulators/README.md` |
 | `ports/` | Adapters to the outside world — read-only CRM access, NATS event publishing, and the document-generation render port |
-| `worker/` | NATS consumers for generation requests and results, plus the daily deadline scheduler |
+| `worker/` | NATS consumers for the CRM's events, generation requests and their results, plus the daily jobs |
 | `document-templates/` | The registered template bundles — the regulator's own forms and their manifests |
 | `shared/` | Constants, error catalogue, ORM models, helpers |
 | `core/` | Cross-cutting infrastructure — config, database, queue, storage, security, middleware, i18n, tracing, metrics, logging |
@@ -89,34 +96,34 @@ All endpoints require authentication and an active community subscription (see
 `/administrative-document` prefix, so the in-service paths are relative.
 
 Access is manager-gated by default: every route requires at least the manager
-role, writes to the template and deadline-rule registries require the
-administrator role, and `GET /filings/mine` is the one member-facing endpoint —
-it carries no role gate because the service reduces each dossier to the caller's
-own rows before building the response.
+role, writes to the template registry require the administrator role, and
+`GET /filings/mine` is the one member-facing endpoint — it carries no role gate
+because the service reduces each filing to the caller's own rows before building
+the response.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` / `POST` | `/dossiers` | List (paginated, filterable) or open a dossier |
-| `GET` / `PATCH` | `/dossiers/{id}` | Read a dossier with its documents and deadlines, or edit its reference/metadata |
-| `POST` | `/dossiers/{id}/transition` · `rollback` | Record a dossier status change, or a corrective one |
-| `GET` | `/dossiers/{id}/timeline` | The immutable status journal for the dossier and its documents |
-| `GET` | `/dossiers/{id}/deadlines` | The deadlines derived for one dossier |
-| `GET` / `POST` | `/dossiers/{id}/documents` | List or add a document to the dossier |
-| `GET` | `/documents/{id}` | Read a document with its versions |
-| `POST` | `/documents/{id}/versions` | Upload a new immutable version (`multipart/form-data`) |
-| `GET` | `/documents/{id}/versions/{versionId}/file` | Download a stored version |
-| `POST` | `/documents/{id}/transition` | Record a document status change |
-| `POST` | `/documents/{id}/mark-ready` · `mark-sent` · `acknowledge` · `rollback` | Ergonomic aliases for the common transitions |
-| `GET` | `/documents/{id}/prefill` | Build the render payload from the CRM, persisting nothing |
+| `GET` | `/admin/status` | The module for this community: active, regulator followed or not, starting state to confirm |
+| `GET` / `POST` | `/admin/baseline` · `/admin/baseline/confirm` | The starting state to confirm, and its confirmation (writes the effects to the CRM) |
+| `GET` | `/admin/inbox` | The dashboard: procedures by bucket with their next action and its due date, and the three soonest deadlines |
+| `GET` | `/admin/deadlines` | The agenda: every open deadline, or those of a period (`from`, `to`) |
+| `GET` / `POST` | `/admin/dossiers` | Every procedure (paginated, filterable), or open one by hand from the catalogue |
+| `GET` | `/admin/dossiers/{id}` | One procedure: steps, changes, pieces, deadlines, thread |
+| `POST` | `/admin/dossiers/{id}/changes/{changeId}/defer` · `exclude` | Defer a change to the next procedure, or exclude it with a reason |
+| `POST` | `/admin/dossiers/{id}/documents/{pieceId}/versions` | Upload a piece as a new immutable version (`multipart/form-data`) |
+| `POST` | `/admin/dossiers/{id}/send` | Mark as sent (date, channel, optional .eml or receipt); freezes the procedure |
+| `POST` | `/admin/dossiers/{id}/correspondence` | Record a response; `dry_run=true` says what it would do and writes nothing |
+| `GET` | `/admin/dossiers/{id}/correspondence/{messageId}/file` | A message's file, as recorded |
+| `POST` | `/admin/dossiers/{id}/transition` | A step change by hand along the catalogue, with its reason |
+| `GET` | `/admin/procedure-definitions` | The regulator's catalogue, with labels in four languages |
+| `GET` | `/documents/{id}/prefill` | Build a piece's render payload from the CRM, persisting nothing |
 | `POST` | `/documents/{id}/generate` | Freeze the snapshot and request the render (`409` if one is already in flight) |
 | `GET` | `/documents/{id}/render-status` | Poll the in-flight render |
-| `GET` | `/deadlines` | Cross-dossier deadline dashboard, sorted by due date |
-| `POST` | `/deadlines/{id}` | Mark a deadline met or cancelled |
+| `GET` | `/documents/{id}/versions/{versionId}/file` | Download a stored version |
 | `GET` | `/filings/mine` | The caller's own filings, reduced to their rows before the payload is built |
-| `GET` | `/sharing-operations` | The CRM sharing operations a dossier can be attached to |
-| `GET` / `POST` | `/templates`, `/deadline-rules` | List the registries (own overrides and platform defaults) or add an override |
-| `PATCH` | `/templates/{id}`, `/deadline-rules/{id}` | Edit the community's own registry override |
-| `POST` | `/maintenance/deadline-sweep` | Run the deadline sweep out of band |
+| `GET` | `/sharing-operations` | The community's sharing operations, from the CRM |
+| `GET` / `POST` | `/templates` | List the template registry (own overrides and platform defaults) or add an override |
+| `PATCH` | `/templates/{id}` | Edit the community's own override |
 
 Health endpoints are served under `/health`:
 
@@ -178,7 +185,8 @@ MinIO, and PostgreSQL — the monorepo stack is the easiest way to provide them)
 
 ```bash
 psql "$LOCAL_DATABASE_URL" -f scripts/sql/schema.sql
-psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0001_wal_deadline_rules.sql
+psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0002_wal_templates.sql
+psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0003_wal_templates_phase2.sql
 uvicorn main:app --reload      # API on http://localhost:8000
 ```
 
@@ -202,9 +210,11 @@ variable. The main groups are:
 There is no migration runner. `scripts/sql/schema.sql` is the single source of
 truth for the local database and is mirrored by `shared/models/local_models.py`;
 incremental changes are added as forward-only files under
-`scripts/sql/migrations/`. Regional reference data (deadline rules and templates)
-ships as seeds under `scripts/sql/seeds/`, so adapting to a revised regulatory
-form or deadline is a data change, not a deployment.
+`scripts/sql/migrations/`. The template catalogue ships as seeds under
+`scripts/sql/seeds/`, and each regulator plugin carries its procedure catalogue
+and holiday calendar as YAML (`regulators/<plugin>/`), synced to the database at
+startup — so adapting to a revised form or delay is a data change, not a code
+change.
 
 ## Testing
 

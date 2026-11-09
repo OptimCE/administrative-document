@@ -35,52 +35,62 @@ te voeren.
 
 ## Werking
 
-De service levert twee deployables uit één codebase — een
+De service levert twee deploybare onderdelen uit één codebase — een
 [FastAPI](https://fastapi.tiangolo.com/)-API (`main:app`) en een NATS-worker
-(`worker.main`) die de consumers voor generatie en resultaten draait, plus de
-termijnplanner — opgebouwd rond vier ideeën:
+(`worker.main`) die de gebeurtenissen van het CRM in procedures onderbrengt, de
+consumers voor generatie en resultaten draait, plus de dagelijkse taken —
+gebouwd rond vier ideeën:
 
-- **Een gejournaliseerde toestandsmachine.** Documenten doorlopen
-  `concept → gereed → verzonden → ontvangstbevestigd` (plus `verouderd`);
-  dossiers doorlopen `in voorbereiding → ingediend → volledig → afgesloten` (plus
-  `vervallen`). Een status wordt nooit ter plaatse aangepast: elke wijziging voegt
-  een onveranderlijke `status_event` toe (auteur, tijdstip, bron- en doelstatus,
-  context), en de statuskolom is slechts een cache die de database toetst aan dat
-  journaal. Een fout corrigeren gebeurt via een nieuwe, getraceerde corrigerende
-  overgang — de geschiedenis wordt nooit herschreven.
-- **Afgeleide termijnen.** Reglementaire termijnen zijn configuratie, geen code.
-  Een `deadline_rule`-regel zegt: "wanneer *dit* gebeurt, valt een termijn *van
-  dat type* N werkdagen of N maanden later"; een overgang evalueert de
-  overeenkomende regels en materialiseert de termijnen. De werkdagberekening houdt
-  rekening met de Belgische feestdagen, inclusief de beweeglijke feesten.
-- **Onveranderlijke versies.** Elk geüpload bestand wordt een genummerde versie
-  met inhoudsadressering. Opnieuw uploaden maakt een nieuwe versie aan; een
-  reeds verzonden versie kan nooit worden gewijzigd, zodat u altijd exact kunt
-  ophalen wat werd ingediend.
+- **Procedures uit de catalogus van de regulator.** Een dossier is een
+  *procedure* bij de regulator van de gemeenschap: het type, de stappen, de
+  antwoorden, de documenten en de termijnen komen uit een geversioneerde
+  YAML-catalogus in een regulatorplugin (`regulators/`; vandaag enkel de CWaPE,
+  zie `regulators/README.md`). De motor (`engine/`) kent enkel gemeenschappelijke
+  statussen — concept, klaar, verstuurd, van kracht, geweigerd, geannuleerd,
+  vervallen — en de stap van de plugin reist met hen mee. Een status wordt nooit
+  ter plaatse gewijzigd: elke wijziging voegt een onveranderlijk `status_event`
+  toe, de database kopieert de kop van het journaal naar de procedure en weigert
+  elke rechtstreekse schrijfbewerking. Een fout corrigeren is een nieuwe,
+  traceerbare stapwijziging — de geschiedenis wordt nooit herschreven.
+- **Wijzigingen erin, termijnen eruit.** Het CRM publiceert zijn wijzigingen (een
+  toegevoegde meter, een goedgekeurde sleutel…) als gebeurtenissen; de worker
+  brengt elke wijziging onder in het open concept van het juiste type, en de
+  dagelijkse taken openen de kalenderprocedures (de jaarlijkse rapportering) en
+  volgen hun termijnen op. Een termijn is catalogusdata — „N werkdagen of maanden
+  na deze stap of dat antwoord" — geteld op de feestdagenkalender van de plugin,
+  verschuivende feestdagen inbegrepen.
+- **Onveranderlijke versies.** Elk geüpload of gegenereerd bestand wordt een
+  genummerde, inhoudsgeadresseerde versie, net als elk verstuurd of ontvangen
+  bericht. Zodra een procedure verstuurd is, liggen haar documenten vast, zodat
+  je altijd precies kunt terugvinden wat werd overgemaakt.
 - **Gegenereerde indieningen.** De verplichte formulieren komen voort uit de
-  gegevens van de gemeenschap in plaats van met de hand te worden ingevuld: een
-  prefill-stap bouwt de payload op uit het CRM, de generatie bevriest die als
-  momentopname en rendert het geregistreerde sjabloon via de
-  documentgeneratieservice van het platform, en het resultaat belandt als nieuwe
-  onveranderlijke versie. De momentopname wordt genomen op het moment van de
-  aanvraag, zodat wat werd ingediend altijd reproduceerbaar is. Er kan per
-  document maar één rendering tegelijk lopen.
+  gegevens van de gemeenschap in plaats van met de hand ingevuld te worden: een
+  voorinvulstap bouwt de payload op vanuit het CRM, de generatie bevriest die als
+  momentopname en rendert de geregistreerde sjabloonbundel via de
+  documentgeneratiedienst van het platform, en het resultaat komt binnen als een
+  nieuwe onveranderlijke versie. De momentopname wordt bij de aanvraag vastgelegd,
+  zodat wat werd ingediend altijd reproduceerbaar blijft. Per document kan maar
+  één rendering tegelijk lopen.
 
-Er worden twee **PostgreSQL**-databases gebruikt: de CRM-database (alleen-lezen
-bron voor gemeenschappen, leden, meters en abonnementen) en een lokale database
-die de dossiers, documenten, versies, het statusjournaal en de termijnen bezit.
-Opgeslagen bestanden staan in een **S3-compatibele** objectopslag (MinIO in
-ontwikkeling). Status- en termijngebeurtenissen worden gepubliceerd op **NATS
-JetStream**. Traces, metrieken en logs verlopen via **OpenTelemetry**.
+Er worden twee **PostgreSQL**-databases gebruikt: de CRM-database
+(gemeenschappen, leden, meters en abonnementen alleen-lezen, plus de
+reglementaire status die deze service terugschrijft) en een lokale database met de
+procedures, hun documenten, versies, correspondentie, het statusjournaal en de
+termijnen. Opgeslagen bestanden staan in een **S3-compatibele objectopslag**
+(MinIO in ontwikkeling). De gebeurtenissen van het CRM komen binnen via
+**NATS JetStream**, en realtime signalen laten de open pagina's van de beheerders
+vernieuwen. Traces, metrics en logs worden uitgestuurd via **OpenTelemetry**.
 
 ## Repositorystructuur
 
 | Pad | Beschrijving |
 |---|---|
-| `api/` | HTTP-laag — health- en administratieve documentroutes, schema's, service en repository |
-| `domain/` | Zuivere domeinlogica — de toestandsmachine, de termijnregelmotor en de Belgische werkdagkalender |
+| `api/` | HTTP-laag — procedureroutes (`/admin`), generatie, indieningen en sjablonen, health; schema's, services en repositories |
+| `domain/` | Zuivere domeinlogica — voorinvulling van CRM naar formulier en de exacte woordenschat van de regulator |
+| `engine/` | De proceduremotor — catalogusmodel en -synchronisatie, levenscyclus, onderbrengen van de CRM-gebeurtenissen, termijnen, dagelijkse taken; importeert nooit een regulator |
+| `regulators/` | Regulatorplugins (CWaPE) — catalogus, feestdagenkalender, plugincontract; zie `regulators/README.md` |
 | `ports/` | Adapters naar buiten — alleen-lezen CRM-toegang, NATS-eventpublicatie en de renderpoort naar documentgeneratie |
-| `worker/` | NATS-consumers voor generatieaanvragen en hun resultaten, plus de dagelijkse termijnplanner |
+| `worker/` | NATS-consumers voor de CRM-gebeurtenissen, generatieaanvragen en hun resultaten, plus de dagelijkse taken |
 | `document-templates/` | De geregistreerde sjablonen — de eigen formulieren van de regulator en hun manifesten |
 | `shared/` | Constanten, foutcatalogus, ORM-modellen, hulpfuncties |
 | `core/` | Overkoepelende infrastructuur — configuratie, database, queue, opslag, beveiliging, middleware, i18n, tracing, metrieken, logging |
@@ -95,34 +105,34 @@ Alle endpoints vereisen authenticatie en een actief abonnement van de gemeenscha
 `/administrative-document` toe; onderstaande paden zijn dus relatief.
 
 Toegang is standaard voorbehouden aan beheerders: elke route vereist minstens de
-beheerdersrol, schrijfacties op de sjabloon- en termijnregelregisters vereisen de
+beheerdersrol, schrijfacties op het sjabloonregister vereisen de
 administratorrol, en `GET /filings/mine` is het enige endpoint dat voor leden
-openstaat — het draagt geen rolcontrole omdat de service elk dossier tot de eigen
-rijen van de aanroeper herleidt vóór het antwoord wordt opgebouwd.
+openstaat — het draagt geen rolbeperking omdat de service elke indiening tot de
+eigen rijen van de aanroeper herleidt voordat het antwoord wordt opgebouwd.
 
 | Methode | Pad | Doel |
 |---|---|---|
-| `GET` / `POST` | `/dossiers` | Dossiers lijsten (gepagineerd, filterbaar) of openen |
-| `GET` / `PATCH` | `/dossiers/{id}` | Een dossier met documenten en termijnen lezen, of referentie/metadata aanpassen |
-| `POST` | `/dossiers/{id}/transition` · `rollback` | Een statuswijziging van het dossier vastleggen, of een correctie |
-| `GET` | `/dossiers/{id}/timeline` | Het onveranderlijke journaal van het dossier en zijn documenten |
-| `GET` | `/dossiers/{id}/deadlines` | De voor één dossier afgeleide termijnen |
-| `GET` / `POST` | `/dossiers/{id}/documents` | Documenten lijsten of toevoegen |
-| `GET` | `/documents/{id}` | Een document met zijn versies lezen |
-| `POST` | `/documents/{id}/versions` | Een nieuwe onveranderlijke versie uploaden (`multipart/form-data`) |
-| `GET` | `/documents/{id}/versions/{versionId}/file` | Een opgeslagen versie downloaden |
-| `POST` | `/documents/{id}/transition` | Een statuswijziging van het document vastleggen |
-| `POST` | `/documents/{id}/mark-ready` · `mark-sent` · `acknowledge` · `rollback` | Sneltoetsen voor de gangbare overgangen |
-| `GET` | `/documents/{id}/prefill` | De payload uit het CRM opbouwen, zonder iets te bewaren |
-| `POST` | `/documents/{id}/generate` | De momentopname bevriezen en de rendering aanvragen (`409` als er al één loopt) |
+| `GET` | `/admin/status` | De module voor deze gemeenschap: actief, regulator ondersteund of niet, te bevestigen beginsituatie |
+| `GET` / `POST` | `/admin/baseline` · `/admin/baseline/confirm` | De te bevestigen beginsituatie, en de bevestiging ervan (schrijft de gevolgen in het CRM) |
+| `GET` | `/admin/inbox` | Het dashboard: procedures per groep met hun volgende stap en de termijn ervan, en de drie dichtstbijzijnde termijnen |
+| `GET` | `/admin/deadlines` | De agenda: alle open termijnen, of die van een periode (`from`, `to`) |
+| `GET` / `POST` | `/admin/dossiers` | Alle procedures (gepagineerd, filterbaar), of er één met de hand openen vanuit de catalogus |
+| `GET` | `/admin/dossiers/{id}` | Eén procedure: stappen, wijzigingen, documenten, termijnen, activiteit |
+| `POST` | `/admin/dossiers/{id}/changes/{changeId}/defer` · `exclude` | Een wijziging uitstellen naar de volgende procedure, of ze met een reden uitsluiten |
+| `POST` | `/admin/dossiers/{id}/documents/{pieceId}/versions` | Een document uploaden als nieuwe onveranderlijke versie (`multipart/form-data`) |
+| `POST` | `/admin/dossiers/{id}/send` | Markeren als verstuurd (datum, kanaal, optioneel .eml of ontvangstbewijs); legt de procedure vast |
+| `POST` | `/admin/dossiers/{id}/correspondence` | Een antwoord vastleggen; `dry_run=true` zegt wat het zou doen zonder iets te schrijven |
+| `GET` | `/admin/dossiers/{id}/correspondence/{messageId}/file` | Het bestand van een bericht, zoals vastgelegd |
+| `POST` | `/admin/dossiers/{id}/transition` | Een stapwijziging met de hand volgens de catalogus, met een reden |
+| `GET` | `/admin/procedure-definitions` | De catalogus van de regulator, met labels in vier talen |
+| `GET` | `/documents/{id}/prefill` | De payload van een document opbouwen vanuit het CRM, zonder iets op te slaan |
+| `POST` | `/documents/{id}/generate` | De momentopname bevriezen en de rendering aanvragen (`409` als er al een loopt) |
 | `GET` | `/documents/{id}/render-status` | De lopende rendering opvragen |
-| `GET` | `/deadlines` | Termijnendashboard over alle dossiers heen |
-| `POST` | `/deadlines/{id}` | Een termijn als nagekomen of geannuleerd markeren |
+| `GET` | `/documents/{id}/versions/{versionId}/file` | Een opgeslagen versie downloaden |
 | `GET` | `/filings/mine` | De eigen indieningen van de aanroeper, tot zijn rijen herleid vóór het antwoord wordt opgebouwd |
-| `GET` | `/sharing-operations` | De CRM-deelbewerkingen waaraan een dossier kan worden gekoppeld |
-| `GET` / `POST` | `/templates`, `/deadline-rules` | De registers lezen (eigen overrides en platformstandaarden) of een override toevoegen |
-| `PATCH` | `/templates/{id}`, `/deadline-rules/{id}` | De eigen override van de gemeenschap bewerken |
-| `POST` | `/maintenance/deadline-sweep` | De termijnsweep buiten de planning starten |
+| `GET` | `/sharing-operations` | De deelverrichtingen van de gemeenschap, uit het CRM |
+| `GET` / `POST` | `/templates` | Het sjabloonregister lezen (eigen overrides en platformstandaarden) of een override toevoegen |
+| `PATCH` | `/templates/{id}` | De eigen override van de gemeenschap bewerken |
 
 Health-endpoints staan onder `/health` (`/health/liveness`,
 `/health/readiness`, `/health/health`). De interactieve OpenAPI-documentatie
@@ -174,7 +184,8 @@ PostgreSQL moeten bereikbaar zijn — de monorepo-stack is de eenvoudigste manie
 
 ```bash
 psql "$LOCAL_DATABASE_URL" -f scripts/sql/schema.sql
-psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0001_wal_deadline_rules.sql
+psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0002_wal_templates.sql
+psql "$LOCAL_DATABASE_URL" -f scripts/sql/seeds/0003_wal_templates_phase2.sql
 uvicorn main:app --reload
 ```
 
@@ -198,10 +209,11 @@ variabele. De belangrijkste groepen zijn:
 Er is geen migratierunner. `scripts/sql/schema.sql` is de enige bron van waarheid
 voor de lokale database en wordt weerspiegeld door
 `shared/models/local_models.py`; wijzigingen komen als voorwaartse bestanden in
-`scripts/sql/migrations/`. Regionale referentiegegevens (termijnregels en
-sjablonen) worden geleverd in `scripts/sql/seeds/`, zodat aanpassen aan een
-herzien formulier of een gewijzigde termijn een gegevenswijziging is en geen
-deployment.
+`scripts/sql/migrations/`. De sjablooncatalogus wordt geleverd als seeds in
+`scripts/sql/seeds/`, en elke regulatorplugin brengt zijn procedurecatalogus en
+feestdagenkalender mee als YAML (`regulators/<plugin>/`), bij het opstarten met de
+database gesynchroniseerd — zodat aanpassen aan een herzien formulier of een
+gewijzigde termijn een gegevenswijziging is en geen codewijziging.
 
 ## Testen
 

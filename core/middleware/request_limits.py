@@ -13,10 +13,9 @@ Body size check:
     transfer-encoding sends no Content-Length and so slips past this check; the
     middleware cannot bound such a body without first buffering it, which would
     allocate the very memory the cap exists to prevent. The memory bound is
-    therefore enforced again where the body is actually loaded: the document
-    version upload handler reads the file in bounded chunks and rejects at
-    UPLOAD_MAX_BODY_BYTES (see
-    api/administrative_document/service.py::_read_within_cap).
+    therefore enforced again where the body is actually loaded: the upload
+    handlers read the file in bounded chunks and reject at
+    UPLOAD_MAX_BODY_BYTES (see api/admin/procedures.py::_read).
 
 Request timeout:
     Wraps the entire downstream handler in asyncio.wait_for().
@@ -34,7 +33,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-# Larger cap for the explicit upload endpoint (multipart document versions).
+# Larger cap for the routes that take a file (multipart).
 # Defined in shared/const.py, not here: the service enforces the same number on
 # the bytes it actually reads, and this module imports starlette, which the
 # worker image does not install. Re-exported so callers and tests can keep
@@ -48,11 +47,16 @@ __all__ = ["UPLOAD_MAX_BODY_BYTES", "RequestLimitsMiddleware"]
 # 2 MB — generous for a JSON API, covers PDF upload metadata but blocks abuse
 MAX_BODY_BYTES = 2 * 1024 * 1024
 
-# Method + path-suffix pairs that get the larger upload cap. The only upload is
-# POST /documents/{id}/versions, whose path is parameterised — so match on the
+# Method + path-suffix pairs that get the larger upload cap: the /admin routes
+# that take a file — a piece's version, the sending's .eml or receipt, a
+# response's .eml/.msg/PDF. Their paths are parameterised, so match on the
 # suffix rather than the exact path. Match on POST only: GET on the same subtree
-# (version download) keeps the default cap.
-_UPLOAD_ROUTE_SUFFIXES: tuple[tuple[str, str], ...] = (("POST", "/versions"),)
+# (a version's or a message's file) keeps the default cap.
+_UPLOAD_ROUTE_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("POST", "/versions"),
+    ("POST", "/send"),
+    ("POST", "/correspondence"),
+)
 
 # 30 seconds — covers complex DB queries / PDF generation
 TIMEOUT_SECONDS = 30
