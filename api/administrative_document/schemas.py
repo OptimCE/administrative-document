@@ -35,12 +35,14 @@ class PrefillWarningOut(BaseModel):
     """
 
     code: str
-    subject_type: Literal["meter", "member", "community"]
-    #: EAN, member id, or None for a community-level field. Always a string — an
-    #: 18-digit EAN must never round-trip through an int.
+    subject_type: Literal["meter", "member", "community", "key", "sharing_operation"]
+    #: EAN, member/key/operation id, or None for a community-level field. Always a
+    #: string — an 18-digit EAN must never round-trip through an int.
     subject_id: str | None = None
     #: Interpolation values, notably `field` for the snapshot key concerned.
     params: dict[str, str] = Field(default_factory=dict)
+    #: The render is refused (422, code 2366) until this is fixed in the CRM.
+    blocking: bool = False
 
 
 class PrefillOut(BaseModel):

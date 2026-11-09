@@ -31,6 +31,10 @@ from domain import cwape_labels as labels
 from ports.crm_core import (
     WARNING_COMMUNITY_FIELD_MISSING,
     WARNING_EAN_NOT_FORM_REPRESENTABLE,
+    WARNING_KEY_ITERATION_NO_CONSUMER,
+    WARNING_KEY_ITERATIONS_TOTAL,
+    WARNING_KEY_MISSING,
+    WARNING_KEY_NO_ITERATION,
     WARNING_MEMBER_FIELD_MISSING,
     AllocationKey,
     CommunityContext,
@@ -811,12 +815,89 @@ def participant_warnings(
     return tuple(warnings)
 
 
+#: How far the iterations' total may drift from 100 % before it is reported: the
+#: CRM stores fractions as floats, and 0.7 + 0.2 + 0.1 is not exactly 1.
+_KEY_TOTAL_TOLERANCE = 1e-6
+
+
+def key_warnings(
+    doc_type: str, key: AllocationKey | None, *, id_sharing_operation: int | None
+) -> tuple[PrefillWarning, ...]:
+    """What the operation's key lacks for THIS piece.
+
+    The key description describes the key and nothing else, so a missing key or
+    a key with no iteration makes it a document that says nothing: those two
+    BLOCK the render. An iteration without a consumer, or iterations that do not
+    add up to 100 %, still describe something the reviewer may want filed, so
+    they only warn. A DSO convention names the key in one slot the parties can
+    fill by hand: a missing key only warns there.
+    """
+    if doc_type not in DOC_TYPES_WITH_KEY:
+        return ()
+    operation_id = str(id_sharing_operation) if id_sharing_operation is not None else None
+    if key is None:
+        return (
+            PrefillWarning(
+                code=WARNING_KEY_MISSING,
+                subject_type="sharing_operation",
+                subject_id=operation_id,
+                blocking=doc_type == DOC_TYPE_KEY_DESCRIPTION,
+            ),
+        )
+    if doc_type != DOC_TYPE_KEY_DESCRIPTION:
+        return ()
+    key_id = str(key.id) if key.id is not None else None
+    if not key.iterations:
+        return (
+            PrefillWarning(
+                code=WARNING_KEY_NO_ITERATION,
+                subject_type="key",
+                subject_id=key_id,
+                params={"key": key.name},
+                blocking=True,
+            ),
+        )
+    warnings = [
+        PrefillWarning(
+            code=WARNING_KEY_ITERATION_NO_CONSUMER,
+            subject_type="key",
+            subject_id=key_id,
+            params={"key": key.name, "iteration": str(it.number)},
+        )
+        for it in key.iterations
+        if not it.consumers
+    ]
+    total = sum(it.share for it in key.iterations)
+    if abs(total - 1) > _KEY_TOTAL_TOLERANCE:
+        warnings.append(
+            PrefillWarning(
+                code=WARNING_KEY_ITERATIONS_TOTAL,
+                subject_type="key",
+                subject_id=key_id,
+                params={"key": key.name, "total": f"{_percent(total):g}"},
+            )
+        )
+    return tuple(warnings)
+
+
+def blocking_codes(warnings: Iterable[PrefillWarning]) -> list[str]:
+    """The codes of the warnings that refuse a render, in order, once each."""
+    return list(dict.fromkeys(w.code for w in warnings if w.blocking))
+
+
 def sort_warnings(warnings: Iterable[PrefillWarning]) -> list[PrefillWarning]:
-    """Deterministic order, so the panel does not reshuffle between prefills."""
+    """Deterministic order, so the panel does not reshuffle between prefills.
+    What blocks the render comes first: it is the one thing to read."""
     return sorted(
         warnings,
-        key=lambda w: (w.subject_type, w.subject_id or "", w.code, w.params.get("field", "")),
-    )
+        key=lambda w: (
+            not w.blocking,
+            w.subject_type,
+            w.subject_id or "",
+            w.code,
+            w.params.get("field", ""),
+        ),
+    )  # stable: a key's iterations keep the CRM's order
 
 
 def rows_for_members(

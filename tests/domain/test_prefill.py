@@ -922,3 +922,85 @@ class TestTheKeyDescription:
 
         assert snapshot["key_name"] is None
         assert (snapshot["iterations"], snapshot["key_shares"]) == ([], [])
+
+
+class TestKeyWarnings:
+    """What the operation's key lacks: a key description of nothing is refused,
+    a key that is only odd is filed with a warning."""
+
+    @staticmethod
+    def _key(*iterations: KeyIteration) -> AllocationKey:
+        return AllocationKey(
+            id=7,
+            name="Clé vent",
+            description="",
+            since=datetime.date(2026, 11, 1),
+            iterations=iterations,
+        )
+
+    def _warnings(
+        self, key: AllocationKey | None, doc_type: str = prefill.DOC_TYPE_KEY_DESCRIPTION
+    ):
+        return prefill.key_warnings(doc_type, key, id_sharing_operation=3)
+
+    def test_no_key_blocks_the_key_description(self):
+        (warning,) = self._warnings(None)
+
+        assert warning.code == "key.missing"
+        assert (warning.subject_type, warning.subject_id) == ("sharing_operation", "3")
+        assert warning.blocking is True
+
+    def test_a_key_with_no_iteration_blocks_it(self):
+        (warning,) = self._warnings(self._key())
+
+        assert warning.code == "key.no_iteration"
+        assert (warning.subject_type, warning.subject_id) == ("key", "7")
+        assert warning.blocking is True
+
+    def test_a_complete_key_says_nothing(self):
+        key = self._key(
+            KeyIteration(number=1, share=0.7, consumers=(KeyShare("A", 1.0),)),
+            KeyIteration(number=2, share=0.2, consumers=(KeyShare("A", 1.0),)),
+            KeyIteration(number=3, share=0.1, consumers=(KeyShare("A", 1.0),)),
+        )
+        # 0.7 + 0.2 + 0.1 is 0.9999999999999999 as floats: not a 99.99 % key.
+        assert self._warnings(key) == ()
+
+    def test_an_iteration_without_consumer_only_warns(self):
+        key = self._key(
+            KeyIteration(number=1, share=0.6, consumers=(KeyShare("A", 1.0),)),
+            KeyIteration(number=2, share=0.4),
+        )
+
+        (warning,) = self._warnings(key)
+
+        assert warning.code == "key.iteration_no_consumer"
+        assert warning.params["iteration"] == "2"
+        assert warning.blocking is False
+
+    def test_iterations_short_of_100_percent_only_warn(self):
+        key = self._key(KeyIteration(number=1, share=0.8, consumers=(KeyShare("A", 1.0),)))
+
+        (warning,) = self._warnings(key)
+
+        assert (warning.code, warning.params["total"]) == ("key.iterations_total", "80")
+        assert warning.blocking is False
+
+    def test_a_dso_convention_without_key_only_warns(self):
+        (warning,) = self._warnings(None, prefill.DOC_TYPE_DSO_AGREEMENT_COMMUNITY)
+
+        assert (warning.code, warning.blocking) == ("key.missing", False)
+        # A convention does not describe the key: an empty one is not its business.
+        assert self._warnings(self._key(), prefill.DOC_TYPE_DSO_AGREEMENT_BUILDING) == ()
+
+    def test_a_piece_that_does_not_use_the_key_says_nothing(self):
+        assert self._warnings(None, prefill.DOC_TYPE_ANNEX6_SHARING_FORM) == ()
+
+    def test_blockers_come_first_and_are_listed_once(self):
+        community = dataclasses.replace(_COMMUNITY, legal_name=None)
+        warnings = prefill.sort_warnings(
+            (*prefill.community_warnings(community), *self._warnings(None), *self._warnings(None))
+        )
+
+        assert warnings[0].blocking is True
+        assert prefill.blocking_codes(warnings) == ["key.missing"]

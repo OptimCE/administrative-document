@@ -64,6 +64,10 @@ class _AdminErrors:
     # not something CWaPE defines, and truncating would file incomplete legal
     # data. → 422.
     TOO_MANY_ROWS = Error(code=2365, key="ERRORS.ADMIN.TOO_MANY_ROWS")
+    # The CRM lacks what makes the piece mean anything (a key description of an
+    # operation with no key, or a key with no iteration): the pre-fill's blocking
+    # warnings say what to fix. → 422.
+    GENERATION_BLOCKED = Error(code=2366, key="ERRORS.ADMIN.GENERATION_BLOCKED")
 
     # ---- procedures engine: the baseline (2370 block) ----
     GET_BASELINE = Error(code=2370, key="ERRORS.ADMIN.GET_BASELINE")

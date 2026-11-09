@@ -139,12 +139,17 @@ class PrefillWarning:
     ``subject_id`` is a string for every kind of subject: an EAN is an 18-digit
     identifier that must never become an int, and a member id is only ever used
     to build ``/members/{id}``.
+
+    ``blocking`` marks what makes the document meaningless rather than merely
+    incomplete (a key description of a key with no iteration): the render is
+    refused until the CRM is fixed, instead of filing a form that says nothing.
     """
 
     code: str
-    subject_type: str  # "meter" | "member" | "community"
+    subject_type: str  # "meter" | "member" | "community" | "key" | "sharing_operation"
     subject_id: str | None = None
     params: Mapping[str, str] = field(default_factory=dict)
+    blocking: bool = False
 
 
 #: A delivery point in the operation that no member owns. It cannot be listed
@@ -164,6 +169,14 @@ WARNING_MEMBER_FIELD_MISSING = "member.field_missing"
 #: such as 5414482000000 does start with 54 and is still unprintable, so a code
 #: called "ean_prefix_not_54" would be a lie for half the cases it fires on.
 WARNING_EAN_NOT_FORM_REPRESENTABLE = "meter.ean_not_form_representable"
+#: The operation has no approved key, so there is nothing to describe.
+WARNING_KEY_MISSING = "key.missing"
+#: The operation's key has no iteration: it splits nothing.
+WARNING_KEY_NO_ITERATION = "key.no_iteration"
+#: One iteration of the key names no consumer.
+WARNING_KEY_ITERATION_NO_CONSUMER = "key.iteration_no_consumer"
+#: The iterations' shares of the energy do not add up to 100 %.
+WARNING_KEY_ITERATIONS_TOTAL = "key.iterations_total"
 
 
 @dataclass(frozen=True)
@@ -193,6 +206,8 @@ class AllocationKey:
     description: str
     since: datetime.date
     iterations: tuple[KeyIteration, ...] = ()
+    #: The CRM's ``allocation_key.id``, so a warning can point at ``/keys/{id}``.
+    id: int | None = None
 
 
 @dataclass(frozen=True)

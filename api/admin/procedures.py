@@ -1418,7 +1418,9 @@ class ProcedureService:
     ) -> dict[str, list[int]]:
         """One click for the stale pieces (or the ones named): each is regenerated
         from a fresh pre-fill with its reviewer's edits carried over. A piece
-        whose current version cannot say what was typed needs the review form."""
+        whose current version cannot say what was typed needs the review form;
+        one the CRM cannot fill meaningfully (2366) is ``blocked``, and the
+        review form says why."""
         dossier, _plugin, _ctx = await self._load(id_community, dossier_id)
         if dossier.frozen_at is not None:
             raise _conflict(errors.admin.GENERATION_NOT_ALLOWED)
@@ -1435,7 +1437,12 @@ class ProcedureService:
             if any(i not in by_id for i in document_ids):
                 raise _not_found(errors.admin.PIECE_NOT_FOUND)
             targets = [by_id[i] for i in dict.fromkeys(document_ids)]
-        outcome: dict[str, list[int]] = {"requested": [], "needs_review": [], "in_flight": []}
+        outcome: dict[str, list[int]] = {
+            "requested": [],
+            "needs_review": [],
+            "in_flight": [],
+            "blocked": [],
+        }
         for piece in targets:
             piece_id = piece.id
             try:
@@ -1446,6 +1453,8 @@ class ProcedureService:
                     outcome["needs_review"].append(piece_id)
                 elif exc.error is errors.admin.RENDER_ALREADY_IN_FLIGHT:
                     outcome["in_flight"].append(piece_id)
+                elif exc.error is errors.admin.GENERATION_BLOCKED:
+                    outcome["blocked"].append(piece_id)
                 else:
                     raise
         return outcome

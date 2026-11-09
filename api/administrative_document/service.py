@@ -253,19 +253,32 @@ class AdministrativeDocumentService:
             key=key,
         )
         # Warnings ride alongside the payload rather than inside it: they are for
-        # the reviewer, not for the form. Four sources — the CRM read (a delivery
+        # the reviewer, not for the form. Five sources — the CRM read (a delivery
         # point nobody owns), the community identity header, the member sheet when
-        # this doc_type has one, and an EAN the form physically cannot print —
-        # merged and sorted so the panel is stable across repeated prefills.
+        # this doc_type has one, an EAN the form physically cannot print, and the
+        # operation's key — merged and sorted so the panel is stable across
+        # repeated prefills. A BLOCKING one refuses the render (`_refuse_blocked`).
         warnings = prefill.sort_warnings(
             (
                 *crm_data.warnings,
                 *prefill.community_warnings(context),
                 *prefill.participant_warnings(document.doc_type, crm_data.participants),
                 *prefill.form_representation_warnings(document.doc_type, snapshot),
+                *prefill.key_warnings(
+                    document.doc_type, key, id_sharing_operation=dossier.id_sharing_operation
+                ),
             )
         )
         return {"data": snapshot, "warnings": warnings}
+
+    @staticmethod
+    def _refuse_blocked(prefilled: dict[str, Any]) -> None:
+        """422 ``GENERATION_BLOCKED`` when the CRM lacks what makes the piece mean
+        anything (a key description of a key with no iteration). Raised before
+        the render slot is claimed: nothing is written, nothing is published.
+        The reasons are the pre-fill's blocking warnings, which the dialog shows."""
+        if prefill.blocking_codes(prefilled["warnings"]):
+            raise ErrorException(errors.admin.GENERATION_BLOCKED, status_code=422)
 
     async def request_generation(
         self, *, document_id: int, data: dict[str, Any] | None, upgrade_template: bool = False
@@ -286,6 +299,7 @@ class AdministrativeDocumentService:
         template = await self._pinned_template(document, dossier, upgrade=upgrade_template)
 
         prefilled = await self.build_prefill(document_id=document_id)
+        self._refuse_blocked(prefilled)
         snapshot = prefill.merge_overrides(prefilled["data"], data)
         # The comb boxes are a projection of the EAN, recomputed AFTER the
         # reviewer's corrections: merge_overrides is shallow, so an edited EAN
@@ -318,7 +332,9 @@ class AdministrativeDocumentService:
             raise ErrorException(errors.admin.REVIEW_REQUIRED, status_code=409)
         template = await self._pinned_template(document, dossier, upgrade=False)
 
-        fresh = (await self.build_prefill(document_id=document_id))["data"]
+        prefilled = await self.build_prefill(document_id=document_id)
+        self._refuse_blocked(prefilled)
+        fresh = prefilled["data"]
         data = prefill.carry_over(fresh, version.data_snapshot_json, version.prefill_json)
         snapshot = prefill.project_comb_fields(document.doc_type, data)
         stage, watermark = self._working_stage(document, dossier)

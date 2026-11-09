@@ -105,6 +105,7 @@ class TestPrefill:
                 "subject_type": "meter",
                 "subject_id": "541448000000000007",
                 "params": {},
+                "blocking": False,
             }
         ]
 

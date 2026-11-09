@@ -33,6 +33,7 @@
       "PREFILL_FAILED": "Das Dokument konnte nicht aus dem CRM vorausgefüllt werden (Code: 2363)",
       "RENDER_ALREADY_IN_FLIGHT": "Für dieses Dokument läuft bereits eine Erzeugung (Code: 2364)",
       "TOO_MANY_ROWS": "Das offizielle Formular bietet keinen Platz für so viele Zeilen (Code: 2365)",
+      "GENERATION_BLOCKED": "Dieses Dokument kann nicht erzeugt werden: im CRM fehlt, was es beschreiben soll (code: 2366)",
       "GET_BASELINE": "Die Ausgangslage konnte nicht abgerufen werden (code: 2370)",
       "CONFIRM_BASELINE": "Die Ausgangslage konnte nicht bestätigt werden (code: 2371)",
       "BASELINE_INVALID": "Diese Auswahl passt nicht zur Ausgangslage (code: 2372)",

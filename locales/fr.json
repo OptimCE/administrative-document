@@ -33,6 +33,7 @@
       "PREFILL_FAILED": "Échec du pré-remplissage du document depuis le CRM (code: 2363)",
       "RENDER_ALREADY_IN_FLIGHT": "Une génération est déjà en cours pour ce document (code: 2364)",
       "TOO_MANY_ROWS": "Le formulaire officiel ne prévoit pas autant de lignes (code: 2365)",
+      "GENERATION_BLOCKED": "Ce document ne peut pas être généré : il manque dans le CRM ce qu'il doit décrire (code: 2366)",
       "GET_BASELINE": "Impossible de récupérer l'état de départ (code: 2370)",
       "CONFIRM_BASELINE": "Impossible de confirmer l'état de départ (code: 2371)",
       "BASELINE_INVALID": "Ces choix ne correspondent pas à l'état de départ (code: 2372)",

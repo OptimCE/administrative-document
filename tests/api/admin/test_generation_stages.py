@@ -28,7 +28,7 @@ from shared.models.local_models import (
     VersionCheckModel,
 )
 from tests.api.admin.test_procedure_routes import _file, _get, _headers, _piece, _world
-from tests.engine.world import EAN
+from tests.engine.world import EAN, add_key
 from tests.test_worker import FakeDocGen, _success
 from worker import docgen_results, generate
 
@@ -423,6 +423,7 @@ class TestOneClickRegeneration:
             "requested": [],
             "needs_review": [document_id],
             "in_flight": [],
+            "blocked": [],
         }
 
     async def test_a_piece_of_another_procedure_is_not_found(self, client, db_session):
@@ -620,3 +621,112 @@ class TestATemplateInUseKeepsItsBundle:
         assert refused.status_code == 409, refused.text
         assert refused.json()["error_code"] == 2389
         assert closed.status_code == 200, closed.text
+
+
+class TestAKeyDescriptionNeedsAKey:
+    """The key description describes the operation's key and nothing else: with
+    no key, or a key with no iteration, the render is refused (2366) and the
+    pre-fill says why; nothing is claimed nor published."""
+
+    async def _piece_id(self, client, db_session):
+        world = await _world(db_session)
+        headers = await _headers(db_session, world)
+        dossier_id = await _file(world, "operation.meter_removed", EAN[0])
+        document_id = _piece(await _get(client, headers, dossier_id), "key_description")["id"]
+        return world, headers, dossier_id, document_id
+
+    @staticmethod
+    async def _iterations(world, key_id: int) -> None:
+        for number, share in ((1, 0.6), (2, 0.4)):
+            iteration_id = (
+                await world.session.execute(
+                    text(
+                        "INSERT INTO iteration (number, energy_allocated_percentage, id_key, "
+                        "id_community) VALUES (:n, :s, :k, :c) RETURNING id"
+                    ),
+                    {"n": number, "s": share, "k": key_id, "c": world.id_community},
+                )
+            ).scalar_one()
+            await world.session.execute(
+                text(
+                    "INSERT INTO consumer (name, energy_allocated_percentage, id_iteration, "
+                    "id_community) VALUES ('Consumer 3', 1.0, :i, :c)"
+                ),
+                {"i": iteration_id, "c": world.id_community},
+            )
+
+    @staticmethod
+    async def _no_render(db_session, document_id: int) -> None:
+        render = await db_session.scalar(
+            select(DocumentRenderModel).where(DocumentRenderModel.id_document == document_id)
+        )
+        assert render is None
+
+    async def test_without_a_key_the_prefill_says_it_blocks(self, client, db_session):
+        world, headers, _dossier_id, document_id = await self._piece_id(client, db_session)
+
+        response = await client.get(f"/documents/{document_id}/prefill", headers=headers)
+
+        assert response.status_code == 200, response.text
+        (blocker,) = [w for w in response.json()["data"]["warnings"] if w["blocking"]]
+        assert blocker["code"] == "key.missing"
+        assert blocker["subject_type"] == "sharing_operation"
+        assert blocker["subject_id"] == str(world.operation)
+
+    async def test_without_a_key_the_render_is_refused(self, client, db_session):
+        _world_, headers, _dossier_id, document_id = await self._piece_id(client, db_session)
+
+        response = await client.post(
+            f"/documents/{document_id}/generate", json={"data": {}}, headers=headers
+        )
+
+        assert response.status_code == 422, response.text
+        assert response.json()["error_code"] == 2366
+        await self._no_render(db_session, document_id)
+
+    async def test_a_key_with_no_iteration_is_refused_and_named(self, client, db_session):
+        world, headers, _dossier_id, document_id = await self._piece_id(client, db_session)
+        key_id = await add_key(world, "Clé vide")
+
+        prefilled = await client.get(f"/documents/{document_id}/prefill", headers=headers)
+        response = await client.post(
+            f"/documents/{document_id}/generate", json={"data": {}}, headers=headers
+        )
+
+        (blocker,) = [w for w in prefilled.json()["data"]["warnings"] if w["blocking"]]
+        assert (blocker["code"], blocker["subject_id"]) == ("key.no_iteration", str(key_id))
+        assert response.status_code == 422, response.text
+        assert response.json()["error_code"] == 2366
+        await self._no_render(db_session, document_id)
+
+    async def test_a_key_with_iterations_renders(self, client, db_session):
+        world, headers, _dossier_id, document_id = await self._piece_id(client, db_session)
+        await self._iterations(world, await add_key(world, "Clé vent"))
+
+        await _generate(client, headers, document_id)
+
+        request = await _render(db_session, document_id)
+        assert [row["part"] for row in request.data["iterations"]] == [60.0, 40.0]
+
+    async def test_one_click_reports_a_piece_the_crm_emptied_as_blocked(self, client, db_session):
+        world, headers, dossier_id, document_id = await self._piece_id(client, db_session)
+        key_id = await add_key(world, "Clé vent")
+        await self._iterations(world, key_id)
+        await _generate(client, headers, document_id)
+        await _land(db_session, world, await _render(db_session, document_id), document_id)
+        await db_session.execute(text("DELETE FROM iteration WHERE id_key = :k"), {"k": key_id})
+
+        response = await client.post(
+            f"/admin/dossiers/{dossier_id}/regenerate",
+            json={"document_ids": [document_id]},
+            headers=headers,
+        )
+
+        assert response.status_code == 202, response.text
+        assert response.json()["data"] == {
+            "requested": [],
+            "needs_review": [],
+            "in_flight": [],
+            "blocked": [document_id],
+        }
+        await self._no_render(db_session, document_id)

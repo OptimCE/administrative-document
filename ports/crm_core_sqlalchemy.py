@@ -396,6 +396,7 @@ class SqlAlchemyCrmCoreRead:
                 KeyShare(name=row["name"], share=float(row["share"]))
             )
         return AllocationKey(
+            id=int(key["id"]),
             name=key["name"],
             description=key["description"] or "",
             since=key["start_date"],

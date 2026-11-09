@@ -45,6 +45,7 @@ def to_prefill_warning_out(warning: PrefillWarning) -> PrefillWarningOut:
         subject_type=warning.subject_type,
         subject_id=warning.subject_id,
         params=dict(warning.params),
+        blocking=warning.blocking,
     )
 
 

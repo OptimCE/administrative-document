@@ -656,11 +656,13 @@ class RegenerateIn(BaseModel):
 
 class RegenerateOut(BaseModel):
     """``needs_review``: the current version cannot say what the reviewer typed
-    (an upload, an older render), so the review form is the way."""
+    (an upload, an older render), so the review form is the way. ``blocked``:
+    the CRM lacks what the piece describes (2366); the review form says what."""
 
     requested: list[int]
     needs_review: list[int]
     in_flight: list[int]
+    blocked: list[int] = Field(default_factory=list)
 
 
 class VerifyAccepted(BaseModel):
