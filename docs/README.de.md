@@ -4,7 +4,7 @@
 
 # OptimCE — Verwaltungsdokumente
 
-[![Website](https://img.shields.io/badge/Website-optimce.be-2e7d32.svg)](https://www.optimce.be)
+[![Website](https://img.shields.io/badge/Website-optimce.be-2e7d32.svg)](https://www.optimce.be/de/)
 [![Lizenz](https://img.shields.io/badge/Lizenz-Apache%202.0-blue.svg)](../LICENSE)
 [![en](https://img.shields.io/badge/lang-en-lightgrey.svg)](../README.md)
 [![fr](https://img.shields.io/badge/lang-fr-lightgrey.svg)](README.fr.md)
@@ -26,7 +26,7 @@ aus diesen Übergängen abgeleitet, statt in einer Tabelle gepflegt zu werden.
 OptimCE ist eine Open-Source-Plattform zur Verwaltung erneuerbarer
 Energiegemeinschaften, entwickelt für den belgischen Kontext der Energieteilung.
 Mehr über das Projekt erfahren Sie auf
-[www.optimce.be](https://www.optimce.be). Dieser Dienst wird normalerweise als
+[www.optimce.be](https://www.optimce.be/de/). Dieser Dienst wird normalerweise als
 Teil der vollständigen Plattform betrieben: siehe das
 [Entwicklungs-Monorepo](https://github.com/OptimCE/monorepo), das alle
 OptimCE-Dienste bündelt und die Docker-Compose-Umgebung bereitstellt.
