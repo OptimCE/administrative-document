@@ -12,3 +12,6 @@ python-multipart==0.0.20
 python-jose[cryptography]==3.3.0
 
 auth0-python==5.1.0
+
+# The data-export kit (core/export) validates its messages against the contract.
+jsonschema==4.23.0

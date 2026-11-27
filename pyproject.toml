@@ -48,6 +48,7 @@ module = [
     "asyncpg.*",
     "botocore.*",
     "dateutil.*",
+    "jsonschema.*",
     "workalendar.*",
     "yaml.*",
 ]

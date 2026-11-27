@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -7,6 +8,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from api.admin.routes import admin_routes
 from api.administrative_document.routes import administrative_document_routes
+from api.data_export import start_export_consumer, stop_export_consumer
 from api.health.routes import health_router
 from core.config import Environment, settings
 from core.database.database import AsyncSessionLocalFactory
@@ -37,7 +39,13 @@ async def lifespan(app: FastAPI):
     # does not hold. A conflict raises and stops the API, on purpose.
     await sync_registry(AsyncSessionLocalFactory, REGISTRY)
     await init_nats()
+    # The data export's administrative-document part (one at a time); disabled, and logged,
+    # without its EXPORT_STORAGE_* account. The EXPORTS stream is crm-backend's: the consumer
+    # waits for it.
+    export_stop = asyncio.Event()
+    export_task = start_export_consumer(export_stop)
     yield
+    await stop_export_consumer(export_task, export_stop)
     await close_nats()
 
 
